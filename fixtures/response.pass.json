@@ -1,0 +1,8 @@
+{
+  "summary": "Authorize a bounded synthetic refund with recourse reserved before execution.",
+  "decision": "accept",
+  "action_type": "refund",
+  "risk_level": "low",
+  "blocked": false,
+  "recourse_required": true
+}

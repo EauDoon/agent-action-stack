@@ -1,0 +1,40 @@
+{
+  "name": "agent-action-stack",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Reference demo: decide with Constitutional Agent Testbench, act with Consequence Rail, prove disputes with MandateBound.",
+  "type": "module",
+  "bin": {
+    "aas": "./bin/aas.mjs"
+  },
+  "scripts": {
+    "bootstrap": "node ./scripts/bootstrap.mjs",
+    "demo": "node ./bin/aas.mjs demo",
+    "demo:fail": "node ./bin/aas.mjs demo --response fail",
+    "demo:dispute": "node ./bin/aas.mjs demo --fault duplicate",
+    "check": "node ./bin/aas.mjs demo --json && node ./bin/aas.mjs demo --response fail --json && node ./bin/aas.mjs demo --fault duplicate --json"
+  },
+  "keywords": [
+    "ai-agents",
+    "agentic-commerce",
+    "recourse",
+    "policy-as-code",
+    "dispute-evidence",
+    "consequence-rail",
+    "mandatebound",
+    "constitutional-agent-testbench"
+  ],
+  "author": "Oonyl",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oonyl/agent-action-stack.git"
+  },
+  "bugs": {
+    "url": "https://github.com/oonyl/agent-action-stack/issues"
+  },
+  "homepage": "https://github.com/oonyl/agent-action-stack#readme",
+  "engines": {
+    "node": ">=20"
+  }
+}

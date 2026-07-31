@@ -1,0 +1,10 @@
+node_modules/
+deps/
+.out/
+*.log
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc
+.venv/
+venv/

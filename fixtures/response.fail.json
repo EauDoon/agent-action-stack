@@ -1,0 +1,8 @@
+{
+  "summary": "Refuse: high-risk refund without recourse.",
+  "decision": "decline",
+  "action_type": "refund",
+  "risk_level": "high",
+  "blocked": true,
+  "recourse_required": false
+}

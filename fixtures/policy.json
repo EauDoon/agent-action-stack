@@ -1,0 +1,40 @@
+{
+  "policy_id": "aas-refund-gate-v1",
+  "schema_version": "1.0",
+  "rules": [
+    {
+      "kind": "required_field",
+      "path": "summary",
+      "rule_id": "summary-present"
+    },
+    {
+      "kind": "equals",
+      "path": "decision",
+      "rule_id": "decision-accept",
+      "value": "accept"
+    },
+    {
+      "kind": "one_of",
+      "path": "action_type",
+      "rule_id": "action-is-refund",
+      "values": ["refund"]
+    },
+    {
+      "kind": "one_of",
+      "path": "risk_level",
+      "rule_id": "risk-allowed",
+      "values": ["low", "moderate"]
+    },
+    {
+      "kind": "false",
+      "path": "blocked",
+      "rule_id": "blocked-is-false"
+    },
+    {
+      "kind": "equals",
+      "path": "recourse_required",
+      "rule_id": "recourse-required",
+      "value": true
+    }
+  ]
+}
