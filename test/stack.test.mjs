@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { loadComponentLock, inspectDependencyDirectory, npmInvocation } from "../scripts/bootstrap.mjs";
 import {
   persistRunBundle,
@@ -11,7 +12,7 @@ import {
   writeAtomicFile,
 } from "../bin/aas.mjs";
 
-const ROOT = new URL("../", import.meta.url).pathname.replace(/^\//, "").replaceAll("/", "\\");
+const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const LOCK = join(ROOT, "stack-lock.json");
 const PROVENANCE = [
   {
