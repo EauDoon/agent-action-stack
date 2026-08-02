@@ -1,0 +1,38 @@
+{
+  "schema_version": "agent-action-stack.lock/v1",
+  "components": [
+    {
+      "name": "constitutional-agent-testbench",
+      "repository": "https://github.com/oonyl/constitutional-agent-testbench.git",
+      "commit": "a7a51907eaaab68a52b66edef28b3ee0fcb3ff97",
+      "expected_entrypoints": [
+        "pyproject.toml",
+        "src/constitutional_agent_testbench/cli.py"
+      ]
+    },
+    {
+      "name": "consequence-rail",
+      "repository": "https://github.com/oonyl/consequence-rail.git",
+      "commit": "d1bacc66618591231270902b657ffaa752954ee6",
+      "expected_entrypoints": [
+        "package.json",
+        "cmd/crctl.js"
+      ]
+    },
+    {
+      "name": "mandatebound",
+      "repository": "https://github.com/oonyl/mandatebound.git",
+      "commit": "468fce7e0d4dcc1e86bad07a469b3d9217914bb0",
+      "expected_entrypoints": [
+        "package.json",
+        "package-lock.json",
+        "src/cli.ts"
+      ],
+      "post_build_entrypoints": [
+        "dist/cli.js"
+      ],
+      "install": "npm-ci",
+      "build": "npm-run-build"
+    }
+  ]
+}

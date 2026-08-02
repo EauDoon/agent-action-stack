@@ -1,6 +1,6 @@
 # Agent Action Stack
 
-**One reference path across three public libraries: decide → act → prove.**
+**One reference path across three public libraries: decide, act, prove.**
 
 Agent Action Stack is a thin orchestrator. It does not re-implement the libraries. It runs them in a fixed order so a visitor can see how they compose.
 
@@ -62,14 +62,14 @@ Expected human output (pass path, no fault):
 ```text
 stack: agent-action-stack
 response: pass
-decide: pass
+decide: passed
 decide_passed: true
-act: ran
+act: passed
 act_outcome: settled
 act_state: CLOSED
 act_fault: none
 prove: skipped
-flow: decide → act
+flow: decide -> act
 ```
 
 Fail closed at decide:
@@ -87,7 +87,7 @@ npm run demo:dispute
 Expected flow line:
 
 ```text
-flow: decide → act → prove
+flow: decide -> act -> prove
 ```
 
 JSON report:
@@ -96,19 +96,42 @@ JSON report:
 node ./bin/aas.mjs demo --fault duplicate --json
 ```
 
-## What each stage writes
+## Reproducibility and run bundles
 
-Artifacts land in `.out/` (gitignored):
+`stack-lock.json` records the reviewed public repository URLs, exact commits, and
+expected entrypoints. Bootstrap uses detached checkouts, rejects substituted or
+dirty pre-existing directories, runs `npm ci --ignore-scripts` for MandateBound,
+then runs its explicit build command.
 
-- `decide.json` — testbench evaluation
-- `act.json` — Consequence Rail refund summary
-- `prove.json` — MandateBound simulate payload (dispute path only)
+Each invocation writes one atomic bundle under `.out/runs/<run-id>/`:
+
+- `manifest.json`: stage status and component provenance
+- `report.json`: user-facing run report
+- `stages/*.json`: output from stages that ran
+
+`.out/latest.json` is an atomic pointer to the most recent complete bundle. A
+failed or skipped stage cannot leave an older stage artifact looking current.
+
+## Guided local GUI
+
+Run `npm run gui` and open the printed loopback URL. The GUI calls the same
+orchestrator, displays stage and provenance state, and downloads a JSON export
+of the selected run bundle. `npm run gui:smoke` checks the server without
+starting a long-running process. The server binds only to `127.0.0.1`, requires
+the exact loopback Host and same-origin boundary, and uses POST for a run.
+
+## Tests
+
+```bash
+npm test
+npm run check
+```
 
 ## Fixtures
 
-- `fixtures/policy.json` — refund gate: accept, low/moderate risk, recourse required, not blocked
-- `fixtures/response.pass.json` — passes the gate
-- `fixtures/response.fail.json` — fails the gate; act and prove are skipped
+- `fixtures/policy.json`: refund gate: accept, low/moderate risk, recourse required, not blocked
+- `fixtures/response.pass.json`: passes the gate
+- `fixtures/response.fail.json`: fails the gate; act and prove are skipped
 
 ## Design bounds
 

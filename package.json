@@ -1,6 +1,6 @@
 {
   "name": "agent-action-stack",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": false,
   "description": "Reference demo: decide with Constitutional Agent Testbench, act with Consequence Rail, prove disputes with MandateBound.",
   "type": "module",
@@ -12,7 +12,10 @@
     "demo": "node ./bin/aas.mjs demo",
     "demo:fail": "node ./bin/aas.mjs demo --response fail",
     "demo:dispute": "node ./bin/aas.mjs demo --fault duplicate",
-    "check": "node ./bin/aas.mjs demo --json && node ./bin/aas.mjs demo --response fail --json && node ./bin/aas.mjs demo --fault duplicate --json"
+    "gui": "node ./bin/aas-gui.mjs",
+    "gui:smoke": "node ./bin/aas-gui.mjs --smoke-test",
+    "test": "node --test test/*.test.mjs",
+    "check": "npm test"
   },
   "keywords": [
     "ai-agents",
