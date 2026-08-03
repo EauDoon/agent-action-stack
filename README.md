@@ -37,9 +37,9 @@ On policy failure the stack stops. On a clean `settled` outcome, MandateBound is
 
 | Stage | Public repo | Role in this demo |
 | --- | --- | --- |
-| Decide | [constitutional-agent-testbench](https://github.com/oonyl/constitutional-agent-testbench) | Evaluate refund-authorization JSON against a declared policy |
-| Act | [consequence-rail](https://github.com/oonyl/consequence-rail) | Reserve recourse, execute a synthetic refund, settle or compensate |
-| Prove | [mandatebound](https://github.com/oonyl/mandatebound) | Run a dispute-oriented evidence simulation when the rail outcome needs review |
+| Decide | [constitutional-agent-testbench](https://github.com/EauDoon/constitutional-agent-testbench) | Evaluate refund-authorization JSON against a declared policy |
+| Act | [consequence-rail](https://github.com/EauDoon/consequence-rail) | Reserve recourse, execute a synthetic refund, settle or compensate |
+| Prove | [mandatebound](https://github.com/EauDoon/mandatebound) | Run a dispute-oriented evidence simulation when the rail outcome needs review |
 
 ## Requirements
 

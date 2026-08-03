@@ -52,15 +52,15 @@ export function loadComponentLock(path = lockPath) {
   }
   const names = new Set();
   const required = new Map([
-    ["constitutional-agent-testbench", "https://github.com/oonyl/constitutional-agent-testbench.git"],
-    ["consequence-rail", "https://github.com/oonyl/consequence-rail.git"],
-    ["mandatebound", "https://github.com/oonyl/mandatebound.git"],
+    ["constitutional-agent-testbench", "https://github.com/EauDoon/constitutional-agent-testbench.git"],
+    ["consequence-rail", "https://github.com/EauDoon/consequence-rail.git"],
+    ["mandatebound", "https://github.com/EauDoon/mandatebound.git"],
   ]);
   for (const component of value.components) {
     if (!component || typeof component !== "object" || typeof component.name !== "string" || names.has(component.name)) {
       throw new Error("Component lock contains an invalid or duplicate component.");
     }
-    if (!/^https:\/\/github\.com\/oonyl\/[a-z0-9-]+\.git$/.test(component.repository)) {
+    if (!/^https:\/\/github\.com\/EauDoon\/[a-z0-9-]+\.git$/.test(component.repository)) {
       throw new Error(`Component ${component.name} has an invalid public repository URL.`);
     }
     if (!required.has(component.name) || component.repository !== required.get(component.name)) {

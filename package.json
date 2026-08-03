@@ -27,16 +27,16 @@
     "mandatebound",
     "constitutional-agent-testbench"
   ],
-  "author": "Oonyl",
+  "author": "EauDoon",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/oonyl/agent-action-stack.git"
+    "url": "git+https://github.com/EauDoon/agent-action-stack.git"
   },
   "bugs": {
-    "url": "https://github.com/oonyl/agent-action-stack/issues"
+    "url": "https://github.com/EauDoon/agent-action-stack/issues"
   },
-  "homepage": "https://github.com/oonyl/agent-action-stack#readme",
+  "homepage": "https://github.com/EauDoon/agent-action-stack#readme",
   "engines": {
     "node": ">=20"
   }

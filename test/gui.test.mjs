@@ -8,9 +8,9 @@ import { createGuiServer, renderPage } from "../bin/aas-gui.mjs";
 import { runDemo } from "../bin/aas.mjs";
 
 const provenance = [
-  { name: "constitutional-agent-testbench", repository: "https://github.com/oonyl/constitutional-agent-testbench.git", commit: "a7a51907eaaab68a52b66edef28b3ee0fcb3ff97", detached: true, clean: true, entrypoints: [] },
-  { name: "consequence-rail", repository: "https://github.com/oonyl/consequence-rail.git", commit: "d1bacc66618591231270902b657ffaa752954ee6", detached: true, clean: true, entrypoints: [] },
-  { name: "mandatebound", repository: "https://github.com/oonyl/mandatebound.git", commit: "468fce7e0d4dcc1e86bad07a469b3d9217914bb0", detached: true, clean: true, entrypoints: [] },
+  { name: "constitutional-agent-testbench", repository: "https://github.com/EauDoon/constitutional-agent-testbench.git", commit: "a7a51907eaaab68a52b66edef28b3ee0fcb3ff97", detached: true, clean: true, entrypoints: [] },
+  { name: "consequence-rail", repository: "https://github.com/EauDoon/consequence-rail.git", commit: "d1bacc66618591231270902b657ffaa752954ee6", detached: true, clean: true, entrypoints: [] },
+  { name: "mandatebound", repository: "https://github.com/EauDoon/mandatebound.git", commit: "468fce7e0d4dcc1e86bad07a469b3d9217914bb0", detached: true, clean: true, entrypoints: [] },
 ];
 
 function requestServer(server, path, { method = "GET", headers = {} } = {}) {
