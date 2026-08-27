@@ -4,30 +4,7 @@
 
 Agent Action Stack is a thin orchestrator. It does not re-implement the libraries. It runs them in a fixed order so a visitor can see how they compose.
 
-```text
-structured agent JSON
-        │
-        ▼
-┌───────────────────────────────┐
-│ Decide                        │
-│ constitutional-agent-testbench│
-│ policy evaluate               │
-└───────────────┬───────────────┘
-                │ pass
-                ▼
-┌───────────────────────────────┐
-│ Act                           │
-│ consequence-rail              │
-│ recourse-gated refund demo    │
-└───────────────┬───────────────┘
-                │ compensated / disputed / --dispute
-                ▼
-┌───────────────────────────────┐
-│ Prove                         │
-│ mandatebound                  │
-│ simulate evidence readiness   │
-└───────────────────────────────┘
-```
+![Reference workflow from policy evaluation through recourse-gated action and outcome verification, with an optional dispute evidence simulation. Policy failure stops execution.](.github/assets/project-overview.svg)
 
 On policy failure the stack stops. On a clean `settled` outcome, MandateBound is skipped unless you pass `--dispute`.
 
