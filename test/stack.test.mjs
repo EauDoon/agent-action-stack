@@ -10,7 +10,9 @@ import {
   persistRunBundle,
   resolveComponentProvenance,
   runAct,
+  runDecide,
   runDemo,
+  runProve,
   writeAtomicFile,
 } from "../bin/aas.mjs";
 
@@ -138,6 +140,17 @@ test("act rejects a zero-exit payload without a valid outcome", () => {
     }),
     /valid outcome/,
   );
+});
+
+test("decide and prove reject non-boolean success fields", () => {
+  const runner = () => ({
+    status: 0,
+    stdout: '{"passed":"false","ok":"false"}\n',
+    stderr: "",
+    error: null,
+  });
+  assert.throws(() => runDecide("unused", { runner }), /boolean passed field/);
+  assert.throws(() => runProve("unused", { runner }), /boolean ok field/);
 });
 
 test("child output parser accepts logged pretty-printed JSON", () => {
