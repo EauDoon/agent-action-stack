@@ -451,6 +451,7 @@ export async function runDemo(args = [], options = {}) {
     proveStarted = true;
     const prove = await (options.runProveFn ?? runProve)(scenario, { depsDir: paths.deps, runner: options.runner });
     stages.prove = stageRecord(prove.ok ? "passed" : "failed", { raw: prove.raw });
+    if (!prove.ok) exitCode = 1;
     report.stages.prove = {
       status: stages.prove.status,
       scenario,

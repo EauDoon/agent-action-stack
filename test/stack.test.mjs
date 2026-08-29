@@ -183,6 +183,17 @@ test("an unresolved act outcome is sent to proof", async () => {
   assert.equal(result.report.stages.prove.triggered_by, "act_outcome=null");
 });
 
+test("an unsuccessful proof fails the run", async () => {
+  const outputRoot = tempRoot();
+  const result = await runDemo(["--response", "pass", "--dispute"], stubOptions(outputRoot, {
+    runId: "failed-proof-run",
+    runProveFn: async () => ({ ok: false, raw: { ok: false, result: {} }, status: 0 }),
+  }));
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.manifest.exit_code, 1);
+  assert.equal(result.manifest.stages.prove.status, "failed");
+});
+
 test("child-process errors are visible as safe stage errors and downstream skips", async () => {
   const outputRoot = tempRoot();
   const result = await runDemo(["--response", "pass"], stubOptions(outputRoot, {
