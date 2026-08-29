@@ -112,22 +112,25 @@ export function parseJsonOutput(text, label) {
   if (!trimmed) {
     throw new Error(`${label} produced empty output.`);
   }
-  const lines = trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0);
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index].trim();
-    if (line.startsWith("{") || line.startsWith("[")) {
-      try {
-        return JSON.parse(line);
-      } catch {
-        // Continue until the complete output is tried.
-      }
-    }
-  }
+  let parseError;
   try {
     return JSON.parse(trimmed);
   } catch (error) {
-    throw new Error(`${label} did not return JSON: ${error.message}`);
+    parseError = error;
   }
+  const lines = trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  for (let end = lines.length; end > 0; end -= 1) {
+    if (!/[}\]]$/.test(lines[end - 1].trim())) continue;
+    for (let start = 0; start < end; start += 1) {
+      if (!/^[\[{]/.test(lines[start].trim())) continue;
+      try {
+        return JSON.parse(lines.slice(start, end).join("\n"));
+      } catch {
+        // Keep looking for the last complete JSON range.
+      }
+    }
+  }
+  throw new Error(`${label} did not return JSON: ${parseError.message}`);
 }
 
 function pythonCandidates() {
