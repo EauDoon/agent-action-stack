@@ -167,6 +167,22 @@ test("dispute bundle runs prove and records its trigger", async () => {
   assert.deepEqual(readdirSync(join(result.bundleDir, "stages")).sort(), ["act.json", "decide.json", "prove.json"]);
 });
 
+test("an unresolved act outcome is sent to proof", async () => {
+  const outputRoot = tempRoot();
+  let proveCalls = 0;
+  const result = await runDemo(["--response", "pass"], stubOptions(outputRoot, {
+    runId: "unresolved-run",
+    runActFn: async () => ({ ok: true, raw: { outcome: null, state: "UNKNOWN", fault: "lost-response-before-commit" }, status: 0 }),
+    runProveFn: async () => {
+      proveCalls += 1;
+      return { ok: true, raw: { ok: true, result: { evidence: true } }, status: 0 };
+    },
+  }));
+  assert.equal(proveCalls, 1);
+  assert.equal(result.manifest.stages.prove.status, "passed");
+  assert.equal(result.report.stages.prove.triggered_by, "act_outcome=null");
+});
+
 test("child-process errors are visible as safe stage errors and downstream skips", async () => {
   const outputRoot = tempRoot();
   const result = await runDemo(["--response", "pass"], stubOptions(outputRoot, {
