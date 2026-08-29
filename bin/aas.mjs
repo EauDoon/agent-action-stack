@@ -133,6 +133,14 @@ export function parseJsonOutput(text, label) {
   throw new Error(`${label} did not return JSON: ${parseError.message}`);
 }
 
+function booleanField(payload, field, label) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)
+    || typeof payload[field] !== "boolean") {
+    throw new Error(`${label} did not return a boolean ${field} field`);
+  }
+  return payload[field];
+}
+
 function pythonCandidates() {
   if (process.platform === "win32") {
     return [["py", ["-3"]], ["python", []], ["python3", []]];
@@ -195,7 +203,7 @@ export function runDecide(
       throw childProcessError("decide", result);
     }
     const evaluation = parseJsonOutput(result.stdout, "decide");
-    return { ok: Boolean(evaluation.passed), raw: evaluation, status: 0 };
+    return { ok: booleanField(evaluation, "passed", "decide"), raw: evaluation, status: 0 };
   }
   throw new Error(`Python not found for decide stage${lastError ? ` (${lastError.code ?? "spawn-error"})` : ""}`);
 }
@@ -231,7 +239,7 @@ export function runProve(
   );
   if (result.status !== 0) throw childProcessError("prove", result);
   const payload = parseJsonOutput(result.stdout, "prove");
-  return { ok: Boolean(payload.ok), raw: payload, status: 0 };
+  return { ok: booleanField(payload, "ok", "prove"), raw: payload, status: 0 };
 }
 
 export function createRunId(now = new Date(), nonce = randomUUID()) {
