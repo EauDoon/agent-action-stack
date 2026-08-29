@@ -6,6 +6,8 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { loadComponentLock, inspectDependencyDirectory, npmInvocation } from "../scripts/bootstrap.mjs";
 import {
+  DIAGNOSTIC,
+  clipChildStderr,
   helpText,
   main,
   parseJsonOutput,
@@ -139,9 +141,15 @@ test("act rejects a zero-exit payload without a valid outcome", () => {
   assert.throws(
     () => runAct("none", {
       depsDir: tempRoot(),
-      runner: () => ({ status: 0, stdout: "{}\n", stderr: "", error: null }),
+      runner: () => ({ status: 0, stdout: "{}\n", stderr: "crctl: missing outcome\n", error: null }),
     }),
-    /valid outcome/,
+    (error) => {
+      assert.match(error.message, /valid outcome/);
+      assert.equal(error.code, DIAGNOSTIC.CHILD_JSON);
+      assert.equal(error.stage, "act");
+      assert.match(error.stderr, /missing outcome/);
+      return true;
+    },
   );
 });
 
@@ -149,11 +157,28 @@ test("decide and prove reject non-boolean success fields", () => {
   const runner = () => ({
     status: 0,
     stdout: '{"passed":"false","ok":"false"}\n',
-    stderr: "",
+    stderr: "child: coerced success flag\n",
     error: null,
   });
-  assert.throws(() => runDecide("unused", { runner }), /boolean passed field/);
-  assert.throws(() => runProve("unused", { runner }), /boolean ok field/);
+  assert.throws(
+    () => runDecide("unused", { runner }),
+    (error) => {
+      assert.match(error.message, /boolean passed field/);
+      assert.equal(error.code, DIAGNOSTIC.CHILD_JSON);
+      assert.equal(error.stage, "decide");
+      assert.match(error.stderr, /coerced success flag/);
+      return true;
+    },
+  );
+  assert.throws(
+    () => runProve("unused", { runner }),
+    (error) => {
+      assert.match(error.message, /boolean ok field/);
+      assert.equal(error.code, DIAGNOSTIC.CHILD_JSON);
+      assert.equal(error.stage, "prove");
+      return true;
+    },
+  );
 });
 
 test("decide reads logged JSON on a nonzero exit", () => {
@@ -182,6 +207,7 @@ test("prove treats nonzero JSON as an unsuccessful proof", () => {
   assert.equal(result.ok, false);
   assert.equal(result.status, 2);
   assert.equal(result.raw.error.code, "ALB_CLI_USAGE");
+  assert.match(result.stderr, /ALB_CLI_USAGE/);
 });
 
 test("prove fail-closes a nonzero payload that claims success", () => {
@@ -200,10 +226,54 @@ test("prove fail-closes a nonzero payload that claims success", () => {
 test("prove still throws when a nonzero child has no JSON", () => {
   assert.throws(
     () => runProve("unused", {
-      runner: () => ({ status: 2, stdout: "simulate failed\n", stderr: "", error: null }),
+      runner: () => ({
+        status: 2,
+        stdout: "simulate failed\n",
+        stderr: "fatal: simulate accepts one scenario\n",
+        error: null,
+      }),
     }),
-    /exited with status 2/,
+    (error) => {
+      assert.match(error.message, /exited with status 2/);
+      assert.match(error.message, /simulate accepts one scenario/);
+      assert.equal(error.code, DIAGNOSTIC.CHILD_EXIT);
+      assert.equal(error.stage, "prove");
+      assert.match(error.stderr, /simulate accepts one scenario/);
+      return true;
+    },
   );
+});
+
+test("act names the child and preserves stderr on a spawn failure", () => {
+  assert.throws(
+    () => runAct("none", {
+      runner: () => ({
+        status: 1,
+        stdout: "",
+        stderr: "node: cannot find crctl.js\n",
+        error: Object.assign(new Error("spawn failed"), { code: "ENOENT" }),
+      }),
+    }),
+    (error) => {
+      assert.match(error.message, /act child process error \(ENOENT\)/);
+      assert.match(error.message, /cannot find crctl\.js/);
+      assert.equal(error.code, DIAGNOSTIC.CHILD_SPAWN);
+      assert.equal(error.stage, "act");
+      assert.match(error.stderr, /cannot find crctl\.js/);
+      return true;
+    },
+  );
+});
+
+test("child stderr clipper strips ANSI and keeps the tail", () => {
+  assert.equal(clipChildStderr("  \u001b[31mboom\u001b[0m \n"), "boom");
+  assert.equal(clipChildStderr(""), "");
+  assert.equal(clipChildStderr(null), "");
+  const long = `${"a".repeat(900)}END`;
+  const clipped = clipChildStderr(long);
+  assert.equal(clipped.length, 800);
+  assert.equal(clipped.endsWith("END"), true);
+  assert.equal(clipped.startsWith("a"), true);
 });
 
 test("child output parser accepts logged pretty-printed JSON", () => {
@@ -316,13 +386,16 @@ test("nonzero prove JSON is recorded as a failed proof, not a child-process erro
   options.runner = () => ({
     status: 2,
     stdout: '{"ok":false,"error":{"code":"ALB_CLI_USAGE","message":"Simulate accepts one scenario."}}\n',
-    stderr: "",
+    stderr: '{"level":"error","code":"ALB_CLI_USAGE"}\n',
     error: null,
   });
   const result = await runDemo(["--response", "pass", "--dispute"], options);
   assert.equal(result.exitCode, 1);
   assert.equal(result.manifest.stages.prove.status, "failed");
   assert.equal(result.report.stages.prove.ok, false);
+  assert.match(result.report.stages.prove.stderr, /ALB_CLI_USAGE/);
+  assert.equal(result.manifest.stages.prove.stderr, result.report.stages.prove.stderr);
+  assert.equal(result.manifest.stages.prove.code, null);
   assert.deepEqual(
     JSON.parse(readFileSync(join(result.bundleDir, "stages", "prove.json"), "utf8")).error,
     { code: "ALB_CLI_USAGE", message: "Simulate accepts one scenario." },
@@ -340,6 +413,46 @@ test("child-process errors are visible as safe stage errors and downstream skips
   assert.match(result.report.stages.decide.reason, /child process error/);
   assert.equal(result.manifest.stages.act.reason, "decide_error");
   assert.equal(result.manifest.stages.prove.reason, "decide_error");
+});
+
+test("child-process failures record a diagnostic code and stderr in the bundle", async () => {
+  const outputRoot = tempRoot();
+  const options = stubOptions(outputRoot, { runId: "stderr-run" });
+  delete options.runDecideFn;
+  options.runner = () => ({
+    status: 1,
+    stdout: "",
+    stderr: "\u001b[31mconstitutional_agent_testbench: policy schema invalid\u001b[0m\n",
+    error: null,
+  });
+  const result = await runDemo(["--response", "pass"], options);
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.manifest.stages.decide.status, "error");
+  assert.equal(result.manifest.stages.decide.code, DIAGNOSTIC.CHILD_EXIT);
+  assert.match(result.report.stages.decide.reason, /decide child process exited with status 1/);
+  assert.match(result.report.stages.decide.reason, /policy schema invalid/);
+  assert.equal(result.report.stages.decide.code, DIAGNOSTIC.CHILD_EXIT);
+  assert.equal(result.report.stages.decide.stderr, "constitutional_agent_testbench: policy schema invalid");
+  assert.equal(result.manifest.stages.decide.stderr, result.report.stages.decide.stderr);
+
+  const chunks = [];
+  const originalWrite = process.stdout.write;
+  process.stdout.write = (chunk, encoding, callback) => {
+    chunks.push(String(chunk));
+    if (typeof encoding === "function") encoding();
+    else if (typeof callback === "function") callback();
+    return true;
+  };
+  try {
+    printHuman(result.report, result.bundleDir);
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+  const human = chunks.join("");
+  assert.match(human, /decide_code: AAS_CHILD_EXIT/);
+  assert.match(human, /decide_reason: decide child process exited with status 1/);
+  assert.match(human, /decide_stderr: constitutional_agent_testbench: policy schema invalid/);
+  assert.match(human, new RegExp(`bundle: ${result.bundleDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
 });
 
 test("act and prove child-process errors keep the run isolated", async () => {
