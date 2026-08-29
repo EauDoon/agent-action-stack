@@ -6,6 +6,8 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { loadComponentLock, inspectDependencyDirectory, npmInvocation } from "../scripts/bootstrap.mjs";
 import {
+  helpText,
+  main,
   parseJsonOutput,
   persistRunBundle,
   printHuman,
@@ -386,11 +388,113 @@ test("component provenance resolver rejects a missing dependency", () => {
   assert.throws(() => resolveComponentProvenance(tempRoot(), LOCK), /Missing deps/);
 });
 
-test("demo arguments reject unknown, duplicate, and missing-value options", async () => {
+test("demo arguments reject unknown, duplicate, missing-value, and empty options", async () => {
   await assert.rejects(() => runDemo(["--unknown"], stubOptions(tempRoot())), /Unsupported/);
+  await assert.rejects(() => runDemo(["extra"], stubOptions(tempRoot())), /Unexpected argument/);
   await assert.rejects(() => runDemo(["--response"], stubOptions(tempRoot())), /Missing value/);
+  await assert.rejects(() => runDemo(["--fault", ""], stubOptions(tempRoot())), /Empty value/);
+  await assert.rejects(() => runDemo(["--response", "   "], stubOptions(tempRoot())), /Empty value/);
   await assert.rejects(
     () => runDemo(["--response", "pass", "--response", "fail"], stubOptions(tempRoot())),
     /Duplicate/,
   );
+});
+
+test("prove rejects an empty scenario before spawning a child", () => {
+  const runner = () => {
+    throw new Error("should not spawn");
+  };
+  assert.throws(() => runProve("", { runner }), /non-empty scenario/);
+  assert.throws(() => runProve("   ", { runner }), /non-empty scenario/);
+});
+
+test("missing child tools fail closed with a bootstrap hint", () => {
+  const depsDir = tempRoot();
+  assert.throws(
+    () => runDecide("unused", { depsDir }),
+    /Missing decide CLI \(deps\/constitutional-agent-testbench\/src\/constitutional_agent_testbench\/cli.py\)/,
+  );
+  assert.throws(
+    () => runAct("none", { depsDir }),
+    /Missing act CLI \(deps\/consequence-rail\/cmd\/crctl.js\)/,
+  );
+  assert.throws(
+    () => runProve("operator", { depsDir }),
+    /Missing prove CLI \(deps\/mandatebound\/dist\/cli.js\)/,
+  );
+});
+
+async function captureMain(argv) {
+  const stdout = [];
+  const stderr = [];
+  const originalStdout = process.stdout.write;
+  const originalStderr = process.stderr.write;
+  const originalExitCode = process.exitCode;
+  process.stdout.write = (chunk, encoding, callback) => {
+    stdout.push(String(chunk));
+    if (typeof encoding === "function") encoding();
+    else if (typeof callback === "function") callback();
+    return true;
+  };
+  process.stderr.write = (chunk, encoding, callback) => {
+    stderr.push(String(chunk));
+    if (typeof encoding === "function") encoding();
+    else if (typeof callback === "function") callback();
+    return true;
+  };
+  process.exitCode = undefined;
+  try {
+    await main(argv);
+    return { stdout: stdout.join(""), stderr: stderr.join(""), exitCode: process.exitCode ?? 0 };
+  } finally {
+    process.stdout.write = originalStdout;
+    process.stderr.write = originalStderr;
+    process.exitCode = originalExitCode;
+  }
+}
+
+test("CLI help covers usage, help flags, and exit codes", () => {
+  const text = helpText();
+  assert.match(text, /aas demo \[--response pass\|fail\]/);
+  assert.match(text, /-h, --help/);
+  assert.match(text, /simulate --scenario operator/);
+  assert.match(text, /Exit codes:/);
+});
+
+test("CLI prints help for help tokens and demo --help", async () => {
+  for (const argv of [[], ["help"], ["--help"], ["-h"], ["demo", "--help"], ["demo", "-h"]]) {
+    const result = await captureMain(argv);
+    assert.equal(result.exitCode, 0, `expected help exit 0 for ${JSON.stringify(argv)}`);
+    assert.equal(result.stdout, helpText());
+    assert.equal(result.stderr, "");
+  }
+});
+
+test("CLI reports unknown commands, flags, and empty values as usage errors", async () => {
+  const unknown = await captureMain(["nope"]);
+  assert.equal(unknown.exitCode, 2);
+  assert.equal(unknown.stdout, "");
+  assert.match(unknown.stderr, /Unknown command: nope/);
+  assert.match(unknown.stderr, /Try `aas help` for usage/);
+  assert.match(unknown.stderr, /Usage:/);
+
+  const flag = await captureMain(["demo", "--wat"]);
+  assert.equal(flag.exitCode, 2);
+  assert.match(flag.stderr, /Unsupported demo option: --wat/);
+  assert.match(flag.stderr, /Try `aas help` for usage/);
+  assert.equal(flag.stdout, "");
+
+  const empty = await captureMain(["demo", "--fault", ""]);
+  assert.equal(empty.exitCode, 2);
+  assert.match(empty.stderr, /Empty value for demo option: --fault/);
+
+  const jsonUsage = await captureMain(["demo", "--unknown", "--json"]);
+  assert.equal(jsonUsage.exitCode, 2);
+  assert.deepEqual(JSON.parse(jsonUsage.stderr), {
+    error: { message: "Unsupported demo option: --unknown" },
+  });
+
+  const helpAsValue = await captureMain(["demo", "--response", "--help"]);
+  assert.equal(helpAsValue.exitCode, 2);
+  assert.match(helpAsValue.stderr, /Missing value for demo option: --response/);
 });

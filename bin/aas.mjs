@@ -99,6 +99,13 @@ const STAGE_NAMES = ["decide", "act", "prove"];
 const DEMO_FLAG_OPTIONS = new Set(["--dispute", "--json"]);
 const DEMO_VALUE_OPTIONS = new Set(["--response", "--fault"]);
 
+export class UsageError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "UsageError";
+  }
+}
+
 function has(args, name) {
   return args.includes(name);
 }
@@ -108,41 +115,83 @@ function option(args, name, fallback = null) {
   return index >= 0 ? args[index + 1] ?? fallback : fallback;
 }
 
+function isHelpFlag(value) {
+  return value === "--help" || value === "-h";
+}
+
+function isHelpToken(value) {
+  return value === "help" || isHelpFlag(value);
+}
+
+function demoRequestsHelp(args) {
+  for (let index = 0; index < args.length; index += 1) {
+    const name = args[index];
+    if (isHelpFlag(name)) return true;
+    if (DEMO_VALUE_OPTIONS.has(name)) index += 1;
+  }
+  return false;
+}
+
 function validateDemoArgs(args) {
   const seen = new Set();
   for (let index = 0; index < args.length; index += 1) {
     const name = args[index];
     if (!DEMO_FLAG_OPTIONS.has(name) && !DEMO_VALUE_OPTIONS.has(name)) {
-      throw new Error(`Unsupported demo option: ${name}`);
+      if (typeof name === "string" && name.startsWith("-")) {
+        throw new UsageError(`Unsupported demo option: ${name}`);
+      }
+      throw new UsageError(`Unexpected argument: ${name}`);
     }
-    if (seen.has(name)) throw new Error(`Duplicate demo option: ${name}`);
+    if (seen.has(name)) throw new UsageError(`Duplicate demo option: ${name}`);
     seen.add(name);
     if (DEMO_VALUE_OPTIONS.has(name)) {
       const value = args[index + 1];
-      if (value === undefined || value.startsWith("--")) throw new Error(`Missing value for demo option: ${name}`);
+      if (value === undefined || value.startsWith("-")) throw new UsageError(`Missing value for demo option: ${name}`);
+      if (value.trim() === "") throw new UsageError(`Empty value for demo option: ${name}`);
       index += 1;
     }
   }
 }
 
-function printHelp() {
-  process.stdout.write(`Agent Action Stack
+export function helpText() {
+  return `Agent Action Stack
 
 Usage:
-  aas demo [--response pass|fail] [--fault none|duplicate|...] [--dispute] [--json]
+  aas demo [--response pass|fail] [--fault none|duplicate] [--dispute] [--json]
   aas help
+
+Options:
+  --response pass|fail     Policy fixture to evaluate (default: pass)
+  --fault none|duplicate   Rail demo fault (default: none)
+  --dispute                Force MandateBound prove after a settled act
+  --json                   Print the run report as JSON
+  -h, --help               Show this help
 
 Flow:
   decide -> constitutional-agent-testbench evaluate
   on pass -> consequence-rail demo refund
-  on dispute -> mandatebound simulate
+  on dispute -> mandatebound simulate --scenario operator
 
 First-time setup:
   npm run bootstrap
 
-Each run is written to .out/runs/<run-id>. The .out/latest.json pointer identifies
-the most recent complete bundle.
-`);
+Missing child tools fail closed with a bootstrap hint. Each run is written to
+.out/runs/<run-id>. The .out/latest.json pointer identifies the most recent
+complete bundle.
+
+Exit codes:
+  0  completed run (including fail-closed policy denial)
+  1  stage or environment error
+  2  usage error
+`;
+}
+
+function printHelp(stream = process.stdout) {
+  stream.write(helpText());
+}
+
+function missingChildTool(label) {
+  return new Error(`Missing ${label}. Run: npm run bootstrap`);
 }
 
 /** @returns {ChildResult} */
@@ -266,6 +315,10 @@ export function runDecide(
 ) {
   const policyPath = join(fixturesDir, "policy.json");
   const pythonPath = join(depsDir, "constitutional-agent-testbench", "src");
+  const decideCli = join(pythonPath, "constitutional_agent_testbench", "cli.py");
+  if (runner === runCapture && !existsSync(decideCli)) {
+    throw missingChildTool("decide CLI (deps/constitutional-agent-testbench/src/constitutional_agent_testbench/cli.py)");
+  }
   const env = { ...process.env, PYTHONPATH: pythonPath, PYTHONUTF8: "1" };
   let lastError = null;
   for (const [bin, prefix] of pythonCandidates()) {
@@ -298,6 +351,9 @@ export function runAct(
   { depsDir = DEFAULT_PATHS.deps, runner = runCapture } = {},
 ) {
   const crctl = join(depsDir, "consequence-rail", "cmd", "crctl.js");
+  if (runner === runCapture && !existsSync(crctl)) {
+    throw missingChildTool("act CLI (deps/consequence-rail/cmd/crctl.js)");
+  }
   const args = ["demo", "refund", "--json"];
   if (fault && fault !== "none") args.push("--fault", fault);
   const result = runner(process.execPath, [crctl, ...args], {
@@ -322,7 +378,13 @@ export function runProve(
   scenario,
   { depsDir = DEFAULT_PATHS.deps, runner = runCapture } = {},
 ) {
+  if (typeof scenario !== "string" || scenario.trim() === "") {
+    throw new Error("prove requires a non-empty scenario");
+  }
   const cli = join(depsDir, "mandatebound", "dist", "cli.js");
+  if (runner === runCapture && !existsSync(cli)) {
+    throw missingChildTool("prove CLI (deps/mandatebound/dist/cli.js)");
+  }
   const result = runner(
     process.execPath,
     [cli, "simulate", "--scenario", scenario],
@@ -469,7 +531,9 @@ export async function runDemo(args = [], options = {}) {
     ...(options.paths ?? {}),
   };
   const responseName = option(args, "--response", "pass");
-  if (responseName !== "pass" && responseName !== "fail") throw new Error("--response must be pass or fail");
+  if (responseName !== "pass" && responseName !== "fail") {
+    throw new UsageError("--response must be pass or fail");
+  }
   const fault = option(args, "--fault", "none");
   const forceDispute = has(args, "--dispute");
   const asJson = has(args, "--json");
@@ -601,21 +665,39 @@ export async function runDemo(args = [], options = {}) {
   }
 }
 
+function writeCliError(error, { asJson = false, usage = false } = {}) {
+  if (asJson) {
+    process.stderr.write(`${JSON.stringify({ error: { message: error.message } })}\n`);
+    return;
+  }
+  process.stderr.write(`${error.message}\n`);
+  if (usage) process.stderr.write("Try `aas help` for usage.\n");
+}
+
 export async function main(argv = process.argv.slice(2)) {
   const command = argv[0] ?? "help";
-  if (command === "help" || command === "--help" || command === "-h") {
+  const asJson = has(argv, "--json");
+  if (isHelpToken(command) || (command === "demo" && demoRequestsHelp(argv.slice(1)))) {
     printHelp();
+    process.exitCode = 0;
     return;
   }
   if (command !== "demo") {
-    printHelp();
+    writeCliError(new UsageError(`Unknown command: ${command}`), { asJson, usage: true });
+    if (!asJson) printHelp(process.stderr);
     process.exitCode = 2;
     return;
   }
-  const result = await runDemo(argv.slice(1));
-  if (has(argv, "--json")) process.stdout.write(`${JSON.stringify(result.report, null, 2)}\n`);
-  else printHuman(result.report, result.bundleDir);
-  process.exitCode = result.exitCode;
+  try {
+    const result = await runDemo(argv.slice(1));
+    if (asJson) process.stdout.write(`${JSON.stringify(result.report, null, 2)}\n`);
+    else printHuman(result.report, result.bundleDir);
+    process.exitCode = result.exitCode;
+  } catch (error) {
+    const usage = error instanceof UsageError;
+    writeCliError(error, { asJson, usage });
+    process.exitCode = usage ? 2 : 1;
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
