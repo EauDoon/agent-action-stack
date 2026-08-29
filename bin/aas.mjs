@@ -141,6 +141,15 @@ function booleanField(payload, field, label) {
   return payload[field];
 }
 
+function parseStageJson(label, result) {
+  try {
+    return parseJsonOutput(result.stdout, label);
+  } catch (error) {
+    if (result.status !== 0) throw childProcessError(label, result);
+    throw error;
+  }
+}
+
 function pythonCandidates() {
   if (process.platform === "win32") {
     return [["py", ["-3"]], ["python", []], ["python3", []]];
@@ -195,14 +204,10 @@ export function runDecide(
       lastError = result.error;
       continue;
     }
+    const evaluation = parseStageJson("decide", result);
     if (result.status !== 0) {
-      const payload = (result.stdout || "").trim();
-      if (payload.startsWith("{")) {
-        return { ok: false, raw: parseJsonOutput(payload, "decide"), status: result.status };
-      }
-      throw childProcessError("decide", result);
+      return { ok: false, raw: evaluation, status: result.status };
     }
-    const evaluation = parseJsonOutput(result.stdout, "decide");
     return { ok: booleanField(evaluation, "passed", "decide"), raw: evaluation, status: 0 };
   }
   throw new Error(`Python not found for decide stage${lastError ? ` (${lastError.code ?? "spawn-error"})` : ""}`);
@@ -237,8 +242,9 @@ export function runProve(
     [cli, "simulate", "--scenario", scenario],
     { cwd: join(depsDir, "mandatebound") },
   );
-  if (result.status !== 0) throw childProcessError("prove", result);
-  const payload = parseJsonOutput(result.stdout, "prove");
+  if (result.error) throw childProcessError("prove", result);
+  const payload = parseStageJson("prove", result);
+  if (result.status !== 0) return { ok: false, raw: payload, status: result.status };
   return { ok: booleanField(payload, "ok", "prove"), raw: payload, status: 0 };
 }
 
