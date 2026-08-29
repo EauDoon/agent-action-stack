@@ -35,7 +35,6 @@ export const DEFAULT_PATHS = Object.freeze({
   lock: join(root, "stack-lock.json"),
 });
 
-const DISPUTE_OUTCOMES = new Set(["compensated", "disputed"]);
 const STAGE_NAMES = ["decide", "act", "prove"];
 const DEMO_FLAG_OPTIONS = new Set(["--dispute", "--json"]);
 const DEMO_VALUE_OPTIONS = new Set(["--response", "--fault"]);
@@ -442,7 +441,7 @@ export async function runDemo(args = [], options = {}) {
       bundle_verification: act.raw?.bundle_verification ?? null,
     };
     report.flow = "decide -> act";
-    const shouldProve = forceDispute || DISPUTE_OUTCOMES.has(outcome);
+    const shouldProve = forceDispute || outcome !== "settled";
     if (!shouldProve) {
       stages.prove = stageRecord("skipped", { reason: "no_dispute" });
       report.stages.prove = stages.prove;
@@ -455,7 +454,7 @@ export async function runDemo(args = [], options = {}) {
     report.stages.prove = {
       status: stages.prove.status,
       scenario,
-      triggered_by: forceDispute && !DISPUTE_OUTCOMES.has(outcome) ? "--dispute" : `act_outcome=${outcome}`,
+      triggered_by: forceDispute && outcome === "settled" ? "--dispute" : `act_outcome=${outcome}`,
       ok: prove.ok,
       result_keys: prove.raw?.result && typeof prove.raw.result === "object" ? Object.keys(prove.raw.result) : [],
     };
