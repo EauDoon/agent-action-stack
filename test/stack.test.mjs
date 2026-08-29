@@ -8,6 +8,7 @@ import { loadComponentLock, inspectDependencyDirectory, npmInvocation } from "..
 import {
   parseJsonOutput,
   persistRunBundle,
+  printHuman,
   resolveComponentProvenance,
   runAct,
   runDecide,
@@ -215,6 +216,29 @@ test("child output parser accepts JSON before a trailing log", () => {
     parseJsonOutput('{"ok":true}\nchild complete\n', "fixture"),
     { ok: true },
   );
+});
+
+test("README pass-path sample matches printHuman field order", async () => {
+  const readme = readFileSync(join(ROOT, "README.md"), "utf8");
+  const match = readme.match(/Expected human output \(pass path, no fault\):\n\n```text\n([\s\S]*?)```/);
+  assert.ok(match, "README is missing the pass-path human output sample");
+  const outputRoot = tempRoot();
+  const result = await runDemo(["--response", "pass"], stubOptions(outputRoot, { runId: "pass-run" }));
+  const chunks = [];
+  const originalWrite = process.stdout.write;
+  process.stdout.write = (chunk, encoding, callback) => {
+    chunks.push(String(chunk));
+    if (typeof encoding === "function") encoding();
+    else if (typeof callback === "function") callback();
+    return true;
+  };
+  try {
+    printHuman(result.report, result.bundleDir);
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+  const actual = chunks.join("").replaceAll(result.bundleDir, ".out/runs/<run-id>");
+  assert.equal(actual, match[1]);
 });
 
 test("pass bundle contains stage status, provenance, and only current artifacts", async () => {
