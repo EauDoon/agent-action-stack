@@ -51,6 +51,8 @@ import {
  * @property {unknown} [rule_results]
  * @property {unknown} [error]
  * @property {string} [reason]
+ * @property {string} [code]
+ * @property {string} [stderr]
  *
  * @typedef {object} ActStage
  * @property {StageStatus} status
@@ -61,6 +63,8 @@ import {
  * @property {unknown} [assurance_mode]
  * @property {unknown} [bundle_verification]
  * @property {string} [reason]
+ * @property {string} [code]
+ * @property {string} [stderr]
  *
  * @typedef {object} ProveStage
  * @property {StageStatus} status
@@ -69,6 +73,8 @@ import {
  * @property {boolean} [ok]
  * @property {string[]} [result_keys]
  * @property {string} [reason]
+ * @property {string} [code]
+ * @property {string} [stderr]
  *
  * @typedef {object} RunReport
  * @property {"agent-action-stack"} stack
@@ -98,6 +104,12 @@ export const DEFAULT_PATHS = Object.freeze({
 const STAGE_NAMES = ["decide", "act", "prove"];
 const DEMO_FLAG_OPTIONS = new Set(["--dispute", "--json"]);
 const DEMO_VALUE_OPTIONS = new Set(["--response", "--fault"]);
+const STDERR_LIMIT = 800;
+export const DIAGNOSTIC = Object.freeze({
+  CHILD_SPAWN: "AAS_CHILD_SPAWN",
+  CHILD_EXIT: "AAS_CHILD_EXIT",
+  CHILD_JSON: "AAS_CHILD_JSON",
+});
 
 export class UsageError extends Error {
   constructor(message) {
@@ -209,12 +221,47 @@ export function runCapture(command, args, opts = {}) {
   };
 }
 
+/** Keep the trailing `limit` characters after stripping ANSI/control chars. */
+export function clipChildStderr(stderr, limit = STDERR_LIMIT) {
+  if (typeof stderr !== "string" || stderr.length === 0) return "";
+  const cleaned = stderr
+    .replace(/\u001b\[[0-9;]*[A-Za-z]/g, "")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
+  const trimmed = cleaned.trim();
+  if (!trimmed) return "";
+  return trimmed.length <= limit ? trimmed : trimmed.slice(trimmed.length - limit);
+}
+
+function attachChildDiagnostics(error, { stage, code, stderr }) {
+  error.stage = stage;
+  error.code = code;
+  error.stderr = clipChildStderr(stderr);
+  return error;
+}
+
 function childProcessError(label, result) {
-  if (result.error) {
-    const code = result.error.code ?? "spawn-error";
-    return new Error(`${label} child process error (${code})`);
-  }
-  return new Error(`${label} child process exited with status ${result.status}`);
+  const spawn = Boolean(result.error);
+  const code = spawn ? DIAGNOSTIC.CHILD_SPAWN : DIAGNOSTIC.CHILD_EXIT;
+  const base = spawn
+    ? `${label} child process error (${result.error.code ?? "spawn-error"})`
+    : `${label} child process exited with status ${result.status}`;
+  const detail = clipChildStderr(result.stderr, 200).replace(/\s+/g, " ");
+  const error = new Error(detail ? `${base}: ${detail}` : base);
+  return attachChildDiagnostics(error, { stage: label, code, stderr: result.stderr });
+}
+
+function failedStderr(result) {
+  const stderr = clipChildStderr(result?.stderr);
+  return stderr ? { stderr } : {};
+}
+
+function stageErrorFields(error) {
+  const stderr = clipChildStderr(error.stderr);
+  return {
+    reason: error.message,
+    ...(error.code ? { code: error.code } : {}),
+    ...(stderr ? { stderr } : {}),
+  };
 }
 
 /**
@@ -263,7 +310,11 @@ function parseStageJson(label, result) {
     return parseJsonOutput(result.stdout, label);
   } catch (error) {
     if (result.status !== 0) throw childProcessError(label, result);
-    throw error;
+    throw attachChildDiagnostics(error, {
+      stage: label,
+      code: DIAGNOSTIC.CHILD_JSON,
+      stderr: result.stderr,
+    });
   }
 }
 
@@ -333,11 +384,25 @@ export function runDecide(
     }
     const evaluation = parseStageJson("decide", result);
     if (result.status !== 0) {
-      return { ok: false, raw: evaluation, status: result.status };
+      return { ok: false, raw: evaluation, status: result.status, ...failedStderr(result) };
     }
-    return { ok: booleanField(evaluation, "passed", "decide"), raw: evaluation, status: 0 };
+    try {
+      const ok = booleanField(evaluation, "passed", "decide");
+      return { ok, raw: evaluation, status: 0, ...(ok ? {} : failedStderr(result)) };
+    } catch (error) {
+      throw attachChildDiagnostics(error, {
+        stage: "decide",
+        code: DIAGNOSTIC.CHILD_JSON,
+        stderr: result.stderr,
+      });
+    }
   }
-  throw new Error(`Python not found for decide stage${lastError ? ` (${lastError.code ?? "spawn-error"})` : ""}`);
+  const missing = new Error(`Python not found for decide stage${lastError ? ` (${lastError.code ?? "spawn-error"})` : ""}`);
+  throw attachChildDiagnostics(missing, {
+    stage: "decide",
+    code: DIAGNOSTIC.CHILD_SPAWN,
+    stderr: lastError?.message,
+  });
 }
 
 /**
@@ -359,11 +424,15 @@ export function runAct(
   const result = runner(process.execPath, [crctl, ...args], {
     cwd: join(depsDir, "consequence-rail"),
   });
-  if (result.status !== 0) throw childProcessError("act", result);
-  const payload = parseJsonOutput(result.stdout, "act");
+  if (result.error || result.status !== 0) throw childProcessError("act", result);
+  const payload = parseStageJson("act", result);
   if (!payload || typeof payload !== "object" || Array.isArray(payload)
     || ![null, "settled", "compensated", "disputed"].includes(payload.outcome)) {
-    throw new Error("act did not return a valid outcome");
+    throw attachChildDiagnostics(new Error("act did not return a valid outcome"), {
+      stage: "act",
+      code: DIAGNOSTIC.CHILD_JSON,
+      stderr: result.stderr,
+    });
   }
   return { ok: true, raw: payload, status: 0 };
 }
@@ -392,8 +461,19 @@ export function runProve(
   );
   if (result.error) throw childProcessError("prove", result);
   const payload = parseStageJson("prove", result);
-  if (result.status !== 0) return { ok: false, raw: payload, status: result.status };
-  return { ok: booleanField(payload, "ok", "prove"), raw: payload, status: 0 };
+  if (result.status !== 0) {
+    return { ok: false, raw: payload, status: result.status, ...failedStderr(result) };
+  }
+  try {
+    const ok = booleanField(payload, "ok", "prove");
+    return { ok, raw: payload, status: 0, ...(ok ? {} : failedStderr(result)) };
+  } catch (error) {
+    throw attachChildDiagnostics(error, {
+      stage: "prove",
+      code: DIAGNOSTIC.CHILD_JSON,
+      stderr: result.stderr,
+    });
+  }
 }
 
 export function createRunId(now = new Date(), nonce = randomUUID()) {
@@ -451,6 +531,8 @@ export function persistRunBundle({
       stageManifest[stage] = {
         status: current.status,
         reason: current.reason ?? null,
+        code: current.code ?? null,
+        stderr: current.stderr ? clipChildStderr(current.stderr) : null,
         artifact: artifact?.path ?? null,
       };
       if (artifact) {
@@ -513,6 +595,13 @@ export function printHuman(report, bundleDir = null) {
     `prove_triggered_by: ${report.stages.prove.triggered_by ?? "none"}`,
     `flow: ${report.flow}`,
   ];
+  for (const name of STAGE_NAMES) {
+    const stage = report.stages[name];
+    if (!stage || (stage.status !== "error" && stage.status !== "failed")) continue;
+    if (stage.code) lines.push(`${name}_code: ${stage.code}`);
+    if (stage.reason) lines.push(`${name}_reason: ${stage.reason}`);
+    if (stage.stderr) lines.push(`${name}_stderr: ${clipChildStderr(stage.stderr).replace(/\s+/g, " ")}`);
+  }
   if (bundleDir) lines.push(`bundle: ${bundleDir}`);
   process.stdout.write(`${lines.join("\n")}\n`);
 }
@@ -582,13 +671,18 @@ export async function runDemo(args = [], options = {}) {
       fixturesDir: paths.fixtures,
       runner: options.runner,
     });
-    stages.decide = stageRecord(decide.ok ? "passed" : "failed", { raw: decide.raw });
+    const decideStderr = clipChildStderr(decide.stderr);
+    stages.decide = stageRecord(decide.ok ? "passed" : "failed", {
+      raw: decide.raw,
+      ...(decideStderr ? { stderr: decideStderr } : {}),
+    });
     report.stages.decide = {
       status: stages.decide.status,
       passed: decide.ok,
       policy_id: decide.raw?.policy_id ?? null,
       rule_results: decide.raw?.rule_results ?? null,
       error: decide.raw?.error ?? null,
+      ...(decideStderr ? { stderr: decideStderr } : {}),
     };
     if (!decide.ok) {
       stages.act = stageRecord("skipped", { reason: "policy_failed" });
@@ -600,7 +694,7 @@ export async function runDemo(args = [], options = {}) {
     }
   } catch (error) {
     exitCode = 1;
-    stages.decide = stageRecord("error", { reason: error.message });
+    stages.decide = stageRecord("error", stageErrorFields(error));
     stages.act = stageRecord("skipped", { reason: "decide_error" });
     stages.prove = stageRecord("skipped", { reason: "decide_error" });
     report.stages.decide = stages.decide;
@@ -636,7 +730,11 @@ export async function runDemo(args = [], options = {}) {
     const scenario = "operator";
     proveStarted = true;
     const prove = await (options.runProveFn ?? runProve)(scenario, { depsDir: paths.deps, runner: options.runner });
-    stages.prove = stageRecord(prove.ok ? "passed" : "failed", { raw: prove.raw });
+    const proveStderr = clipChildStderr(prove.stderr);
+    stages.prove = stageRecord(prove.ok ? "passed" : "failed", {
+      raw: prove.raw,
+      ...(proveStderr ? { stderr: proveStderr } : {}),
+    });
     if (!prove.ok) exitCode = 1;
     report.stages.prove = {
       status: stages.prove.status,
@@ -644,16 +742,17 @@ export async function runDemo(args = [], options = {}) {
       triggered_by: forceDispute && outcome === "settled" ? "--dispute" : `act_outcome=${outcome}`,
       ok: prove.ok,
       result_keys: prove.raw?.result && typeof prove.raw.result === "object" ? Object.keys(prove.raw.result) : [],
+      ...(proveStderr ? { stderr: proveStderr } : {}),
     };
     report.flow = "decide -> act -> prove";
     return finalize();
   } catch (error) {
     exitCode = 1;
     if (actStarted && !proveStarted) {
-      stages.act = stageRecord("error", { reason: error.message });
+      stages.act = stageRecord("error", stageErrorFields(error));
       report.stages.act = stages.act;
     } else {
-      stages.prove = stageRecord("error", { reason: error.message });
+      stages.prove = stageRecord("error", stageErrorFields(error));
       report.stages.prove = stages.prove;
     }
     if (actStarted && !proveStarted) stages.prove = stageRecord("skipped", { reason: "act_error" });
@@ -667,10 +766,18 @@ export async function runDemo(args = [], options = {}) {
 
 function writeCliError(error, { asJson = false, usage = false } = {}) {
   if (asJson) {
-    process.stderr.write(`${JSON.stringify({ error: { message: error.message } })}\n`);
+    const body = { message: error.message };
+    if (error.code) body.code = error.code;
+    if (error.stage) body.stage = error.stage;
+    const stderr = clipChildStderr(error.stderr);
+    if (stderr) body.stderr = stderr;
+    process.stderr.write(`${JSON.stringify({ error: body })}\n`);
     return;
   }
   process.stderr.write(`${error.message}\n`);
+  if (error.code) process.stderr.write(`code: ${error.code}\n`);
+  const stderr = clipChildStderr(error.stderr);
+  if (stderr) process.stderr.write(`${stderr}\n`);
   if (usage) process.stderr.write("Try `aas help` for usage.\n");
 }
 
