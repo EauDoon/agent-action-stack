@@ -153,6 +153,56 @@ test("decide and prove reject non-boolean success fields", () => {
   assert.throws(() => runProve("unused", { runner }), /boolean ok field/);
 });
 
+test("decide reads logged JSON on a nonzero exit", () => {
+  const result = runDecide("unused", {
+    runner: () => ({
+      status: 1,
+      stdout: 'evaluating policy\n{\n  "passed": false,\n  "policy_id": "refund-v1"\n}\n',
+      stderr: "",
+      error: null,
+    }),
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 1);
+  assert.equal(result.raw.policy_id, "refund-v1");
+});
+
+test("prove treats nonzero JSON as an unsuccessful proof", () => {
+  const result = runProve("unused", {
+    runner: () => ({
+      status: 2,
+      stdout: '{"ok":false,"error":{"code":"ALB_CLI_USAGE","message":"Simulate accepts one scenario."}}\n',
+      stderr: '{"level":"error","code":"ALB_CLI_USAGE"}\n',
+      error: null,
+    }),
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 2);
+  assert.equal(result.raw.error.code, "ALB_CLI_USAGE");
+});
+
+test("prove fail-closes a nonzero payload that claims success", () => {
+  const result = runProve("unused", {
+    runner: () => ({
+      status: 5,
+      stdout: '{"ok":true,"result":{}}\n',
+      stderr: "",
+      error: null,
+    }),
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 5);
+});
+
+test("prove still throws when a nonzero child has no JSON", () => {
+  assert.throws(
+    () => runProve("unused", {
+      runner: () => ({ status: 2, stdout: "simulate failed\n", stderr: "", error: null }),
+    }),
+    /exited with status 2/,
+  );
+});
+
 test("child output parser accepts logged pretty-printed JSON", () => {
   assert.deepEqual(
     parseJsonOutput('starting child\n{\n  "ok": true,\n  "result": { "count": 2 }\n}\n', "fixture"),
@@ -231,6 +281,26 @@ test("an unsuccessful proof fails the run", async () => {
   assert.equal(result.exitCode, 1);
   assert.equal(result.manifest.exit_code, 1);
   assert.equal(result.manifest.stages.prove.status, "failed");
+});
+
+test("nonzero prove JSON is recorded as a failed proof, not a child-process error", async () => {
+  const outputRoot = tempRoot();
+  const options = stubOptions(outputRoot, { runId: "prove-json-fail-run" });
+  delete options.runProveFn;
+  options.runner = () => ({
+    status: 2,
+    stdout: '{"ok":false,"error":{"code":"ALB_CLI_USAGE","message":"Simulate accepts one scenario."}}\n',
+    stderr: "",
+    error: null,
+  });
+  const result = await runDemo(["--response", "pass", "--dispute"], options);
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.manifest.stages.prove.status, "failed");
+  assert.equal(result.report.stages.prove.ok, false);
+  assert.deepEqual(
+    JSON.parse(readFileSync(join(result.bundleDir, "stages", "prove.json"), "utf8")).error,
+    { code: "ALB_CLI_USAGE", message: "Simulate accepts one scenario." },
+  );
 });
 
 test("child-process errors are visible as safe stage errors and downstream skips", async () => {
