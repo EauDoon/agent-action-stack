@@ -6,6 +6,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { loadComponentLock, inspectDependencyDirectory, npmInvocation } from "../scripts/bootstrap.mjs";
 import {
+  parseJsonOutput,
   persistRunBundle,
   resolveComponentProvenance,
   runAct,
@@ -136,6 +137,20 @@ test("act rejects a zero-exit payload without a valid outcome", () => {
       runner: () => ({ status: 0, stdout: "{}\n", stderr: "", error: null }),
     }),
     /valid outcome/,
+  );
+});
+
+test("child output parser accepts logged pretty-printed JSON", () => {
+  assert.deepEqual(
+    parseJsonOutput('starting child\n{\n  "ok": true,\n  "result": { "count": 2 }\n}\n', "fixture"),
+    { ok: true, result: { count: 2 } },
+  );
+});
+
+test("child output parser accepts JSON before a trailing log", () => {
+  assert.deepEqual(
+    parseJsonOutput('{"ok":true}\nchild complete\n', "fixture"),
+    { ok: true },
   );
 });
 
