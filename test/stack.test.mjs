@@ -8,6 +8,7 @@ import { loadComponentLock, inspectDependencyDirectory, npmInvocation } from "..
 import {
   persistRunBundle,
   resolveComponentProvenance,
+  runAct,
   runDemo,
   writeAtomicFile,
 } from "../bin/aas.mjs";
@@ -125,6 +126,16 @@ test("Windows npm commands run through the npm JavaScript entrypoint", () => {
   assert.deepEqual(
     npmInvocation(["ci"], { platform: "linux" }),
     { command: "npm", args: ["ci"] },
+  );
+});
+
+test("act rejects a zero-exit payload without a valid outcome", () => {
+  assert.throws(
+    () => runAct("none", {
+      depsDir: tempRoot(),
+      runner: () => ({ status: 0, stdout: "{}\n", stderr: "", error: null }),
+    }),
+    /valid outcome/,
   );
 });
 

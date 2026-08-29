@@ -208,7 +208,12 @@ export function runAct(
     cwd: join(depsDir, "consequence-rail"),
   });
   if (result.status !== 0) throw childProcessError("act", result);
-  return { ok: true, raw: parseJsonOutput(result.stdout, "act"), status: 0 };
+  const payload = parseJsonOutput(result.stdout, "act");
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)
+    || ![null, "settled", "compensated", "disputed"].includes(payload.outcome)) {
+    throw new Error("act did not return a valid outcome");
+  }
+  return { ok: true, raw: payload, status: 0 };
 }
 
 export function runProve(
