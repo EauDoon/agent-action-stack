@@ -46,7 +46,10 @@ act_outcome: settled
 act_state: CLOSED
 act_fault: none
 prove: skipped
+prove_scenario: none
+prove_triggered_by: none
 flow: decide -> act
+bundle: .out/runs/<run-id>
 ```
 
 Fail closed at decide:

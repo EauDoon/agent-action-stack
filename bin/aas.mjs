@@ -26,6 +26,66 @@ import {
   loadComponentLock,
 } from "../scripts/bootstrap.mjs";
 
+/**
+ * @typedef {object} ChildResult
+ * @property {number} status
+ * @property {string} stdout
+ * @property {string} stderr
+ * @property {Error} [error]
+ *
+ * @typedef {object} ComponentProvenance
+ * @property {string} name
+ * @property {string} repository
+ * @property {string} commit
+ * @property {string} [origin]
+ * @property {boolean} [detached]
+ * @property {boolean} [clean]
+ * @property {string[]} [entrypoints]
+ *
+ * @typedef {"pending"|"passed"|"failed"|"skipped"|"error"} StageStatus
+ *
+ * @typedef {object} DecideStage
+ * @property {StageStatus} status
+ * @property {boolean} [passed]
+ * @property {string|null} [policy_id]
+ * @property {unknown} [rule_results]
+ * @property {unknown} [error]
+ * @property {string} [reason]
+ *
+ * @typedef {object} ActStage
+ * @property {StageStatus} status
+ * @property {string|null} [outcome]
+ * @property {string|null} [state]
+ * @property {string|null} [fault]
+ * @property {string|null} [action_id]
+ * @property {unknown} [assurance_mode]
+ * @property {unknown} [bundle_verification]
+ * @property {string} [reason]
+ *
+ * @typedef {object} ProveStage
+ * @property {StageStatus} status
+ * @property {string} [scenario]
+ * @property {string} [triggered_by]
+ * @property {boolean} [ok]
+ * @property {string[]} [result_keys]
+ * @property {string} [reason]
+ *
+ * @typedef {object} RunReport
+ * @property {"agent-action-stack"} stack
+ * @property {"pass"|"fail"} response
+ * @property {string} flow
+ * @property {string} run_id
+ * @property {ComponentProvenance[]} component_provenance
+ * @property {{decide: DecideStage, act: ActStage, prove: ProveStage}} stages
+ *
+ * @typedef {object} DemoResult
+ * @property {RunReport} report
+ * @property {object} manifest
+ * @property {string} bundleDir
+ * @property {number} exitCode
+ * @property {boolean} asJson
+ */
+
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 export const DEFAULT_PATHS = Object.freeze({
   root,
@@ -85,6 +145,7 @@ the most recent complete bundle.
 `);
 }
 
+/** @returns {ChildResult} */
 export function runCapture(command, args, opts = {}) {
   const result = spawnSync(command, args, {
     encoding: "utf8",
@@ -107,6 +168,13 @@ function childProcessError(label, result) {
   return new Error(`${label} child process exited with status ${result.status}`);
 }
 
+/**
+ * Parse the last complete JSON value from mixed child stdout.
+ *
+ * @param {string} text
+ * @param {string} label Stage name used in error messages.
+ * @returns {unknown}
+ */
 export function parseJsonOutput(text, label) {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -157,6 +225,7 @@ function pythonCandidates() {
   return [["python3", []], ["python", []]];
 }
 
+/** @returns {ComponentProvenance[]} */
 export function resolveComponentProvenance(
   depsDir = DEFAULT_PATHS.deps,
   lockPath = DEFAULT_PATHS.lock,
@@ -186,6 +255,11 @@ export function resolveComponentProvenance(
   });
 }
 
+/**
+ * Evaluate a response fixture against the locked testbench policy.
+ *
+ * @returns {{ok: boolean, raw: object, status: number}}
+ */
 export function runDecide(
   responsePath,
   { depsDir = DEFAULT_PATHS.deps, fixturesDir = DEFAULT_PATHS.fixtures, runner = runCapture } = {},
@@ -213,6 +287,12 @@ export function runDecide(
   throw new Error(`Python not found for decide stage${lastError ? ` (${lastError.code ?? "spawn-error"})` : ""}`);
 }
 
+/**
+ * Execute the locked Consequence Rail refund demo.
+ *
+ * @param {string} fault Demo fault name, or "none".
+ * @returns {{ok: true, raw: object, status: number}}
+ */
 export function runAct(
   fault,
   { depsDir = DEFAULT_PATHS.deps, runner = runCapture } = {},
@@ -232,6 +312,12 @@ export function runAct(
   return { ok: true, raw: payload, status: 0 };
 }
 
+/**
+ * Run MandateBound's operator simulation as the prove stage.
+ *
+ * @param {string} scenario MandateBound simulate scenario id.
+ * @returns {{ok: boolean, raw: object, status: number}}
+ */
 export function runProve(
   scenario,
   { depsDir = DEFAULT_PATHS.deps, runner = runCapture } = {},
@@ -343,6 +429,13 @@ function stageRecord(status, fields = {}) {
   return { status, ...fields };
 }
 
+/**
+ * Print the CLI human report. Field order is part of the public surface and
+ * must match the pass-path sample in README.md.
+ *
+ * @param {RunReport} report
+ * @param {string|null} [bundleDir]
+ */
 export function printHuman(report, bundleDir = null) {
   const lines = [
     "stack: agent-action-stack",
@@ -362,6 +455,13 @@ export function printHuman(report, bundleDir = null) {
   process.stdout.write(`${lines.join("\n")}\n`);
 }
 
+/**
+ * Run decide → act → prove and persist an isolated bundle.
+ *
+ * @param {string[]} [args] Demo flags: --response, --fault, --dispute, --json.
+ * @param {object} [options]
+ * @returns {Promise<DemoResult>}
+ */
 export async function runDemo(args = [], options = {}) {
   validateDemoArgs(args);
   const paths = {
