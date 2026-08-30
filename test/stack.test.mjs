@@ -6,6 +6,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { loadComponentLock, inspectDependencyDirectory, npmInvocation } from "../scripts/bootstrap.mjs";
 import {
+  CHILD_JSON_LIMIT,
   DIAGNOSTIC,
   clipChildStderr,
   helpText,
@@ -171,7 +172,7 @@ test("decide and prove reject non-boolean success fields", () => {
     },
   );
   assert.throws(
-    () => runProve("unused", { runner }),
+    () => runProve("operator", { runner }),
     (error) => {
       assert.match(error.message, /boolean ok field/);
       assert.equal(error.code, DIAGNOSTIC.CHILD_JSON);
@@ -196,7 +197,7 @@ test("decide reads logged JSON on a nonzero exit", () => {
 });
 
 test("prove treats nonzero JSON as an unsuccessful proof", () => {
-  const result = runProve("unused", {
+  const result = runProve("operator", {
     runner: () => ({
       status: 2,
       stdout: '{"ok":false,"error":{"code":"ALB_CLI_USAGE","message":"Simulate accepts one scenario."}}\n',
@@ -211,7 +212,7 @@ test("prove treats nonzero JSON as an unsuccessful proof", () => {
 });
 
 test("prove fail-closes a nonzero payload that claims success", () => {
-  const result = runProve("unused", {
+  const result = runProve("operator", {
     runner: () => ({
       status: 5,
       stdout: '{"ok":true,"result":{}}\n',
@@ -225,7 +226,7 @@ test("prove fail-closes a nonzero payload that claims success", () => {
 
 test("prove still throws when a nonzero child has no JSON", () => {
   assert.throws(
-    () => runProve("unused", {
+    () => runProve("operator", {
       runner: () => ({
         status: 2,
         stdout: "simulate failed\n",
@@ -287,6 +288,83 @@ test("child output parser accepts JSON before a trailing log", () => {
   assert.deepEqual(
     parseJsonOutput('{"ok":true}\nchild complete\n', "fixture"),
     { ok: true },
+  );
+});
+
+test("child JSON larger than the defensive limit is rejected", () => {
+  assert.throws(
+    () => parseJsonOutput('{"ok":true}', "fixture", 4),
+    /fixture JSON output exceeds 4 characters/,
+  );
+  assert.deepEqual(parseJsonOutput('{"ok":true}', "fixture", 20), { ok: true });
+  const oversized = `{"passed":true,"pad":"${"x".repeat(CHILD_JSON_LIMIT)}"}`;
+  assert.throws(
+    () => runDecide("unused", {
+      runner: () => ({ status: 0, stdout: oversized, stderr: "child: huge json\n", error: null }),
+    }),
+    (error) => {
+      assert.match(error.message, new RegExp(`exceeds ${CHILD_JSON_LIMIT} characters`));
+      assert.equal(error.code, DIAGNOSTIC.CHILD_JSON);
+      assert.equal(error.stage, "decide");
+      return true;
+    },
+  );
+});
+
+test("decide and act reject mistyped remaining payload fields", () => {
+  assert.throws(
+    () => runDecide("unused", {
+      runner: () => ({
+        status: 0,
+        stdout: '{"passed":true,"policy_id":["refund-v1"]}\n',
+        stderr: "child: bad policy id\n",
+        error: null,
+      }),
+    }),
+    (error) => {
+      assert.match(error.message, /valid policy_id field/);
+      assert.equal(error.code, DIAGNOSTIC.CHILD_JSON);
+      assert.equal(error.stage, "decide");
+      return true;
+    },
+  );
+  assert.throws(
+    () => runDecide("unused", {
+      runner: () => ({
+        status: 0,
+        stdout: '{"passed":true,"rule_results":{}}\n',
+        stderr: "",
+        error: null,
+      }),
+    }),
+    /valid rule_results field/,
+  );
+  assert.throws(
+    () => runAct("none", {
+      runner: () => ({
+        status: 0,
+        stdout: '{"outcome":"settled","state":{"name":"CLOSED"}}\n',
+        stderr: "crctl: nested state\n",
+        error: null,
+      }),
+    }),
+    (error) => {
+      assert.match(error.message, /valid state field/);
+      assert.equal(error.code, DIAGNOSTIC.CHILD_JSON);
+      assert.equal(error.stage, "act");
+      return true;
+    },
+  );
+  assert.throws(
+    () => runProve("operator", {
+      runner: () => ({
+        status: 0,
+        stdout: '{"ok":true,"result":["evidence"]}\n',
+        stderr: "",
+        error: null,
+      }),
+    }),
+    /valid result field/,
   );
 });
 
@@ -511,14 +589,19 @@ test("demo arguments reject unknown, duplicate, missing-value, and empty options
     () => runDemo(["--response", "pass", "--response", "fail"], stubOptions(tempRoot())),
     /Duplicate/,
   );
+  await assert.rejects(() => runDemo(["--response", "maybe"], stubOptions(tempRoot())), /must be pass or fail/);
+  await assert.rejects(() => runDemo(["--fault", "explode"], stubOptions(tempRoot())), /must be none or duplicate/);
 });
 
-test("prove rejects an empty scenario before spawning a child", () => {
+test("prove rejects an empty or unknown scenario before spawning a child", () => {
   const runner = () => {
     throw new Error("should not spawn");
   };
   assert.throws(() => runProve("", { runner }), /non-empty scenario/);
   assert.throws(() => runProve("   ", { runner }), /non-empty scenario/);
+  assert.throws(() => runProve("all", { runner }), /not supported: all/);
+  assert.throws(() => runProve("../operator", { runner }), /not supported/);
+  assert.throws(() => runProve("operator;id", { runner }), /not supported/);
 });
 
 test("missing child tools fail closed with a bootstrap hint", () => {
@@ -610,4 +693,9 @@ test("CLI reports unknown commands, flags, and empty values as usage errors", as
   const helpAsValue = await captureMain(["demo", "--response", "--help"]);
   assert.equal(helpAsValue.exitCode, 2);
   assert.match(helpAsValue.stderr, /Missing value for demo option: --response/);
+
+  const badFault = await captureMain(["demo", "--fault", "explode"]);
+  assert.equal(badFault.exitCode, 2);
+  assert.match(badFault.stderr, /--fault must be none or duplicate/);
+  assert.match(badFault.stderr, /Try `aas help` for usage/);
 });

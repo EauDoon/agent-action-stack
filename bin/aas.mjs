@@ -105,6 +105,20 @@ const STAGE_NAMES = ["decide", "act", "prove"];
 const DEMO_FLAG_OPTIONS = new Set(["--dispute", "--json"]);
 const DEMO_VALUE_OPTIONS = new Set(["--response", "--fault"]);
 const STDERR_LIMIT = 800;
+/** Child stdout is capped so a runaway tool cannot inflate the run bundle. */
+export const CHILD_JSON_LIMIT = 1024 * 1024;
+const DEMO_FAULTS = new Set(["none", "duplicate"]);
+const PROVE_SCENARIOS = new Set([
+  "principal",
+  "operator",
+  "model_vendor",
+  "unresolved",
+  "expiry",
+  "replay",
+  "tamper",
+  "conflict",
+  "appeal",
+]);
 export const DIAGNOSTIC = Object.freeze({
   CHILD_SPAWN: "AAS_CHILD_SPAWN",
   CHILD_EXIT: "AAS_CHILD_EXIT",
@@ -269,9 +283,16 @@ function stageErrorFields(error) {
  *
  * @param {string} text
  * @param {string} label Stage name used in error messages.
+ * @param {number} [limit]
  * @returns {unknown}
  */
-export function parseJsonOutput(text, label) {
+export function parseJsonOutput(text, label, limit = CHILD_JSON_LIMIT) {
+  if (typeof text !== "string") {
+    throw new Error(`${label} produced empty output.`);
+  }
+  if (text.length > limit) {
+    throw new Error(`${label} JSON output exceeds ${limit} characters.`);
+  }
   const trimmed = text.trim();
   if (!trimmed) {
     throw new Error(`${label} produced empty output.`);
@@ -303,6 +324,19 @@ function booleanField(payload, field, label) {
     throw new Error(`${label} did not return a boolean ${field} field`);
   }
   return payload[field];
+}
+
+function jsonType(value) {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
+function optionalField(payload, field, allowed, label) {
+  if (payload[field] === undefined) return;
+  if (!allowed.includes(jsonType(payload[field]))) {
+    throw new Error(`${label} did not return a valid ${field} field`);
+  }
 }
 
 function parseStageJson(label, result) {
@@ -388,6 +422,8 @@ export function runDecide(
     }
     try {
       const ok = booleanField(evaluation, "passed", "decide");
+      optionalField(evaluation, "policy_id", ["string"], "decide");
+      optionalField(evaluation, "rule_results", ["array"], "decide");
       return { ok, raw: evaluation, status: 0, ...(ok ? {} : failedStderr(result)) };
     } catch (error) {
       throw attachChildDiagnostics(error, {
@@ -434,6 +470,19 @@ export function runAct(
       stderr: result.stderr,
     });
   }
+  try {
+    optionalField(payload, "state", ["string", "null"], "act");
+    optionalField(payload, "fault", ["string", "null"], "act");
+    optionalField(payload, "action_id", ["string", "null"], "act");
+    optionalField(payload, "assurance_mode", ["string", "null"], "act");
+    optionalField(payload, "bundle_verification", ["string", "null"], "act");
+  } catch (error) {
+    throw attachChildDiagnostics(error, {
+      stage: "act",
+      code: DIAGNOSTIC.CHILD_JSON,
+      stderr: result.stderr,
+    });
+  }
   return { ok: true, raw: payload, status: 0 };
 }
 
@@ -449,6 +498,9 @@ export function runProve(
 ) {
   if (typeof scenario !== "string" || scenario.trim() === "") {
     throw new Error("prove requires a non-empty scenario");
+  }
+  if (!PROVE_SCENARIOS.has(scenario)) {
+    throw new Error(`prove scenario is not supported: ${scenario}`);
   }
   const cli = join(depsDir, "mandatebound", "dist", "cli.js");
   if (runner === runCapture && !existsSync(cli)) {
@@ -466,6 +518,7 @@ export function runProve(
   }
   try {
     const ok = booleanField(payload, "ok", "prove");
+    optionalField(payload, "result", ["object"], "prove");
     return { ok, raw: payload, status: 0, ...(ok ? {} : failedStderr(result)) };
   } catch (error) {
     throw attachChildDiagnostics(error, {
@@ -624,6 +677,9 @@ export async function runDemo(args = [], options = {}) {
     throw new UsageError("--response must be pass or fail");
   }
   const fault = option(args, "--fault", "none");
+  if (!DEMO_FAULTS.has(fault)) {
+    throw new UsageError("--fault must be none or duplicate");
+  }
   const forceDispute = has(args, "--dispute");
   const asJson = has(args, "--json");
   const responsePath = join(paths.fixtures, `response.${responseName}.json`);
