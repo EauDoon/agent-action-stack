@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { DEFAULT_PATHS, runDemo } from "./aas.mjs";
+import { DEFAULT_GUI_PORT, DEFAULT_PATHS, resolveGuiPort, runDemo } from "./aas.mjs";
 
 export function renderPage() {
   return `<!doctype html>
@@ -149,7 +149,7 @@ export function createGuiServer({
   });
 }
 
-export async function startGui({ port = 8787, host = "127.0.0.1", ...options } = {}) {
+export async function startGui({ port = DEFAULT_GUI_PORT, host = "127.0.0.1", ...options } = {}) {
   if (host !== "127.0.0.1") throw new TypeError("GUI host must be 127.0.0.1.");
   const server = createGuiServer(options);
   await new Promise((resolve) => server.listen(port, host, resolve));
@@ -166,7 +166,7 @@ async function main() {
     process.stdout.write("GUI smoke test passed.\n");
     return;
   }
-  await startGui({ port: Number(process.env.AAS_GUI_PORT ?? "8787") });
+  await startGui({ port: resolveGuiPort() });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

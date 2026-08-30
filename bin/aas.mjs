@@ -107,6 +107,11 @@ const DEMO_VALUE_OPTIONS = new Set(["--response", "--fault"]);
 const STDERR_LIMIT = 800;
 /** Child stdout is capped so a runaway tool cannot inflate the run bundle. */
 export const CHILD_JSON_LIMIT = 1024 * 1024;
+/** Fail closed if a decide/act/prove child hangs. Override with AAS_CHILD_TIMEOUT_MS. */
+export const DEFAULT_CHILD_TIMEOUT_MS = 30_000;
+export const CHILD_TIMEOUT_MAX_MS = 600_000;
+/** Loopback port for `aas-gui`. Override with AAS_GUI_PORT. */
+export const DEFAULT_GUI_PORT = 8787;
 const DEMO_FAULTS = new Set(["none", "duplicate"]);
 const PROVE_SCENARIOS = new Set([
   "principal",
@@ -123,7 +128,47 @@ export const DIAGNOSTIC = Object.freeze({
   CHILD_SPAWN: "AAS_CHILD_SPAWN",
   CHILD_EXIT: "AAS_CHILD_EXIT",
   CHILD_JSON: "AAS_CHILD_JSON",
+  CHILD_TIMEOUT: "AAS_CHILD_TIMEOUT",
 });
+
+/**
+ * Parse an optional integer environment value.
+ * Unset or blank values use `fallback`. Other non-integers fail closed.
+ *
+ * @param {string} name
+ * @param {string|undefined} raw
+ * @param {{fallback: number, min: number, max: number}} bounds
+ * @returns {number}
+ */
+export function parseEnvInteger(name, raw, { fallback, min, max }) {
+  if (raw === undefined) return fallback;
+  const trimmed = String(raw).trim();
+  if (trimmed === "") return fallback;
+  if (!/^[0-9]+$/.test(trimmed)) {
+    throw new Error(`${name} must be an integer between ${min} and ${max}.`);
+  }
+  const value = Number(trimmed);
+  if (!Number.isInteger(value) || value < min || value > max) {
+    throw new Error(`${name} must be an integer between ${min} and ${max}.`);
+  }
+  return value;
+}
+
+export function resolveChildTimeoutMs(env = process.env) {
+  return parseEnvInteger("AAS_CHILD_TIMEOUT_MS", env.AAS_CHILD_TIMEOUT_MS, {
+    fallback: DEFAULT_CHILD_TIMEOUT_MS,
+    min: 1,
+    max: CHILD_TIMEOUT_MAX_MS,
+  });
+}
+
+export function resolveGuiPort(env = process.env) {
+  return parseEnvInteger("AAS_GUI_PORT", env.AAS_GUI_PORT, {
+    fallback: DEFAULT_GUI_PORT,
+    min: 1,
+    max: 65535,
+  });
+}
 
 export class UsageError extends Error {
   constructor(message) {
@@ -205,6 +250,10 @@ Missing child tools fail closed with a bootstrap hint. Each run is written to
 .out/runs/<run-id>. The .out/latest.json pointer identifies the most recent
 complete bundle.
 
+Environment:
+  AAS_CHILD_TIMEOUT_MS  Child process timeout in milliseconds (default: 30000)
+  AAS_GUI_PORT          Loopback port for the local GUI (default: 8787)
+
 Exit codes:
   0  completed run (including fail-closed policy denial)
   1  stage or environment error
@@ -222,10 +271,13 @@ function missingChildTool(label) {
 
 /** @returns {ChildResult} */
 export function runCapture(command, args, opts = {}) {
+  const { timeout = resolveChildTimeoutMs(), ...rest } = opts;
   const result = spawnSync(command, args, {
     encoding: "utf8",
     shell: false,
-    ...opts,
+    maxBuffer: CHILD_JSON_LIMIT,
+    ...rest,
+    timeout,
   });
   return {
     status: result.status ?? 1,
@@ -254,11 +306,18 @@ function attachChildDiagnostics(error, { stage, code, stderr }) {
 }
 
 function childProcessError(label, result) {
+  const timedOut = result.error?.code === "ETIMEDOUT";
   const spawn = Boolean(result.error);
-  const code = spawn ? DIAGNOSTIC.CHILD_SPAWN : DIAGNOSTIC.CHILD_EXIT;
-  const base = spawn
-    ? `${label} child process error (${result.error.code ?? "spawn-error"})`
-    : `${label} child process exited with status ${result.status}`;
+  const code = timedOut
+    ? DIAGNOSTIC.CHILD_TIMEOUT
+    : spawn
+      ? DIAGNOSTIC.CHILD_SPAWN
+      : DIAGNOSTIC.CHILD_EXIT;
+  const base = timedOut
+    ? `${label} child process timed out`
+    : spawn
+      ? `${label} child process error (${result.error.code ?? "spawn-error"})`
+      : `${label} child process exited with status ${result.status}`;
   const detail = clipChildStderr(result.stderr, 200).replace(/\s+/g, " ");
   const error = new Error(detail ? `${base}: ${detail}` : base);
   return attachChildDiagnostics(error, { stage: label, code, stderr: result.stderr });
@@ -413,6 +472,7 @@ export function runDecide(
       { env },
     );
     if (result.error) {
+      if (result.error.code === "ETIMEDOUT") throw childProcessError("decide", result);
       lastError = result.error;
       continue;
     }
@@ -668,6 +728,9 @@ export function printHuman(report, bundleDir = null) {
  */
 export async function runDemo(args = [], options = {}) {
   validateDemoArgs(args);
+  const childTimeoutMs = options.childTimeoutMs ?? resolveChildTimeoutMs();
+  const runner = options.runner ?? ((command, args, opts = {}) =>
+    runCapture(command, args, { timeout: childTimeoutMs, ...opts }));
   const paths = {
     ...DEFAULT_PATHS,
     ...(options.paths ?? {}),
@@ -725,7 +788,7 @@ export async function runDemo(args = [], options = {}) {
     const decide = await (options.runDecideFn ?? runDecide)(responsePath, {
       depsDir: paths.deps,
       fixturesDir: paths.fixtures,
-      runner: options.runner,
+      runner,
     });
     const decideStderr = clipChildStderr(decide.stderr);
     stages.decide = stageRecord(decide.ok ? "passed" : "failed", {
@@ -764,7 +827,7 @@ export async function runDemo(args = [], options = {}) {
   let proveStarted = false;
   try {
     actStarted = true;
-    const act = await (options.runActFn ?? runAct)(fault, { depsDir: paths.deps, runner: options.runner });
+    const act = await (options.runActFn ?? runAct)(fault, { depsDir: paths.deps, runner });
     const outcome = act.raw?.outcome ?? null;
     stages.act = stageRecord("passed", { raw: act.raw });
     report.stages.act = {
@@ -785,7 +848,7 @@ export async function runDemo(args = [], options = {}) {
     }
     const scenario = "operator";
     proveStarted = true;
-    const prove = await (options.runProveFn ?? runProve)(scenario, { depsDir: paths.deps, runner: options.runner });
+    const prove = await (options.runProveFn ?? runProve)(scenario, { depsDir: paths.deps, runner });
     const proveStderr = clipChildStderr(prove.stderr);
     stages.prove = stageRecord(prove.ok ? "passed" : "failed", {
       raw: prove.raw,
