@@ -460,7 +460,7 @@ test("decide and act reject mistyped remaining payload fields", () => {
 });
 
 test("README pass-path sample matches printHuman field order", async () => {
-  const readme = readFileSync(join(ROOT, "README.md"), "utf8");
+  const readme = readFileSync(join(ROOT, "README.md"), "utf8").replaceAll("\r\n", "\n");
   const match = readme.match(/Expected human output \(pass path, no fault\):\n\n```text\n([\s\S]*?)```/);
   assert.ok(match, "README is missing the pass-path human output sample");
   const outputRoot = tempRoot();
