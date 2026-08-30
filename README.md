@@ -83,6 +83,11 @@ expected entrypoints. Bootstrap uses detached checkouts, rejects substituted or
 dirty pre-existing directories, runs `npm ci --ignore-scripts` for MandateBound,
 then runs its explicit build command.
 
+Each decide, act, and prove child is bounded by `AAS_CHILD_TIMEOUT_MS`
+(default 30000). A hung child fails the stage instead of blocking the run.
+Empty `AAS_CHILD_TIMEOUT_MS` and `AAS_GUI_PORT` values keep those defaults;
+invalid integers are rejected.
+
 Each invocation writes one atomic bundle under `.out/runs/<run-id>/`:
 
 - `manifest.json`: stage status and component provenance
@@ -97,8 +102,9 @@ failed or skipped stage cannot leave an older stage artifact looking current.
 Run `npm run gui` and open the printed loopback URL. The GUI calls the same
 orchestrator, displays stage and provenance state, and downloads a JSON export
 of the selected run bundle. `npm run gui:smoke` checks the server without
-starting a long-running process. The server binds only to `127.0.0.1`, requires
-the exact loopback Host and same-origin boundary, and uses POST for a run.
+starting a long-running process. The server binds only to `127.0.0.1` on port
+8787 by default (`AAS_GUI_PORT` selects another loopback port), requires the
+exact loopback Host and same-origin boundary, and uses POST for a run.
 
 ## Tests
 

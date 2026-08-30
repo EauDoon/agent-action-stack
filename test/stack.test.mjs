@@ -7,6 +7,9 @@ import { fileURLToPath } from "node:url";
 import { loadComponentLock, inspectDependencyDirectory, npmInvocation } from "../scripts/bootstrap.mjs";
 import {
   CHILD_JSON_LIMIT,
+  CHILD_TIMEOUT_MAX_MS,
+  DEFAULT_CHILD_TIMEOUT_MS,
+  DEFAULT_GUI_PORT,
   DIAGNOSTIC,
   clipChildStderr,
   helpText,
@@ -14,8 +17,11 @@ import {
   parseJsonOutput,
   persistRunBundle,
   printHuman,
+  resolveChildTimeoutMs,
   resolveComponentProvenance,
+  resolveGuiPort,
   runAct,
+  runCapture,
   runDecide,
   runDemo,
   runProve,
@@ -243,6 +249,91 @@ test("prove still throws when a nonzero child has no JSON", () => {
       return true;
     },
   );
+});
+
+async function withEnv(name, value, fn) {
+  const previous = process.env[name];
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) delete process.env[name];
+    else process.env[name] = previous;
+  }
+}
+
+test("child timeout and GUI port env values default, accept integers, and reject junk", () => {
+  assert.equal(DEFAULT_CHILD_TIMEOUT_MS, 30_000);
+  assert.equal(DEFAULT_GUI_PORT, 8787);
+  assert.equal(resolveChildTimeoutMs({}), DEFAULT_CHILD_TIMEOUT_MS);
+  assert.equal(resolveChildTimeoutMs({ AAS_CHILD_TIMEOUT_MS: "" }), DEFAULT_CHILD_TIMEOUT_MS);
+  assert.equal(resolveChildTimeoutMs({ AAS_CHILD_TIMEOUT_MS: " 5000 " }), 5000);
+  assert.equal(resolveGuiPort({}), DEFAULT_GUI_PORT);
+  assert.equal(resolveGuiPort({ AAS_GUI_PORT: "" }), DEFAULT_GUI_PORT);
+  assert.equal(resolveGuiPort({ AAS_GUI_PORT: "9090" }), 9090);
+  for (const raw of ["nope", "30.5", "-1", "0", String(CHILD_TIMEOUT_MAX_MS + 1)]) {
+    assert.throws(() => resolveChildTimeoutMs({ AAS_CHILD_TIMEOUT_MS: raw }), /AAS_CHILD_TIMEOUT_MS/);
+  }
+  for (const raw of ["abc", "8787.5", "0", "65536", "-8787"]) {
+    assert.throws(() => resolveGuiPort({ AAS_GUI_PORT: raw }), /AAS_GUI_PORT/);
+  }
+});
+
+test("invalid AAS_CHILD_TIMEOUT_MS fails closed before a demo run", async () => {
+  await withEnv("AAS_CHILD_TIMEOUT_MS", "nope", async () => {
+    await assert.rejects(
+      () => runDemo(["--response", "pass"], stubOptions(tempRoot())),
+      /AAS_CHILD_TIMEOUT_MS/,
+    );
+  });
+});
+
+test("runCapture applies a timeout to a hung child", () => {
+  const result = runCapture(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], { timeout: 80 });
+  assert.equal(result.error?.code, "ETIMEDOUT");
+});
+
+test("timed-out children fail closed with AAS_CHILD_TIMEOUT", () => {
+  const runner = () => ({
+    status: null,
+    stdout: "",
+    stderr: "",
+    error: Object.assign(new Error("spawnSync timed out"), { code: "ETIMEDOUT" }),
+  });
+  assert.throws(
+    () => runAct("none", { runner }),
+    (error) => {
+      assert.match(error.message, /act child process timed out/);
+      assert.equal(error.code, DIAGNOSTIC.CHILD_TIMEOUT);
+      assert.equal(error.stage, "act");
+      return true;
+    },
+  );
+});
+
+test("decide does not try another Python after a child timeout", () => {
+  let calls = 0;
+  assert.throws(
+    () => runDecide("unused", {
+      runner: () => {
+        calls += 1;
+        return {
+          status: null,
+          stdout: "",
+          stderr: "",
+          error: Object.assign(new Error("spawnSync timed out"), { code: "ETIMEDOUT" }),
+        };
+      },
+    }),
+    (error) => {
+      assert.equal(error.code, DIAGNOSTIC.CHILD_TIMEOUT);
+      assert.equal(error.stage, "decide");
+      assert.match(error.message, /decide child process timed out/);
+      return true;
+    },
+  );
+  assert.equal(calls, 1);
 });
 
 test("act names the child and preserves stderr on a spawn failure", () => {
@@ -654,6 +745,8 @@ test("CLI help covers usage, help flags, and exit codes", () => {
   assert.match(text, /aas demo \[--response pass\|fail\]/);
   assert.match(text, /-h, --help/);
   assert.match(text, /simulate --scenario operator/);
+  assert.match(text, /AAS_CHILD_TIMEOUT_MS/);
+  assert.match(text, /AAS_GUI_PORT/);
   assert.match(text, /Exit codes:/);
 });
 
