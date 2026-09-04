@@ -520,8 +520,15 @@ export function runAct(
   const result = runner(process.execPath, [crctl, ...args], {
     cwd: join(depsDir, "consequence-rail"),
   });
-  if (result.error || result.status !== 0) throw childProcessError("act", result);
+  if (result.error) throw childProcessError("act", result);
   const payload = parseStageJson("act", result);
+  if (result.status !== 0) {
+    // A nonzero exit with parseable JSON is an unsuccessful act (the CLI
+    // surfaces structured errors as JSON on stdout), not a child-process
+    // error. Mirror runProve so persistRunBundle and printHuman see the
+    // structured failure and the GUI can render the stage artifact.
+    return { ok: false, raw: payload, status: result.status, ...failedStderr(result) };
+  }
   if (!payload || typeof payload !== "object" || Array.isArray(payload)
     || ![null, "settled", "compensated", "disputed"].includes(payload.outcome)) {
     throw attachChildDiagnostics(new Error("act did not return a valid outcome"), {
