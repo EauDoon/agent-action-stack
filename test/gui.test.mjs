@@ -76,7 +76,8 @@ test("GUI rejects rebinding requests, cross-origin runs, unsafe options, and uns
     });
     assert.equal(foreignOrigin.status, 403);
     const missingOrigin = await requestServer(server, "/api/run", { method: "POST" });
-    assert.equal(missingOrigin.status, 403);
+    assert.equal(missingOrigin.status, 400);
+    assert.equal(JSON.parse(missingOrigin.body).error, "Origin header required for POST");
     const getRun = await requestServer(server, "/api/run?response=pass&fault=none");
     assert.equal(getRun.status, 404);
     const unsafeOption = await requestServer(server, "/api/run?response=..%2Fsecret&fault=none", {

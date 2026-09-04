@@ -53,6 +53,12 @@ function requestBoundaryFailure(request) {
   const hostHeaders = request.rawHeaders.filter((value, index) => index % 2 === 0 && value.toLowerCase() === "host");
   if (hostHeaders.length !== 1 || request.headers.host !== expectedHost) return "host";
   const origin = request.headers.origin;
+  // Distinguish a missing-Origin POST (caller forgot to identify itself) from
+  // a wrong-Origin POST (caller is some other origin). The first is a 400
+  // ("you forgot to send Origin"), the second is a 403 ("Origin does not
+  // match this server"). Both still return 403 today; the missing-Origin
+  // case is the surprising one for programmatic local clients.
+  if (request.method === "POST" && origin === undefined) return "missing-origin";
   if (request.method === "POST" && origin !== `http://${expectedHost}`) return "origin";
   if (origin !== undefined && origin !== `http://${expectedHost}`) return "origin";
   return null;
@@ -90,7 +96,12 @@ export function createGuiServer({
   return createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     try {
-      if (requestBoundaryFailure(request) !== null) {
+      const boundary = requestBoundaryFailure(request);
+      if (boundary === "missing-origin") {
+        sendJson(response, 400, { error: "Origin header required for POST" });
+        return;
+      }
+      if (boundary !== null) {
         sendJson(response, 403, { error: "Forbidden" });
         return;
       }
