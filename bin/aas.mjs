@@ -612,16 +612,33 @@ export function writeAtomicFile(
 ) {
   mkdir(dirname(target), { recursive: true });
   const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
+  let written = false;
   try {
     writeFile(temporary, data, { encoding: "utf8", flag: "wx" });
+    written = true;
     rename(temporary, target);
   } catch (error) {
-    try {
-      unlink(temporary);
-    } catch {
-      // Preserve the original write or rename error.
-    }
     throw error;
+  } finally {
+    if (written) {
+      // Best-effort cleanup. Only attempt unlink when we know the
+      // temporary was created; if the write itself failed, the file
+      // does not exist and unlink would just throw ENOENT we have to
+      // swallow. Rethrow the original error above either way.
+      try {
+        unlink(temporary);
+      } catch (cleanupError) {
+        if (cleanupError.code !== "ENOENT") {
+          // A non-ENOENT unlink failure is a real problem: the
+          // temporary is still on disk and will not be retried. Surface
+          // it for the operator but do not mask the original error.
+          process.emitWarning(
+            `writeAtomicFile: failed to unlink ${temporary}: ${cleanupError.message}`,
+            "WriteAtomicFileCleanup",
+          );
+        }
+      }
+    }
   }
 }
 
