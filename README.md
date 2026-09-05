@@ -88,6 +88,11 @@ Each decide, act, and prove child is bounded by `AAS_CHILD_TIMEOUT_MS`
 Empty `AAS_CHILD_TIMEOUT_MS` and `AAS_GUI_PORT` values keep those defaults;
 invalid integers are rejected.
 
+The decide stage runs on the first Python 3.11+ interpreter found, because the
+locked testbench declares `requires-python >= 3.11`. Set `AAS_PYTHON` to use a
+specific interpreter; a missing interpreter, or one below 3.11, fails with an
+actionable message instead of an unreadable traceback.
+
 Each invocation writes one atomic bundle under `.out/runs/<run-id>/`:
 
 - `manifest.json`: stage status and component provenance

@@ -124,6 +124,9 @@ const PROVE_SCENARIOS = new Set([
   "conflict",
   "appeal",
 ]);
+/** Minimum Python required by the locked Constitutional Agent Testbench. */
+export const MIN_PYTHON = Object.freeze([3, 11]);
+const PYTHON_VERSION_PROBE = "import sys; print(\"%d.%d\" % (sys.version_info[0], sys.version_info[1]))";
 export const DIAGNOSTIC = Object.freeze({
   CHILD_SPAWN: "AAS_CHILD_SPAWN",
   CHILD_EXIT: "AAS_CHILD_EXIT",
@@ -253,6 +256,7 @@ complete bundle.
 Environment:
   AAS_CHILD_TIMEOUT_MS  Child process timeout in milliseconds (default: 30000)
   AAS_GUI_PORT          Loopback port for the local GUI (default: 8787)
+  AAS_PYTHON            Interpreter for the decide stage (default: first Python 3.11+ found)
 
 Exit codes:
   0  completed run (including fail-closed policy denial)
@@ -411,11 +415,96 @@ function parseStageJson(label, result) {
   }
 }
 
-function pythonCandidates() {
+/**
+ * Interpreters to try for the decide stage, most specific first.
+ * `AAS_PYTHON` overrides selection with an explicit interpreter.
+ *
+ * @param {NodeJS.ProcessEnv} env
+ * @returns {Array<[string, string[]]>}
+ */
+export function pythonCandidates(env = process.env) {
+  const override = typeof env.AAS_PYTHON === "string" ? env.AAS_PYTHON.trim() : "";
+  const overrideEntry = override === "" ? [] : [[override, []]];
   if (process.platform === "win32") {
-    return [["py", ["-3"]], ["python", []], ["python3", []]];
+    return [
+      ...overrideEntry,
+      ["py", ["-3"]],
+      ["py", ["-3.14"]],
+      ["py", ["-3.13"]],
+      ["py", ["-3.12"]],
+      ["py", ["-3.11"]],
+      ["python", []],
+      ["python3", []],
+    ];
   }
-  return [["python3", []], ["python", []]];
+  return [
+    ...overrideEntry,
+    ["python3", []],
+    ["python3.14", []],
+    ["python3.13", []],
+    ["python3.12", []],
+    ["python3.11", []],
+    ["python", []],
+  ];
+}
+
+/**
+ * @param {string} stdout
+ * @returns {[number, number]|null}
+ */
+export function parsePythonVersion(stdout) {
+  if (typeof stdout !== "string") return null;
+  const match = /^(\d{1,3})\.(\d{1,3})$/u.exec(stdout.trim());
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2])];
+}
+
+/**
+ * Pick an interpreter that satisfies the locked testbench's `requires-python`.
+ *
+ * Returns null when no interpreter could be read, so the existing decide
+ * error path still reports a missing Python. Throws an actionable error when
+ * interpreters exist but every one is too old.
+ *
+ * @returns {{bin: string, prefix: string[], version: [number, number]}|null}
+ */
+export function selectPython({ runner = runCapture, env = process.env, candidates = pythonCandidates(env) } = {}) {
+  const minimum = MIN_PYTHON.join(".");
+  const override = typeof env.AAS_PYTHON === "string" ? env.AAS_PYTHON.trim() : "";
+  if (override !== "") {
+    const probe = runner(override, ["-c", PYTHON_VERSION_PROBE], { env: { ...env, PYTHONUTF8: "1" } });
+    const version = probe.error || probe.status !== 0 ? null : parsePythonVersion(probe.stdout);
+    if (version === null) {
+      throw new Error(
+        `AAS_PYTHON (${override}) did not report a usable Python version. Set AAS_PYTHON to a working Python ${minimum}+ interpreter.`,
+      );
+    }
+    if (version[0] < MIN_PYTHON[0] || (version[0] === MIN_PYTHON[0] && version[1] < MIN_PYTHON[1])) {
+      throw new Error(
+        `AAS_PYTHON (${override}) is Python ${version[0]}.${version[1]} but the decide stage requires Python ${minimum}+.`,
+      );
+    }
+    return { bin: override, prefix: [], version };
+  }
+  const tooOld = [];
+  let readable = false;
+  for (const [bin, prefix] of candidates) {
+    const probe = runner(bin, [...prefix, "-c", PYTHON_VERSION_PROBE], {
+      env: { ...env, PYTHONUTF8: "1" },
+    });
+    if (probe.error || probe.status !== 0) continue;
+    const version = parsePythonVersion(probe.stdout);
+    if (version === null) continue;
+    readable = true;
+    if (version[0] > MIN_PYTHON[0] || (version[0] === MIN_PYTHON[0] && version[1] >= MIN_PYTHON[1])) {
+      return { bin, prefix, version };
+    }
+    tooOld.push(`${bin} is Python ${version[0]}.${version[1]}`);
+  }
+  if (!readable) return null;
+  throw new Error(
+    `decide stage requires Python ${minimum}+ (constitutional-agent-testbench declares requires-python >= ${minimum}); found ${tooOld.join(", ")}. Install Python ${minimum}+ or set AAS_PYTHON to its interpreter.`,
+  );
 }
 
 /** @returns {ComponentProvenance[]} */
@@ -455,7 +544,12 @@ export function resolveComponentProvenance(
  */
 export function runDecide(
   responsePath,
-  { depsDir = DEFAULT_PATHS.deps, fixturesDir = DEFAULT_PATHS.fixtures, runner = runCapture } = {},
+  {
+    depsDir = DEFAULT_PATHS.deps,
+    fixturesDir = DEFAULT_PATHS.fixtures,
+    runner = runCapture,
+    python = null,
+  } = {},
 ) {
   const policyPath = join(fixturesDir, "policy.json");
   const pythonPath = join(depsDir, "constitutional-agent-testbench", "src");
@@ -465,7 +559,8 @@ export function runDecide(
   }
   const env = { ...process.env, PYTHONPATH: pythonPath, PYTHONUTF8: "1" };
   let lastError = null;
-  for (const [bin, prefix] of pythonCandidates()) {
+  const candidates = python === null ? pythonCandidates() : [[python.bin, python.prefix]];
+  for (const [bin, prefix] of candidates) {
     const result = runner(
       bin,
       [...prefix, "-m", "constitutional_agent_testbench.cli", "evaluate", policyPath, responsePath],
@@ -813,6 +908,7 @@ export async function runDemo(args = [], options = {}) {
       depsDir: paths.deps,
       fixturesDir: paths.fixtures,
       runner,
+      ...(options.python ? { python: options.python } : {}),
     });
     const decideStderr = clipChildStderr(decide.stderr);
     stages.decide = stageRecord(decide.ok ? "passed" : "failed", {
@@ -939,7 +1035,8 @@ export async function main(argv = process.argv.slice(2)) {
     return;
   }
   try {
-    const result = await runDemo(argv.slice(1));
+    const python = selectPython();
+    const result = await runDemo(argv.slice(1), { ...(python ? { python } : {}) });
     if (asJson) process.stdout.write(`${JSON.stringify(result.report, null, 2)}\n`);
     else printHuman(result.report, result.bundleDir);
     process.exitCode = result.exitCode;

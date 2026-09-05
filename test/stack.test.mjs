@@ -14,7 +14,9 @@ import {
   clipChildStderr,
   helpText,
   main,
+  MIN_PYTHON,
   parseJsonOutput,
+  parsePythonVersion,
   persistRunBundle,
   printHuman,
   resolveChildTimeoutMs,
@@ -22,9 +24,11 @@ import {
   resolveGuiPort,
   runAct,
   runCapture,
+  pythonCandidates,
   runDecide,
   runDemo,
   runProve,
+  selectPython,
   writeAtomicFile,
 } from "../bin/aas.mjs";
 
@@ -791,4 +795,108 @@ test("CLI reports unknown commands, flags, and empty values as usage errors", as
   assert.equal(badFault.exitCode, 2);
   assert.match(badFault.stderr, /--fault must be none or duplicate/);
   assert.match(badFault.stderr, /Try `aas help` for usage/);
+});
+
+test("parsePythonVersion reads a major.minor probe and rejects anything else", () => {
+  assert.deepEqual(parsePythonVersion("3.13\n"), [3, 13]);
+  assert.deepEqual(parsePythonVersion("  3.11  "), [3, 11]);
+  assert.deepEqual(parsePythonVersion("3.9"), [3, 9]);
+  assert.equal(parsePythonVersion("3"), null);
+  assert.equal(parsePythonVersion("3.11.4"), null);
+  assert.equal(parsePythonVersion("Python 3.13.0"), null);
+  assert.equal(parsePythonVersion(""), null);
+  assert.equal(parsePythonVersion(undefined), null);
+  assert.equal(parsePythonVersion("{\"passed\":true}"), null);
+});
+
+test("AAS_PYTHON leads the interpreter candidates", () => {
+  const candidates = pythonCandidates({ AAS_PYTHON: "  /opt/py/bin/python3.13  " });
+  assert.deepEqual(candidates[0], ["/opt/py/bin/python3.13", []]);
+  const blank = pythonCandidates({ AAS_PYTHON: "   " });
+  assert.equal(blank.some(([bin]) => bin === "   "), false);
+});
+
+test("selectPython picks the first interpreter that meets the minimum", () => {
+  const selected = selectPython({
+    candidates: [["python3", []], ["python3.13", []]],
+    runner: (bin) => ({ status: 0, stdout: bin === "python3.13" ? "3.13\n" : "3.9\n", stderr: "", error: null }),
+  });
+  assert.deepEqual(selected, { bin: "python3.13", prefix: [], version: [3, 13] });
+});
+
+test("selectPython skips unavailable and unreadable interpreters", () => {
+  const selected = selectPython({
+    candidates: [["python3.14", []], ["python3.13", []], ["python3.12", []]],
+    runner: (bin) => {
+      if (bin === "python3.14") return { status: 0, stdout: "", stderr: "", error: Object.assign(new Error("missing"), { code: "ENOENT" }) };
+      if (bin === "python3.13") return { status: 1, stdout: "", stderr: "boom", error: null };
+      return { status: 0, stdout: "not a version", stderr: "", error: null };
+    },
+  });
+  assert.equal(selected, null);
+});
+
+test("selectPython reports an actionable error when every interpreter is too old", () => {
+  assert.throws(
+    () => selectPython({
+      candidates: [["python3", []], ["python", []]],
+      runner: () => ({ status: 0, stdout: "3.9\n", stderr: "", error: null }),
+    }),
+    (error) => {
+      assert.match(error.message, new RegExp(`decide stage requires Python ${MIN_PYTHON.join("\\.")}\\+`));
+      assert.match(error.message, /found python3 is Python 3\.9, python is Python 3\.9/);
+      assert.match(error.message, /set AAS_PYTHON to its interpreter/);
+      return true;
+    },
+  );
+});
+
+test("runDecide uses a preselected interpreter instead of probing candidates", () => {
+  const calls = [];
+  const result = runDecide("unused", {
+    python: { bin: "python3.13", prefix: [] },
+    runner: (bin, args) => {
+      calls.push([bin, args]);
+      return { status: 0, stdout: '{"passed": true, "policy_id": "refund-v1", "rule_results": []}\n', stderr: "", error: null };
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], "python3.13");
+  assert.deepEqual(calls[0][1].slice(0, 3), ["-m", "constitutional_agent_testbench.cli", "evaluate"]);
+  assert.match(calls[0][1][3], /policy\.json$/u);
+  assert.equal(calls[0][1].at(-1), "unused");
+});
+
+test("AAS_PYTHON is honored or rejected instead of silently bypassed", () => {
+  const selected = selectPython({
+    env: { AAS_PYTHON: "/opt/py/bin/python3.13" },
+    runner: () => ({ status: 0, stdout: "3.13\n", stderr: "", error: null }),
+  });
+  assert.deepEqual(selected, { bin: "/opt/py/bin/python3.13", prefix: [], version: [3, 13] });
+});
+
+test("AAS_PYTHON rejects an interpreter below the minimum", () => {
+  assert.throws(
+    () => selectPython({
+      env: { AAS_PYTHON: "/usr/bin/python3" },
+      candidates: [["python3.13", []]],
+      runner: () => ({ status: 0, stdout: "3.9\n", stderr: "", error: null }),
+    }),
+    (error) => {
+      assert.match(error.message, /AAS_PYTHON \(\/usr\/bin\/python3\) is Python 3\.9/);
+      assert.match(error.message, /requires Python 3\.11\+/);
+      return true;
+    },
+  );
+});
+
+test("AAS_PYTHON rejects an interpreter that cannot report a version", () => {
+  assert.throws(
+    () => selectPython({
+      env: { AAS_PYTHON: "/nope/python" },
+      runner: () => ({ status: 1, stdout: "", stderr: "", error: null }),
+    }),
+    /AAS_PYTHON \(\/nope\/python\) did not report a usable Python version/,
+  );
 });
