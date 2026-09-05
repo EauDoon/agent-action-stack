@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { DEFAULT_GUI_PORT, DEFAULT_PATHS, resolveGuiPort, runDemo } from "./aas.mjs";
+import { DEFAULT_GUI_PORT, DEFAULT_PATHS, resolveGuiPort, runDemo, selectPython } from "./aas.mjs";
 
 export function renderPage() {
   return `<!doctype html>
@@ -136,7 +136,20 @@ export function createGuiServer({
         }
         const args = ["--response", selectedResponse, "--fault", selectedFault, "--json"];
         if (url.searchParams.get("dispute") === "1") args.push("--dispute");
-        const result = await runDemoFn(args, { ...runOptions, paths: { ...(runOptions.paths ?? {}), outputRoot } });
+        let python = runOptions.python ?? null;
+        if (python === null) {
+          try {
+            python = selectPython();
+          } catch (error) {
+            sendJson(response, 500, { error: error.message });
+            return;
+          }
+        }
+        const result = await runDemoFn(args, {
+          ...runOptions,
+          ...(python ? { python } : {}),
+          paths: { ...(runOptions.paths ?? {}), outputRoot },
+        });
         sendJson(response, result.exitCode === 0 ? 200 : 500, {
           run_id: result.report.run_id,
           exit_code: result.exitCode,
