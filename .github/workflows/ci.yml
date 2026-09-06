@@ -59,3 +59,11 @@ jobs:
           python-version: "3.13"
       - name: Run full-stack integration proof
         run: npm run integration --ignore-scripts
+      - name: Run integrator example (pass path)
+        run: npm run example:review-handoff
+      - name: Run integrator example (refusal path)
+        shell: bash
+        run: |
+          set +e
+          npm run example:review-handoff -- --response fail
+          test $? -eq 1
