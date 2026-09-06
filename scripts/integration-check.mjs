@@ -192,7 +192,7 @@ function main() {
     process.exit(1);
   }
   process.stdout.write(
-    `integration check: ${components.length} pinned dependencies verified across pass, refusal, and dispute paths\n`,
+    `integration check: ${components.length} pinned dependencies verified across pass, refusal, dispute, and rail-review paths\n`,
   );
 }
 
