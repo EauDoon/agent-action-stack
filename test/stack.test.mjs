@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { assertFullStackNodeVersion, compareVersionTuples, loadComponentLock, inspectDependencyDirectory, MIN_FULL_STACK_NODE, npmInvocation, parseNodeVersion, prepareDependencies } from "../scripts/bootstrap.mjs";
@@ -1340,4 +1341,23 @@ test("runs and prune CLI commands validate arguments", async () => {
   assert.equal(zero.exitCode, 2);
   const words = await captureMain(["prune", "--keep", "many"]);
   assert.equal(words.exitCode, 2);
+});
+
+test("replay reads piped bundles from stdin without touching the filesystem", async () => {
+  const doc = {
+    report: { run_id: "stdin-run" },
+    stages: { act: { action_id: "a" }, prove: { status: "skipped" } },
+  };
+  const piped = await captureMain(["replay", "-"], { stdin: Readable.from([JSON.stringify(doc)]) });
+  assert.equal(piped.exitCode, 1);
+  assert.match(piped.stdout, /replay: failed/);
+  assert.match(piped.stdout, /unavailable: this run persisted no rail bundle/);
+
+  const tty = await captureMain(["replay", "-"], { stdin: Object.assign(Readable.from(["{}"]), { isTTY: true }) });
+  assert.equal(tty.exitCode, 2);
+  assert.match(tty.stderr, /reads stdin only from a pipe/);
+
+  const big = await captureMain(["replay", "-"], { stdin: Readable.from([`{"pad":"${"x".repeat(2 * 1024 * 1024)}"}`]) });
+  assert.equal(big.exitCode, 1);
+  assert.match(big.stderr, /exceeds the .* byte limit/);
 });

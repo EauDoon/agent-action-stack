@@ -1441,10 +1441,17 @@ function writeCliError(error, { asJson = false, usage = false } = {}) {
   if (usage) process.stderr.write("Try `aas help` for usage.\n");
 }
 
-function readReplayInput(source, { stdin = process.stdin } = {}) {
+async function readReplayInput(source, { stdin = process.stdin } = {}) {
   if (source === "-") {
     if (stdin.isTTY) throw new UsageError("replay reads stdin only from a pipe; pass a bundle file instead");
-    const text = readFileSync(0, "utf8");
+    const chunks = [];
+    for await (const chunk of stdin) {
+      chunks.push(typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk);
+    }
+    const text = Buffer.concat(chunks).toString("utf8");
+    if (text.length > CHILD_JSON_LIMIT) {
+      throw new Error(`replay bundle exceeds the ${CHILD_JSON_LIMIT} byte limit`);
+    }
     if (text.trim() === "") throw new Error("replay received an empty bundle document");
     return text;
   }
@@ -1598,7 +1605,7 @@ async function runReplayCommand(args, { asJson, nodeVersion, stdin } = {}) {
   assertFullStackNodeVersion(nodeVersion === undefined ? {} : { version: nodeVersion });
   let bundleDoc;
   try {
-    bundleDoc = JSON.parse(readReplayInput(source, { stdin }));
+    bundleDoc = JSON.parse(await readReplayInput(source, { stdin }));
   } catch (error) {
     if (error instanceof UsageError) throw error;
     writeCliError(error, { asJson: json || asJson, usage: false });
