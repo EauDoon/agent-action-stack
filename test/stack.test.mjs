@@ -59,7 +59,7 @@ const PROVENANCE = [
   {
     name: "mandatebound",
     repository: "https://github.com/EauDoon/mandatebound.git",
-    commit: "06d3c93bb4331c22efd0fffd0d8ffd67b1ea88c9",
+    commit: "e526c4c32ac61571757a98ca1a69189821c3dce7",
     origin: "https://github.com/EauDoon/mandatebound.git",
     detached: true,
     clean: true,
