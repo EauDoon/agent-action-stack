@@ -121,8 +121,12 @@ failed or skipped stage cannot leave an older stage artifact looking current.
 ## Guided local GUI
 
 Run `npm run gui` and open the printed loopback URL. The GUI calls the same
-orchestrator, displays stage and provenance state, and downloads a JSON export
-of the selected run bundle. `npm run gui:smoke` checks the server without
+orchestrator, shows a readable decide/act/prove summary with skip reasons, a
+bindings panel (action identity, recomputed evidence digest, provenance, and
+the review verdict with its limits), and downloads a JSON export of the
+selected run bundle. The prove selector offers the canned simulation or the
+same-case rail review; every result and export stays tied to its run id.
+`npm run gui:smoke` checks the server without
 starting a long-running process. The server binds only to `127.0.0.1` on port
 8787 by default (`AAS_GUI_PORT` selects another loopback port), requires the
 exact loopback Host and same-origin boundary, and uses POST for a run.
