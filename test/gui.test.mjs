@@ -5,8 +5,8 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { bindingsModel, createGuiServer, renderPage, summaryModel } from "../bin/aas-gui.mjs";
-import { exportRunBundle, runDemo } from "../bin/aas.mjs";
+import { bindingsModel, createGuiServer, renderPage, replayHttpStatus, replayResultModel, summaryModel } from "../bin/aas-gui.mjs";
+import { exportRunBundle, runDemo, selectPython } from "../bin/aas.mjs";
 
 const provenance = [
   { name: "constitutional-agent-testbench", repository: "https://github.com/EauDoon/constitutional-agent-testbench.git", commit: "a7a51907eaaab68a52b66edef28b3ee0fcb3ff97", detached: true, clean: true, entrypoints: [] },
@@ -14,17 +14,24 @@ const provenance = [
   { name: "mandatebound", repository: "https://github.com/EauDoon/mandatebound.git", commit: "468fce7e0d4dcc1e86bad07a469b3d9217914bb0", detached: true, clean: true, entrypoints: [] },
 ];
 
-function requestServer(server, path, { method = "GET", headers = {} } = {}) {
+function requestServer(server, path, { method = "GET", headers = {}, body = null } = {}) {
   const address = server.address();
+  let settled = false;
   return new Promise((resolve, reject) => {
     const req = request({ hostname: "127.0.0.1", port: address.port, path, method, headers }, (response) => {
-      let body = "";
+      let text = "";
       response.setEncoding("utf8");
-      response.on("data", (chunk) => { body += chunk; });
-      response.on("end", () => resolve({ status: response.statusCode, headers: response.headers, body }));
+      response.on("data", (chunk) => { text += chunk; });
+      response.on("end", () => {
+        settled = true;
+        resolve({ status: response.statusCode, headers: response.headers, body: text });
+      });
     });
-    req.on("error", reject);
-    req.end();
+    // A bounded server destroys an oversized upload while the client is
+    // still writing; that write error must not mask the response.
+    req.on("error", (error) => { if (!settled) reject(error); });
+    if (body === null) req.end();
+    else req.end(body);
   });
 }
 
@@ -286,7 +293,7 @@ function pageScript() {
 
 function stubDocument() {
   const elements = {};
-  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings"]) {
+  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result"]) {
     elements[id] = { value: "pass", checked: false, disabled: false, textContent: "", innerHTML: "", href: null, style: {}, listeners: {},
       addEventListener(name, fn) { this.listeners[name] = fn; },
       removeAttribute(name) { delete this[name]; } };
@@ -403,4 +410,106 @@ test("CLI export and GUI bundle download agree on the same run", async () => {
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
+});
+
+function replayPost(server, body, headers = { "content-type": "application/json" }) {
+  return requestServer(server, "/api/replay", {
+    method: "POST",
+    headers: { origin: `http://127.0.0.1:${server.address().port}`, ...headers },
+    body,
+  });
+}
+
+test("GUI replay never invokes execution or remediation", async () => {
+  const seen = [];
+  const railBundle = { action: { action_id: "act_noexec" }, settlement_receipt: { outcome: "compensated" } };
+  const bytes = Buffer.from(JSON.stringify(railBundle), "utf8");
+  const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+  const review = { verdict: "recorded", reviewId: "r", actionId: "act_noexec", evidenceDigest: digest, legalEffect: "not-determined", receipt: { outcome: "compensated" }, upstream: { valid: true, verifier: "consequence-rail:bundle-verify", outcome: "compensated", trustedKeyIds: ["k"] }, reviewDigest: "sha256:x" };
+  const doc = { report: { run_id: "noexec-run" }, stages: { act: { action_id: "act_noexec", rail_bundle: railBundle }, prove: { result: review } } };
+  const server = createGuiServer({
+    replayRunner: (bin, args) => {
+      seen.push(args.join(" "));
+      if (args.includes("bundle")) {
+        return { status: 0, stdout: `${JSON.stringify({ valid: true, action_id: "act_noexec", outcome: "compensated", trusted_key_id: "k", trusted_connector_key_id: "c" })}\n`, stderr: "", error: null };
+      }
+      return { status: 0, stdout: `${JSON.stringify({ ok: true, result: { ...review } })}\n`, stderr: "", error: null };
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const posted = await replayPost(server, JSON.stringify(doc));
+    assert.equal(posted.status, 200);
+    assert.ok(seen.length >= 2);
+    assert.equal(seen.length, 2, `expected exactly two verification commands, saw ${JSON.stringify(seen)}`);
+    assert.match(seen[0], /bundle verify/);
+    assert.match(seen[1], /review --input/);
+    for (const command of seen) {
+      assert.doesNotMatch(command, /\bdemo\b/, `replay invoked a demo: ${command}`);
+      assert.doesNotMatch(command, /execute|remediate/, `replay invoked execution: ${command}`);
+    }
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("GUI replay reports conflicting, unavailable, malformed, and oversized imports", async () => {
+  const server = createGuiServer({
+    replayRunner: () => ({ status: 0, stdout: '{"valid":true,"action_id":"a","outcome":"o","trusted_key_id":"k","trusted_connector_key_id":"c"}\n', stderr: "", error: null }),
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const tampered = {
+      report: { run_id: "tampered" },
+      stages: {
+        act: { action_id: "a", rail_bundle: { action: { action_id: "a" }, settlement_receipt: { outcome: "settled" } } },
+        prove: { result: { verdict: "recorded", actionId: "a", evidenceDigest: "sha256:stale", legalEffect: "not-determined", upstream: {} } },
+      },
+    };
+    const conflicting = await replayPost(server, JSON.stringify(tampered));
+    assert.equal(conflicting.status, 409);
+    assert.match(JSON.parse(conflicting.body).reason, /conflicting/);
+
+    const unavailable = await replayPost(server, JSON.stringify({ report: { run_id: "sim" }, stages: { act: {}, prove: {} } }));
+    assert.equal(unavailable.status, 422);
+    assert.match(JSON.parse(unavailable.body).reason, /unavailable/);
+
+    const malformed = await replayPost(server, "{not json");
+    assert.equal(malformed.status, 400);
+    const notObject = await replayPost(server, "[]");
+    assert.equal(notObject.status, 400);
+    const empty = await replayPost(server, "   ");
+    assert.equal(empty.status, 400);
+    const wrongType = await replayPost(server, JSON.stringify({ report: {} }), { "content-type": "text/plain" });
+    assert.equal(wrongType.status, 400);
+    const oversized = await replayPost(server, JSON.stringify({ pad: "x".repeat(1024 * 1024 + 1024) }));
+    assert.equal(oversized.status, 413);
+    const repeated = await replayPost(server, JSON.stringify({ report: { run_id: "sim" }, stages: {} }));
+    assert.equal(repeated.status, 422);
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("replay status mapping and result rendering stay stable", () => {
+  assert.equal(replayHttpStatus({ ok: true }), 200);
+  assert.match(replayResultModel({ ok: true, run_id: "r", checks: [{ name: "digest-binding", passed: true, detail: "ok" }] }), /replay verified under synthetic demo keys/);
+  assert.equal(replayHttpStatus({ ok: false, reason: "conflicting: digest" }), 409);
+  assert.equal(replayHttpStatus({ ok: false, reason: "unavailable: no bundle" }), 422);
+  assert.equal(replayHttpStatus({ ok: false, reason: "unsupported: rail failed" }), 422);
+
+  const html = replayResultModel({
+    ok: false,
+    run_id: "<b>run</b>",
+    reason: "conflicting: <script>x</script>",
+    checks: [{ name: "digest-binding", passed: false, detail: "mismatch <x>" }, { name: "identity-binding", passed: true, detail: "bound" }],
+  });
+  assert.doesNotMatch(html, /<script>x/);
+  assert.doesNotMatch(html, /<b>run<\/b>/);
+  assert.match(html, /Imported case &lt;b&gt;run&lt;\/b&gt; — not verified/);
+  assert.match(html, /proves no provenance and no link to a local run/);
+  assert.match(html, /digest-binding: FAIL/);
+  assert.match(html, /identity-binding: pass/);
+  assert.match(html, /no action execution or remediation runs/);
+  assert.match(html, /source truth unknown, legal effect not determined/);
 });

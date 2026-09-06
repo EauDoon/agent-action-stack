@@ -17,6 +17,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { request as httpRequest } from "node:http";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +26,7 @@ import {
   loadComponentLock,
   npmInvocation,
 } from "./bootstrap.mjs";
+import { createGuiServer } from "../bin/aas-gui.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const failures = [];
@@ -73,7 +75,7 @@ function runDemo(args) {
   return result;
 }
 
-function main() {
+async function main() {
   assertFullStackNodeVersion();
 
   const install = runNpm(["ci", "--ignore-scripts"]);
@@ -203,9 +205,11 @@ function main() {
     );
   }
 
+  let casePath = null;
+  let latest = null;
   {
-    const latest = readJson(join(root, ".out", "latest.json"));
-    const casePath = join(root, ".out", "replay-case.json");
+    latest = readJson(join(root, ".out", "latest.json"));
+    casePath = join(root, ".out", "replay-case.json");
     const exported = run(process.execPath, ["./bin/aas.mjs", "export", latest.run_id, "--out", casePath]);
     check(exported.status === 0, `export failed: ${exported.stderr.slice(-400)}`);
     const replayed = run(process.execPath, ["./bin/aas.mjs", "replay", casePath, "--json"]);
@@ -217,6 +221,51 @@ function main() {
         replayReport.checks.every((check) => check.passed),
         "replay left a failing check",
       );
+    }
+  }
+
+  {
+    const server = createGuiServer({ outputRoot: join(root, ".out") });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const { port } = server.address();
+      const body = readFileSync(casePath, "utf8");
+      const replayed = await new Promise((resolve, reject) => {
+        const req = httpRequest(
+          { hostname: "127.0.0.1", port, path: "/api/replay", method: "POST", headers: { "content-type": "application/json", origin: `http://127.0.0.1:${port}` } },
+          (response) => {
+            let text = "";
+            response.setEncoding("utf8");
+            response.on("data", (chunk) => { text += chunk; });
+            response.on("end", () => resolve({ status: response.statusCode, text }));
+          },
+        );
+        req.on("error", reject);
+        req.end(body);
+      });
+      check(replayed.status === 200, `GUI replay of the exported case returned ${replayed.status}`);
+      if (replayed.status === 200) {
+        const report = JSON.parse(replayed.text);
+        check(report.ok === true, "GUI replay did not verify the exported case");
+        check(report.run_id === latest.run_id, "GUI replay reported a different run id");
+        check(
+          JSON.stringify(report.checks.map((entry) => entry.name)) === JSON.stringify([
+            "evidence-available",
+            "identity-binding",
+            "digest-binding",
+            "rail-verification",
+            "review-request",
+            "review-replay",
+          ]),
+          "GUI replay did not run every supported check",
+        );
+        check(
+          report.checks.every((entry) => entry.passed === true && typeof entry.detail === "string"),
+          "GUI replay left a failing check",
+        );
+      }
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
     }
   }
 
@@ -232,4 +281,7 @@ function main() {
   );
 }
 
-main();
+main().catch((error) => {
+  process.stderr.write(`integration check crashed: ${error.stack}\n`);
+  process.exit(1);
+});

@@ -2,8 +2,63 @@
 /** Lightweight local GUI for the Agent Action Stack orchestrator. */
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
-import { DEFAULT_GUI_PORT, DEFAULT_PATHS, exportRunBundle, resolveGuiPort, runDemo, selectPython } from "./aas.mjs";
+import {
+  CHILD_JSON_LIMIT,
+  DEFAULT_GUI_PORT,
+  DEFAULT_PATHS,
+  exportRunBundle,
+  parseJsonOutput,
+  replayBundle,
+  resolveGuiPort,
+  runCapture,
+  runDemo,
+  selectPython,
+} from "./aas.mjs";
 import { assertFullStackNodeVersion } from "../scripts/bootstrap.mjs";
+
+/** Bounded, strict JSON request body. The cap is enforced here regardless of any client-side check. */
+async function readJsonRequest(request, { maxBytes = CHILD_JSON_LIMIT } = {}) {
+  const contentType = request.headers["content-type"];
+  if (typeof contentType !== "string" || !/^application\/json(?:;\s*charset=utf-?8)?$/i.test(contentType.trim())) {
+    throw Object.assign(new Error("Imported case must be application/json."), { status: 400 });
+  }
+  const chunks = [];
+  let received = 0;
+  let tooLarge = false;
+  // Drain a rejected upload up to a hard ceiling so the client always
+  // receives its error response instead of a dropped connection.
+  const ceiling = maxBytes * 2;
+  for await (const chunk of request) {
+    received += chunk.length;
+    if (received > maxBytes) {
+      tooLarge = true;
+      if (received > ceiling) {
+        // Stop reading an abusive upload and let the handler answer before
+        // the socket is closed, so the caller still learns why.
+        throw Object.assign(new Error("Imported case is too large."), { status: 413, closeAfterResponse: true });
+      }
+      continue;
+    }
+    chunks.push(chunk);
+  }
+  if (tooLarge) throw Object.assign(new Error("Imported case is too large."), { status: 413 });
+  const text = Buffer.concat(chunks).toString("utf8");
+  if (text.trim() === "") throw Object.assign(new Error("Imported case is empty."), { status: 400 });
+  return parseJsonOutput(text, "imported case", maxBytes);
+}
+
+/**
+ * Map a replay result onto a stable HTTP status so clients can distinguish
+ * a conflicting case (409), missing or unsupported evidence (422), and a
+ * clean verification (200).
+ */
+export function replayHttpStatus(result) {
+  if (result.ok) return 200;
+  const reason = typeof result.reason === "string" ? result.reason : "";
+  if (reason.startsWith("conflicting")) return 409;
+  if (reason.startsWith("unavailable") || reason.startsWith("unsupported")) return 422;
+  return 500;
+}
 
 export function escapeHtml(value) {
   return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
@@ -122,8 +177,32 @@ export async function bindingsModel(bundle) {
     + `</ul>`;
 }
 
+/**
+ * Render one imported-case replay result. The imported case identity is
+ * always labelled separately from any live run, and every value is
+ * escaped. Pure and browser-safe.
+ */
+export function replayResultModel(result) {
+  const body = result && typeof result === "object" ? result : {};
+  const runId = typeof body.run_id === "string" ? body.run_id : null;
+  const checks = Array.isArray(body.checks) ? body.checks : [];
+  const rows = checks.map((check) => `<li>${escapeHtml(check?.name ?? "check")}: ${check?.passed ? "pass" : "FAIL"} — ${escapeHtml(check?.detail ?? "")}</li>`);
+  const reason = typeof body.reason === "string" && body.reason !== ""
+    ? `<p class="error">${escapeHtml(body.reason)}</p>`
+    : "";
+  const verdictLabel = body.ok === true
+    ? "replay verified under synthetic demo keys"
+    : "not verified";
+  return `<h3>Imported case ${escapeHtml(runId ?? "(unknown run id)")} — ${verdictLabel}</h3>`
+    + `<ul>${rows.join("")}</ul>`
+    + reason
+    + `<ul><li>verification only: no action execution or remediation runs</li>`
+    + `<li>imported identity is untrusted text; this panel proves no provenance and no link to a local run</li>`
+    + `<li>synthetic keys, source truth unknown, legal effect not determined</li></ul>`;
+}
+
 export function renderPage() {
-  const embedded = [escapeHtml, stageHeadline, summaryModel, bindingsModel, sha256HexText]
+  const embedded = [escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, sha256HexText]
     .map((fn) => fn.toString()).join("\n");
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -139,6 +218,11 @@ export function renderPage() {
 <div class="panel" id="summary"></div>
 <div class="panel" id="bindings"></div>
 <pre id="output">Ready.</pre>
+<div class="panel"><h2>Replay an imported case</h2>
+<p>Import an exported case to inspect and re-verify it. Verification only: no action runs and no remedy is attempted. The imported case is reported separately from any live run above.</p>
+<input id="case-file" type="file" accept="application/json,.json"> <button id="replay">Replay imported case</button>
+<div id="import-status"></div>
+<div id="import-result"></div></div>
 <script>
 ${embedded}
 const output=document.getElementById('output');
@@ -146,7 +230,13 @@ const summary=document.getElementById('summary');
 const bindings=document.getElementById('bindings');
 const runButton=document.getElementById('run');
 const download=document.getElementById('download');
+const importStatus=document.getElementById('import-status');
+const importResult=document.getElementById('import-result');
+const caseFile=document.getElementById('case-file');
+const replayButton=document.getElementById('replay');
 let latestToken=0;
+let importToken=0;
+function clearImported(){ importToken++; importResult.innerHTML=''; importStatus.textContent=''; }
 runButton.addEventListener('click',async()=>{
   const token=++latestToken;
   runButton.disabled=true;
@@ -154,6 +244,7 @@ runButton.addEventListener('click',async()=>{
   download.removeAttribute('href');
   summary.innerHTML='';
   bindings.innerHTML='';
+  clearImported();
   output.textContent='Running...';
   const query=new URLSearchParams({response:document.getElementById('response').value,fault:document.getElementById('fault').value,prove:document.getElementById('prove').value});
   if(document.getElementById('dispute').checked) query.set('dispute','1');
@@ -177,6 +268,27 @@ runButton.addEventListener('click',async()=>{
   download.href='/api/bundle/'+encodeURIComponent(runId);
   download.style.display='inline-block';
   runButton.disabled=false;
+});
+replayButton.addEventListener('click',async()=>{
+  const token=++importToken;
+  replayButton.disabled=true;
+  importResult.innerHTML='';
+  const file=caseFile.files&&caseFile.files[0];
+  if(!file){ importStatus.textContent='Choose an exported case file first.'; replayButton.disabled=false; return; }
+  let text;
+  try { text=await file.text(); }
+  catch(error){ importStatus.textContent='Cannot read that file.'; replayButton.disabled=false; return; }
+  if(token!==importToken) return;
+  importStatus.textContent='Replaying (verification only, no execution)...';
+  let body;
+  try {
+    const response=await fetch('/api/replay',{method:'POST',headers:{'content-type':'application/json'},body:text});
+    body=await response.json();
+  } catch(error){ if(token!==importToken) return; importStatus.textContent='Replay request failed.'; replayButton.disabled=false; return; }
+  if(token!==importToken) return;
+  if(body && Array.isArray(body.checks)) { importResult.innerHTML=replayResultModel(body); importStatus.textContent=''; }
+  else { importStatus.textContent='Replay rejected: '+(body&&body.error?body.error:'unknown error'); }
+  replayButton.disabled=false;
 });
 </script></body></html>`;
 }
@@ -220,9 +332,14 @@ export function createGuiServer({
   runDemoFn = runDemo,
   outputRoot = DEFAULT_PATHS.outputRoot,
   runOptions = {},
+  replayRunner,
+  depsDir,
 } = {}) {
   return createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    // Replay runs child verifiers synchronously; allow only one at a time so
+    // repeated clicks cannot queue unbounded blocking work.
+    let replaysInFlight = 0;
     try {
       const boundary = requestBoundaryFailure(request);
       if (boundary === "missing-origin") {
@@ -294,6 +411,54 @@ export function createGuiServer({
           exit_code: result.exitCode,
           report: result.report,
           manifest: result.manifest,
+        });
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/replay") {
+        try {
+          assertFullStackNodeVersion(
+            runOptions.nodeVersion === undefined ? {} : { version: runOptions.nodeVersion },
+          );
+        } catch (error) {
+          sendJson(response, 500, { error: error.message });
+          return;
+        }
+        let imported;
+        try {
+          imported = await readJsonRequest(request);
+        } catch (error) {
+          sendJson(response, error.status ?? 400, { error: error.message });
+          if (error.closeAfterResponse === true) {
+            response.once("finish", () => request.destroy());
+          }
+          return;
+        }
+        if (!imported || typeof imported !== "object" || Array.isArray(imported)) {
+          sendJson(response, 400, { error: "Imported case must be a JSON object." });
+          return;
+        }
+        if (replaysInFlight > 0) {
+          sendJson(response, 503, { error: "Another replay is already running; wait for it to finish." });
+          return;
+        }
+        let result;
+        replaysInFlight += 1;
+        try {
+          result = replayBundle(imported, {
+            ...(depsDir === undefined ? {} : { depsDir }),
+            ...(replayRunner === undefined ? {} : { runner: replayRunner }),
+          });
+        } catch (error) {
+          sendJson(response, 500, { error: error.message });
+          return;
+        } finally {
+          replaysInFlight -= 1;
+        }
+        sendJson(response, replayHttpStatus(result), {
+          ok: result.ok,
+          run_id: result.runId,
+          checks: result.checks,
+          reason: result.reason ?? null,
         });
         return;
       }
