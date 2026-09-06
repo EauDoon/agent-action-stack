@@ -17,7 +17,8 @@
     "test": "node --test test/gui.test.mjs test/stack.test.mjs",
     "integration": "node scripts/integration-check.mjs",
     "example:review-handoff": "node examples/review-handoff.mjs",
-    "check": "npm test"
+    "check": "npm test",
+    "test:browser": "playwright test"
   },
   "keywords": [
     "ai-agents",
@@ -41,5 +42,8 @@
   "homepage": "https://github.com/EauDoon/agent-action-stack#readme",
   "engines": {
     "node": ">=22.12.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
   }
 }

@@ -960,7 +960,7 @@ export function replayBundle(bundleDoc, { depsDir = DEFAULT_PATHS.deps, runner =
     try {
       ({ request } = buildRailReviewRequest({ bundle: JSON.parse(bundleBytes.toString("utf8")), verification }));
     } catch (error) {
-      record(false, "review-request", `cannot rebuild the review request: ${error.message}`);
+      record("review-request", false, `cannot rebuild the review request: ${error.message}`);
       return { ok: false, runId, checks, reason: "unsupported: review request cannot be rebuilt" };
     }
     record("review-request", true, "review request rebuilt from exported bytes");

@@ -107,7 +107,10 @@ review, requiring a byte-identical review digest. It reports unavailable
 evidence, conflicts, and unsupported verification explicitly, and exits
 nonzero unless every check passes. Trust basis: the rail's synthetic demo
 keys via its own verifier; nothing embedded in the bundle is trusted for
-its own integrity.
+its own integrity. An exported case can also be imported in the GUI
+("Replay an imported case"), which runs the same verification with no
+action execution or remediation; imported identity is untrusted text and
+the result proves no provenance or link to a local run.
 
 ## Reproducibility and run bundles
 
@@ -159,6 +162,26 @@ exact loopback Host and same-origin boundary, and uses POST for a run.
 npm test
 npm run check
 ```
+
+`npm test` is the unit suite (orchestrator and GUI models). `npm run
+integration` proves the pinned components from a clean checkout, and
+`npm run example:review-handoff` runs the integrator example.
+
+Real browser workflow tests drive the GUI through actual clicks, file
+selection, and asynchronous responses with Playwright (Chromium only, to
+keep downloads bounded):
+
+```bash
+npm install
+npx playwright install chromium
+npm run bootstrap
+npm run test:browser
+```
+
+They cover run → inspect → export → import → replay, refusal, repeated
+runs, stale-result clearing, and malformed/unavailable/tampered imports.
+Browser artifacts are written to `test-results/` and `playwright-report/`
+(both ignored). Browsers cache under `~/.cache/ms-playwright`.
 
 ## Fixtures
 
