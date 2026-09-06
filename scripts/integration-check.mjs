@@ -269,6 +269,26 @@ async function main() {
     }
   }
 
+  const cases = run(process.execPath, ["./bin/aas.mjs", "cases", "--json"]);
+  check(cases.status === 0, `cases failed: ${cases.stderr.slice(-300)}`);
+  if (cases.status === 0) {
+    const listed = JSON.parse(cases.stdout).cases;
+    check(Array.isArray(listed) && listed.length >= 2, "cases did not list the runs made here");
+    const [newest, older] = listed;
+    const compared = run(process.execPath, ["./bin/aas.mjs", "compare", newest.run_id, older.run_id, "--json"]);
+    check(compared.status === 0, `compare failed: ${compared.stderr.slice(-300)}`);
+    if (compared.status === 0) {
+      const result = JSON.parse(compared.stdout);
+      check(
+        ["identical", "different", "not-comparable"].includes(result.classification),
+        `unexpected classification ${result.classification}`,
+      );
+      check(result.left?.run_id === newest.run_id, "compare reported the wrong left run");
+    }
+    const invalid = run(process.execPath, ["./bin/aas.mjs", "compare", newest.run_id]);
+    check(invalid.status !== 0, "compare accepted a single run id");
+  }
+
   const tree = git(root, ["status", "--porcelain", "--untracked-files=no"]);
   check(tree.stdout.trim() === "", `integration runs left tracked modifications: ${tree.stdout.trim().slice(0, 200)}`);
 

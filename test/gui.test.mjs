@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { bindingsModel, createGuiServer, renderPage, replayHttpStatus, replayResultModel, summaryModel } from "../bin/aas-gui.mjs";
+import { bindingsModel, compareModel, createGuiServer, historyModel, renderPage, replayHttpStatus, replayResultModel, summaryModel } from "../bin/aas-gui.mjs";
 import { exportRunBundle, runDemo, selectPython } from "../bin/aas.mjs";
 
 const provenance = [
@@ -293,7 +293,7 @@ function pageScript() {
 
 function stubDocument() {
   const elements = {};
-  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result"]) {
+  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list"]) {
     elements[id] = { value: "pass", checked: false, disabled: false, textContent: "", innerHTML: "", href: null, style: {}, listeners: {},
       addEventListener(name, fn) { this.listeners[name] = fn; },
       removeAttribute(name) { delete this[name]; } };
@@ -512,4 +512,109 @@ test("replay status mapping and result rendering stay stable", () => {
   assert.match(html, /identity-binding: pass/);
   assert.match(html, /no action execution or remediation runs/);
   assert.match(html, /source truth unknown, legal effect not determined/);
+});
+
+test("history and comparison models escape untrusted values and state limits", () => {
+  assert.match(historyModel([]), /No cases yet/);
+  const listed = historyModel([
+    { run_id: "<b>run</b>", outcome: "settled", policy_id: "p", review_verdict: "recorded" },
+  ]);
+  assert.doesNotMatch(listed, /<b>run<\/b>/);
+  assert.match(listed, /&lt;b&gt;run&lt;\/b&gt;/);
+
+  const html = compareModel({
+    classification: "different",
+    left: { run_id: "<img src=x>" },
+    right: { run_id: "ok" },
+    errors: ["left (<b>): missing"],
+    differences: [{ field: "outcome", left: "<script>", right: "settled" }],
+  });
+  assert.doesNotMatch(html, /<img src=x>/);
+  assert.doesNotMatch(html, /<script>/);
+  assert.doesNotMatch(html, /<b>/);
+  assert.match(html, /Comparison: different/);
+  assert.match(html, /differences do not establish causation/);
+  assert.match(html, /matching metadata does not prove matching evidence/);
+
+  const empty = compareModel({ classification: "identical", left: { run_id: "a" }, right: { run_id: "b" } });
+  assert.match(empty, /No compared field differs/);
+});
+
+
+function writeCase(outputRoot, runId, { stageStatus = { decide: "passed", act: "passed", prove: "passed" }, report, prove } = {}) {
+  const dir = join(outputRoot, "runs", runId);
+  mkdirSync(join(dir, "stages"), { recursive: true });
+  const stages = {};
+  for (const name of ["decide", "act", "prove"]) {
+    stages[name] = { status: stageStatus[name] ?? "skipped", reason: null, code: null, stderr: null, artifact: `stages/${name}.json` };
+  }
+  writeFileSync(join(dir, "manifest.json"), JSON.stringify({
+    schema_version: "agent-action-stack.run/v1",
+    run_id: runId,
+    created_at: "2026-09-06T00:00:00.000Z",
+    exit_code: 0,
+    component_provenance: [{ name: "consequence-rail", commit: "abc", detached: true, clean: true }],
+    stages,
+    report: "report.json",
+  }));
+  writeFileSync(join(dir, "report.json"), JSON.stringify(report ?? {
+    run_id: runId,
+    flow: "decide -> act -> prove",
+    component_provenance: [{ name: "consequence-rail", commit: "abc" }],
+    stages: {
+      decide: { status: "passed", policy_id: "p1" },
+      act: { status: "passed", outcome: "compensated", state: "CLOSED", fault: "duplicate", action_id: `act_${runId}` },
+      prove: { status: "passed", mode: "rail-review" },
+    },
+  }));
+  writeFileSync(join(dir, "stages", "prove.json"), JSON.stringify(prove ?? {
+    ok: true,
+    result: { verdict: "recorded", reviewId: `review_${runId}`, actionId: `act_${runId}`, evidenceDigest: "sha256:abc", legalEffect: "not-determined" },
+  }));
+  return dir;
+}
+
+test("GUI history and compare endpoints serve summaries and classifications", async () => {
+  const outputRoot = mkdtempSync(join(tmpdir(), "aas-gui-history-"));
+  writeCase(outputRoot, "2026-09-06T050000000Z-one");
+  writeCase(outputRoot, "2026-09-06T050000001Z-two", {
+    report: {
+      run_id: "2026-09-06T050000001Z-two",
+      flow: "decide -> act",
+      component_provenance: [{ name: "consequence-rail", commit: "def" }],
+      stages: {
+        decide: { status: "passed", policy_id: "p1" },
+        act: { status: "passed", outcome: "settled", state: "CLOSED", fault: "none", action_id: "act_two" },
+        prove: { status: "skipped", mode: null },
+      },
+    },
+    prove: {},
+  });
+
+  const server = createGuiServer({ outputRoot });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const history = await requestServer(server, "/api/history");
+    assert.equal(history.status, 200);
+    const cases = JSON.parse(history.body).cases;
+    assert.deepEqual(cases.map((entry) => entry.run_id), ["2026-09-06T050000001Z-two", "2026-09-06T050000000Z-one"]);
+    assert.equal(cases[0].review_verdict, null);
+    assert.equal(cases[1].review_verdict, "recorded");
+
+    const compared = await requestServer(server, "/api/compare?a=2026-09-06T050000000Z-one&b=2026-09-06T050000001Z-two");
+    assert.equal(compared.status, 200);
+    const result = JSON.parse(compared.body);
+    assert.equal(result.classification, "different");
+    assert.ok(result.differences.some((entry) => entry.field === "evidence_digest"));
+
+    const same = await requestServer(server, "/api/compare?a=2026-09-06T050000000Z-one&b=2026-09-06T050000000Z-one");
+    assert.equal(JSON.parse(same.body).classification, "identical");
+
+    for (const query of ["", "?a=2026-09-06T050000000Z-one", "?a=../escape&b=x", "?a=x&b=y/z", "?a=..&b=x", "?a=.&b=x", "?a=...&b=x"]) {
+      const rejected = await requestServer(server, `/api/compare${query}`);
+      assert.equal(rejected.status, 400, `expected 400 for ${query}`);
+    }
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
 });

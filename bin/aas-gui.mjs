@@ -6,7 +6,10 @@ import {
   CHILD_JSON_LIMIT,
   DEFAULT_GUI_PORT,
   DEFAULT_PATHS,
+  compareRuns,
   exportRunBundle,
+  isValidRunId,
+  listRunSummaries,
   parseJsonOutput,
   replayBundle,
   resolveGuiPort,
@@ -201,8 +204,49 @@ export function replayResultModel(result) {
     + `<li>synthetic keys, source truth unknown, legal effect not determined</li></ul>`;
 }
 
+/**
+ * Render a two-case comparison. Every value is escaped and the notes restate
+ * the limits: no causation, and matching metadata is not proof of matching
+ * evidence. Pure and browser-safe.
+ */
+export function compareModel(result) {
+  const body = result && typeof result === "object" ? result : {};
+  const left = body.left?.run_id ?? null;
+  const right = body.right?.run_id ?? null;
+  const errors = Array.isArray(body.errors) && body.errors.length > 0
+    ? `<p class="error">${body.errors.map((entry) => escapeHtml(entry)).join("<br>")}</p>`
+    : "";
+  const differences = Array.isArray(body.differences) ? body.differences : [];
+  const rows = differences.length === 0
+    ? "<p>No compared field differs.</p>"
+    : `<ul>${differences.map((entry) => `<li>${escapeHtml(entry.field)}: ${escapeHtml(JSON.stringify(entry.left))} vs ${escapeHtml(JSON.stringify(entry.right))}</li>`).join("")}</ul>`;
+  const notes = Array.isArray(body.notes) && body.notes.length > 0
+    ? body.notes
+    : ["differences do not establish causation", "matching metadata does not prove matching evidence"];
+  return `<h3>Comparison: ${escapeHtml(body.classification ?? "unknown")}</h3>`
+    + `<p>${escapeHtml(left ?? "(left unavailable)")} vs ${escapeHtml(right ?? "(right unavailable)")}</p>`
+    + errors
+    + rows
+    + `<ul>${notes.map((note) => `<li>${escapeHtml(note)}</li>`).join("")}</ul>`;
+}
+
+function renderCaseOptions(cases) {
+  return (Array.isArray(cases) ? cases : [])
+    .map((entry) => `<option value="${escapeHtml(entry.run_id)}">${escapeHtml(entry.run_id)} — ${escapeHtml(entry.outcome ?? "none")}</option>`)
+    .join("");
+}
+
+/**
+ * Render the bounded history list. Summary-only: no raw evidence.
+ */
+export function historyModel(cases) {
+  const list = Array.isArray(cases) ? cases : [];
+  if (list.length === 0) return "<p>No cases yet.</p>";
+  return `<ul>${list.map((entry) => `<li>${escapeHtml(entry.run_id)} — outcome ${escapeHtml(entry.outcome ?? "none")}, policy ${escapeHtml(entry.policy_id ?? "none")}, review ${escapeHtml(entry.review_verdict ?? "none")}</li>`).join("")}</ul>`;
+}
+
 export function renderPage() {
-  const embedded = [escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, sha256HexText]
+  const embedded = [escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, compareModel, historyModel, renderCaseOptions, sha256HexText]
     .map((fn) => fn.toString()).join("\n");
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -223,6 +267,15 @@ export function renderPage() {
 <input id="case-file" type="file" accept="application/json,.json"> <button id="replay">Replay imported case</button>
 <div id="import-status"></div>
 <div id="import-result"></div></div>
+<div class="panel"><h2>Case history and comparison</h2>
+<p>Compare two persisted cases by identity, policy reference, component revisions, outcome, evidence digest, and review result. This view loads summaries only, never raw evidence, and never modifies or deletes a case.</p>
+<button id="load-history">Load history</button>
+<label>Left <select id="left-case"><option value="">(select a case)</option></select></label>
+<label>Right <select id="right-case"><option value="">(select a case)</option></select></label>
+<button id="compare">Compare selected cases</button>
+<div id="history-list"></div>
+<div id="compare-status"></div>
+<div id="compare-result"></div></div>
 <script>
 ${embedded}
 const output=document.getElementById('output');
@@ -234,8 +287,16 @@ const importStatus=document.getElementById('import-status');
 const importResult=document.getElementById('import-result');
 const caseFile=document.getElementById('case-file');
 const replayButton=document.getElementById('replay');
+const historyList=document.getElementById('history-list');
+const leftCase=document.getElementById('left-case');
+const rightCase=document.getElementById('right-case');
+const loadHistoryButton=document.getElementById('load-history');
+const compareButton=document.getElementById('compare');
+const compareStatus=document.getElementById('compare-status');
+const compareResult=document.getElementById('compare-result');
 let latestToken=0;
 let importToken=0;
+let compareToken=0;
 function clearImported(){ importToken++; importResult.innerHTML=''; importStatus.textContent=''; }
 runButton.addEventListener('click',async()=>{
   const token=++latestToken;
@@ -289,6 +350,39 @@ replayButton.addEventListener('click',async()=>{
   if(body && Array.isArray(body.checks)) { importResult.innerHTML=replayResultModel(body); importStatus.textContent=''; }
   else { importStatus.textContent='Replay rejected: '+(body&&body.error?body.error:'unknown error'); }
   replayButton.disabled=false;
+});
+async function refreshHistory(token){
+  historyList.textContent='Loading history...';
+  let body;
+  try { const response=await fetch('/api/history'); body=await response.json(); }
+  catch(error){ if(token!==compareToken) return; historyList.textContent='History unavailable.'; return; }
+  if(token!==compareToken) return;
+  const cases=(body&&Array.isArray(body.cases))?body.cases:[];
+  historyList.innerHTML=historyModel(cases);
+  const options=renderCaseOptions(cases);
+  const leftValue=leftCase.value;
+  const rightValue=rightCase.value;
+  leftCase.innerHTML='<option value="">(select a case)</option>'+options;
+  rightCase.innerHTML='<option value="">(select a case)</option>'+options;
+  if(cases.some(function(entry){return entry.run_id===leftValue;})) leftCase.value=leftValue;
+  if(cases.some(function(entry){return entry.run_id===rightValue;})) rightCase.value=rightValue;
+}
+loadHistoryButton.addEventListener('click',function(){ refreshHistory(++compareToken); });
+compareButton.addEventListener('click',async()=>{
+  const token=++compareToken;
+  compareButton.disabled=true;
+  compareResult.innerHTML='';
+  if(!leftCase.value||!rightCase.value){ compareStatus.textContent='Select two cases to compare.'; compareButton.disabled=false; return; }
+  compareStatus.textContent='Comparing...';
+  let body;
+  try {
+    const response=await fetch('/api/compare?a='+encodeURIComponent(leftCase.value)+'&b='+encodeURIComponent(rightCase.value));
+    body=await response.json();
+  } catch(error){ if(token!==compareToken) return; compareStatus.textContent='Comparison failed.'; compareButton.disabled=false; return; }
+  if(token!==compareToken) return;
+  compareResult.innerHTML=compareModel(body);
+  compareStatus.textContent='';
+  compareButton.disabled=false;
 });
 </script></body></html>`;
 }
@@ -460,6 +554,22 @@ export function createGuiServer({
           checks: result.checks,
           reason: result.reason ?? null,
         });
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/history") {
+        sendJson(response, 200, { ok: true, cases: listRunSummaries({ outputRoot }) });
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/compare") {
+        const left = url.searchParams.get("a");
+        const right = url.searchParams.get("b");
+        const valid = (value) => isValidRunId(value);
+        if (!valid(left) || !valid(right)) {
+          sendJson(response, 400, { error: "Compare requires two valid run ids." });
+          return;
+        }
+        const comparison = compareRuns(left, right, { outputRoot });
+        sendJson(response, 200, { ok: true, ...comparison });
         return;
       }
       if (request.method === "GET" && url.pathname.startsWith("/api/bundle/")) {

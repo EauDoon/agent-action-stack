@@ -138,10 +138,18 @@ Each invocation writes one atomic bundle under `.out/runs/<run-id>/`:
 `.out/latest.json` is an atomic pointer to the most recent complete bundle. A
 failed or skipped stage cannot leave an older stage artifact looking current.
 
-List runs newest-first with `aas runs`, and remove oldest runs beyond a
-window with `aas prune --keep <n>` (`--dry-run` previews). Pruning never
-deletes the run the latest pointer identifies, and nothing is deleted
-without an explicit `--keep`.
+List runs newest-first with `aas runs`, inspect bounded case summaries with
+`aas cases` (outcome, policy reference, review verdict, evidence digest, and
+component revisions — never raw evidence), and compare two cases with
+`aas compare <run-id> <run-id>`, which classifies the pair as identical,
+different, or not comparable and lists the fields that differ. Comparison
+states that differences do not establish causation and that matching
+metadata does not prove matching evidence; it never mutates a case.
+
+Remove oldest runs beyond a window with `aas prune --keep <n>` (`--dry-run`
+previews). Pruning never deletes the run the latest pointer identifies, and
+nothing is deleted without an explicit `--keep`. The GUI exposes the same
+history and comparison through `Load history` and `Compare selected cases`.
 
 ## Guided local GUI
 
