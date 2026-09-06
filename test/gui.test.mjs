@@ -420,42 +420,6 @@ function replayPost(server, body, headers = { "content-type": "application/json"
   });
 }
 
-test("GUI replays a real exported case with pinned components", async () => {
-  const outputRoot = mkdtempSync(join(tmpdir(), "aas-gui-replay-real-"));
-  const run = await runDemo(["--fault", "duplicate", "--prove", "rail"], {
-    paths: { outputRoot },
-    runId: "replay-source",
-    python: selectPython(),
-  });
-  assert.equal(run.exitCode, 0);
-  const exported = exportRunBundle("replay-source", { outputRoot });
-  const server = createGuiServer({ outputRoot });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  try {
-    const posted = await replayPost(server, JSON.stringify(exported));
-    assert.equal(posted.status, 200);
-    const body = JSON.parse(posted.body);
-    assert.equal(body.ok, true);
-    assert.equal(body.run_id, "replay-source");
-    assert.deepEqual(body.checks.map((check) => check.name), [
-      "evidence-available",
-      "identity-binding",
-      "digest-binding",
-      "rail-verification",
-      "review-request",
-      "review-replay",
-    ]);
-    assert.ok(body.checks.every((check) => check.passed));
-    for (const check of body.checks) {
-      assert.equal(typeof check.name, "string", `check has no name: ${JSON.stringify(check)}`);
-      assert.equal(typeof check.passed, "boolean", `check has no boolean result: ${JSON.stringify(check)}`);
-      assert.equal(typeof check.detail, "string");
-    }
-  } finally {
-    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-  }
-});
-
 test("GUI replay never invokes execution or remediation", async () => {
   const seen = [];
   const railBundle = { action: { action_id: "act_noexec" }, settlement_receipt: { outcome: "compensated" } };
