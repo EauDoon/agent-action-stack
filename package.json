@@ -18,7 +18,8 @@
     "integration": "node scripts/integration-check.mjs",
     "example:review-handoff": "node examples/review-handoff.mjs",
     "check": "npm test",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "example:connector-conformance": "node examples/connector-conformance.mjs"
   },
   "keywords": [
     "ai-agents",

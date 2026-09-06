@@ -61,11 +61,17 @@ jobs:
         run: npm run integration --ignore-scripts
       - name: Run integrator example (pass path)
         run: npm run example:review-handoff
+      - name: Run the integrator conformance example
+        run: npm run example:connector-conformance
+      - name: Run integrator example (inventory domain)
+        # Invoked directly: `npm run -- --flag value` is unreliable on the
+        # Windows shell.
+        run: node examples/review-handoff.mjs --domain inventory
       - name: Run integrator example (refusal path)
         shell: bash
         run: |
           set +e
-          npm run example:review-handoff -- --response fail
+          node examples/review-handoff.mjs --response fail
           test $? -eq 1
   browser:
     timeout-minutes: 25
