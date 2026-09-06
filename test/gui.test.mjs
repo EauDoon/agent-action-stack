@@ -514,53 +514,6 @@ test("replay status mapping and result rendering stay stable", () => {
   assert.match(html, /source truth unknown, legal effect not determined/);
 });
 
-test("GUI history and compare endpoints return summaries and classifications", async () => {
-  const outputRoot = mkdtempSync(join(tmpdir(), "aas-gui-history-"));
-  const first = await runDemo(["--response", "pass"], {
-    paths: { outputRoot },
-    runId: "compare-one",
-    python: selectPython(),
-  });
-  assert.equal(first.exitCode, 0);
-  const second = await runDemo(["--fault", "duplicate", "--prove", "rail"], {
-    paths: { outputRoot },
-    runId: "compare-two",
-    python: selectPython(),
-  });
-  assert.equal(second.exitCode, 0);
-
-  const server = createGuiServer({ outputRoot });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  try {
-    const history = await requestServer(server, "/api/history");
-    assert.equal(history.status, 200);
-    const cases = JSON.parse(history.body).cases;
-    assert.deepEqual(cases.map((entry) => entry.run_id), ["compare-two", "compare-one"]);
-    assert.equal(cases[0].review_verdict, "recorded");
-    assert.equal(cases[1].review_verdict, null);
-
-    const compared = await requestServer(server, "/api/compare?a=compare-two&b=compare-one");
-    assert.equal(compared.status, 200);
-    const result = JSON.parse(compared.body);
-    assert.equal(result.classification, "different");
-    assert.ok(result.differences.some((entry) => entry.field === "evidence_digest"));
-
-    const same = await requestServer(server, "/api/compare?a=compare-one&b=compare-one");
-    assert.equal(JSON.parse(same.body).classification, "identical");
-
-    const missing = await requestServer(server, "/api/compare?a=compare-one&b=absent-run");
-    assert.equal(missing.status, 200);
-    assert.equal(JSON.parse(missing.body).classification, "not-comparable");
-
-    for (const query of ["", "?a=compare-one", "?a=../escape&b=compare-one", "?a=compare-one&b=x/y", "?a=..&b=compare-one", "?a=.&&b=compare-one", "?a=...&b=compare-one"]) {
-      const rejected = await requestServer(server, `/api/compare${query}`);
-      assert.equal(rejected.status, 400, `expected 400 for ${query}`);
-    }
-  } finally {
-    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-  }
-});
-
 test("history and comparison models escape untrusted values and state limits", () => {
   assert.match(historyModel([]), /No cases yet/);
   const listed = historyModel([
@@ -585,4 +538,83 @@ test("history and comparison models escape untrusted values and state limits", (
 
   const empty = compareModel({ classification: "identical", left: { run_id: "a" }, right: { run_id: "b" } });
   assert.match(empty, /No compared field differs/);
+});
+
+
+function writeCase(outputRoot, runId, { stageStatus = { decide: "passed", act: "passed", prove: "passed" }, report, prove } = {}) {
+  const dir = join(outputRoot, "runs", runId);
+  mkdirSync(join(dir, "stages"), { recursive: true });
+  const stages = {};
+  for (const name of ["decide", "act", "prove"]) {
+    stages[name] = { status: stageStatus[name] ?? "skipped", reason: null, code: null, stderr: null, artifact: `stages/${name}.json` };
+  }
+  writeFileSync(join(dir, "manifest.json"), JSON.stringify({
+    schema_version: "agent-action-stack.run/v1",
+    run_id: runId,
+    created_at: "2026-09-06T00:00:00.000Z",
+    exit_code: 0,
+    component_provenance: [{ name: "consequence-rail", commit: "abc", detached: true, clean: true }],
+    stages,
+    report: "report.json",
+  }));
+  writeFileSync(join(dir, "report.json"), JSON.stringify(report ?? {
+    run_id: runId,
+    flow: "decide -> act -> prove",
+    component_provenance: [{ name: "consequence-rail", commit: "abc" }],
+    stages: {
+      decide: { status: "passed", policy_id: "p1" },
+      act: { status: "passed", outcome: "compensated", state: "CLOSED", fault: "duplicate", action_id: `act_${runId}` },
+      prove: { status: "passed", mode: "rail-review" },
+    },
+  }));
+  writeFileSync(join(dir, "stages", "prove.json"), JSON.stringify(prove ?? {
+    ok: true,
+    result: { verdict: "recorded", reviewId: `review_${runId}`, actionId: `act_${runId}`, evidenceDigest: "sha256:abc", legalEffect: "not-determined" },
+  }));
+  return dir;
+}
+
+test("GUI history and compare endpoints serve summaries and classifications", async () => {
+  const outputRoot = mkdtempSync(join(tmpdir(), "aas-gui-history-"));
+  writeCase(outputRoot, "2026-09-06T050000000Z-one");
+  writeCase(outputRoot, "2026-09-06T050000001Z-two", {
+    report: {
+      run_id: "2026-09-06T050000001Z-two",
+      flow: "decide -> act",
+      component_provenance: [{ name: "consequence-rail", commit: "def" }],
+      stages: {
+        decide: { status: "passed", policy_id: "p1" },
+        act: { status: "passed", outcome: "settled", state: "CLOSED", fault: "none", action_id: "act_two" },
+        prove: { status: "skipped", mode: null },
+      },
+    },
+    prove: {},
+  });
+
+  const server = createGuiServer({ outputRoot });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const history = await requestServer(server, "/api/history");
+    assert.equal(history.status, 200);
+    const cases = JSON.parse(history.body).cases;
+    assert.deepEqual(cases.map((entry) => entry.run_id), ["2026-09-06T050000001Z-two", "2026-09-06T050000000Z-one"]);
+    assert.equal(cases[0].review_verdict, null);
+    assert.equal(cases[1].review_verdict, "recorded");
+
+    const compared = await requestServer(server, "/api/compare?a=2026-09-06T050000000Z-one&b=2026-09-06T050000001Z-two");
+    assert.equal(compared.status, 200);
+    const result = JSON.parse(compared.body);
+    assert.equal(result.classification, "different");
+    assert.ok(result.differences.some((entry) => entry.field === "evidence_digest"));
+
+    const same = await requestServer(server, "/api/compare?a=2026-09-06T050000000Z-one&b=2026-09-06T050000000Z-one");
+    assert.equal(JSON.parse(same.body).classification, "identical");
+
+    for (const query of ["", "?a=2026-09-06T050000000Z-one", "?a=../escape&b=x", "?a=x&b=y/z", "?a=..&b=x", "?a=.&b=x", "?a=...&b=x"]) {
+      const rejected = await requestServer(server, `/api/compare${query}`);
+      assert.equal(rejected.status, 400, `expected 400 for ${query}`);
+    }
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
 });

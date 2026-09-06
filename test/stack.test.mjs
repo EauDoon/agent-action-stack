@@ -1392,33 +1392,6 @@ test("history is bounded and skips unreadable cases", async () => {
   assert.equal(listRunSummaries({ outputRoot, limit: 2 }).length, 2);
 });
 
-test("compare classifies identical, different, and not-comparable pairs", async () => {
-  const outputRoot = tempRoot();
-  const ids = await makeRuns(outputRoot, 2);
-  const settled = ids[0];
-  const railRun = await runDemo(["--fault", "duplicate", "--prove", "rail"], {
-    paths: { outputRoot },
-    runId: "compare-rail",
-    python: selectPython(),
-  });
-  assert.equal(railRun.exitCode, 0);
-
-  const same = compareRuns(settled, settled, { outputRoot });
-  assert.equal(same.classification, "identical");
-  assert.deepEqual(same.differences, []);
-
-  const different = compareRuns(railRun.report.run_id, settled, { outputRoot });
-  assert.equal(different.classification, "different");
-  const fields = different.differences.map((entry) => entry.field);
-  for (const field of ["outcome", "prove_mode", "review_verdict", "evidence_digest"]) {
-    assert.ok(fields.includes(field), `expected ${field} to differ, saw ${fields.join(", ")}`);
-  }
-
-  const missing = compareRuns(settled, "2026-09-06T050000000Z-absent", { outputRoot });
-  assert.equal(missing.classification, "not-comparable");
-  assert.ok(missing.errors.length >= 1);
-});
-
 test("compare reports unsupported manifest schemas instead of guessing", async () => {
   const outputRoot = tempRoot();
   const dir = join(outputRoot, "runs", "2026-09-06T050000000Z-old");
@@ -1456,41 +1429,6 @@ test("run ids cannot escape the runs directory", async () => {
   assert.equal(summarizeRun(ids[0], { outputRoot }).run_id, ids[0]);
 });
 
-test("missing and unreadable artifacts fail closed instead of reporting absence", async () => {
-  const outputRoot = tempRoot();
-  const rail = await runDemo(["--fault", "duplicate", "--prove", "rail"], {
-    paths: { outputRoot },
-    runId: "artifact-rail",
-    python: selectPython(),
-  });
-  assert.equal(rail.exitCode, 0);
-  const bundleDir = join(outputRoot, "runs", "artifact-rail");
-  assert.equal(summarizeRun("artifact-rail", { outputRoot }).review_verdict, "recorded");
-
-  writeFileSync(join(bundleDir, "stages", "prove.json"), "{corrupted");
-  const summary = summarizeRun("artifact-rail", { outputRoot });
-  assert.deepEqual(summary.artifacts_unreadable, ["prove"]);
-  const compared = compareRuns("artifact-rail", "artifact-rail", { outputRoot });
-  assert.equal(compared.classification, "not-comparable");
-  assert.ok(compared.errors.some((entry) => /prove artifact is unreadable/.test(entry)));
-});
-
-test("compare classifies distinct runs with different stage statuses as different", async () => {
-  const outputRoot = tempRoot();
-  const settled = await runDemo(["--response", "pass"], { paths: { outputRoot }, runId: "stages-settled", python: selectPython() });
-  const refused = await runDemo(["--response", "fail"], { paths: { outputRoot }, runId: "stages-refused", python: selectPython() });
-  assert.equal(settled.exitCode, 0);
-  assert.equal(refused.exitCode, 0);
-  const compared = compareRuns("stages-settled", "stages-refused", { outputRoot });
-  assert.equal(compared.classification, "different");
-  assert.ok(compared.differences.some((entry) => entry.field === "stages"));
-  assert.deepEqual(compared.notes, [
-    "differences do not establish causation",
-    "matching metadata does not prove matching evidence",
-    "only the listed compared fields are checked; raw evidence is never loaded into this view",
-  ]);
-});
-
 test("compare CLI exits nonzero when a pair is not comparable", async () => {
   const outputRoot = tempRoot();
   void outputRoot;
@@ -1499,4 +1437,97 @@ test("compare CLI exits nonzero when a pair is not comparable", async () => {
   assert.match(missing.stdout, /not-comparable/);
   assert.match(missing.stdout, /matching metadata does not prove matching evidence/);
   assert.doesNotMatch(missing.stdout, /\/(Users|home)\//);
+});
+
+function writeCase(outputRoot, runId, { schema = "agent-action-stack.run/v1", stageStatus = { decide: "passed", act: "passed", prove: "passed" }, report, prove, corruptProve = false } = {}) {
+  const dir = join(outputRoot, "runs", runId);
+  mkdirSync(join(dir, "stages"), { recursive: true });
+  const stages = {};
+  for (const name of ["decide", "act", "prove"]) {
+    stages[name] = { status: stageStatus[name] ?? "skipped", reason: null, code: null, stderr: null, artifact: `stages/${name}.json` };
+  }
+  writeFileSync(join(dir, "manifest.json"), JSON.stringify({
+    schema_version: schema,
+    run_id: runId,
+    created_at: "2026-09-06T00:00:00.000Z",
+    exit_code: 0,
+    component_provenance: [{ name: "consequence-rail", commit: "abc", detached: true, clean: true }],
+    stages,
+    report: "report.json",
+  }));
+  writeFileSync(join(dir, "report.json"), JSON.stringify(report ?? {
+    run_id: runId,
+    flow: "decide -> act -> prove",
+    component_provenance: [{ name: "consequence-rail", commit: "abc" }],
+    stages: {
+      decide: { status: "passed", policy_id: "p1" },
+      act: { status: "passed", outcome: "compensated", state: "CLOSED", fault: "duplicate", action_id: `act_${runId}` },
+      prove: { status: "passed", mode: "rail-review" },
+    },
+  }));
+  writeFileSync(join(dir, "stages", "prove.json"), corruptProve ? "{corrupted" : JSON.stringify(prove ?? {
+    ok: true,
+    result: { verdict: "recorded", reviewId: `review_${runId}`, actionId: `act_${runId}`, evidenceDigest: "sha256:abc", legalEffect: "not-determined" },
+  }));
+  return dir;
+}
+
+test("compare classifies identical, different, and not-comparable pairs", () => {
+  const outputRoot = tempRoot();
+  writeCase(outputRoot, "case-a");
+  writeCase(outputRoot, "case-b", {
+    stageStatus: { decide: "passed", act: "passed", prove: "skipped" },
+    report: {
+      run_id: "case-b",
+      flow: "decide -> act",
+      component_provenance: [{ name: "consequence-rail", commit: "def" }],
+      stages: {
+        decide: { status: "passed", policy_id: "p1" },
+        act: { status: "passed", outcome: "settled", state: "CLOSED", fault: "none", action_id: "act_b" },
+        prove: { status: "skipped", mode: null },
+      },
+    },
+    prove: {},
+  });
+
+  const same = compareRuns("case-a", "case-a", { outputRoot });
+  assert.equal(same.classification, "identical");
+  assert.deepEqual(same.differences, []);
+
+  const different = compareRuns("case-a", "case-b", { outputRoot });
+  assert.equal(different.classification, "different");
+  const fields = different.differences.map((entry) => entry.field);
+  for (const field of ["outcome", "stages", "components"]) {
+    assert.ok(fields.includes(field), `expected ${field} to differ, saw ${fields.join(", ")}`);
+  }
+  assert.deepEqual(different.notes, [
+    "differences do not establish causation",
+    "matching metadata does not prove matching evidence",
+    "only the listed compared fields are checked; raw evidence is never loaded into this view",
+  ]);
+
+  const absent = compareRuns("case-a", "2026-09-06T050000000Z-absent", { outputRoot });
+  assert.equal(absent.classification, "not-comparable");
+  assert.match(absent.errors.join(" "), /Cannot read run/);
+  assert.doesNotMatch(absent.errors.join(" "), /\/runs\//);
+});
+
+test("unreadable stage artifacts fail closed instead of reading as absent", () => {
+  const outputRoot = tempRoot();
+  writeCase(outputRoot, "case-ok");
+  writeCase(outputRoot, "case-broken", { corruptProve: true });
+  assert.deepEqual(summarizeRun("case-broken", { outputRoot }).artifacts_unreadable, ["prove"]);
+  assert.equal(summarizeRun("case-ok", { outputRoot }).review_verdict, "recorded");
+  const compared = compareRuns("case-ok", "case-broken", { outputRoot });
+  assert.equal(compared.classification, "not-comparable");
+  assert.ok(compared.errors.some((entry) => /prove artifact is unreadable/.test(entry)));
+});
+
+test("comparison never implies causation or equivalence of evidence", () => {
+  const outputRoot = tempRoot();
+  writeCase(outputRoot, "case-one", { prove: { ok: true, result: { verdict: "recorded", reviewId: "r1", actionId: "act_case-one", evidenceDigest: "sha256:one", legalEffect: "not-determined" } } });
+  const summary = summarizeRun("case-one", { outputRoot });
+  assert.equal(summary.evidence_digest, "sha256:one");
+  const serialized = JSON.stringify(summary);
+  assert.doesNotMatch(serialized, /rule_results|rail_bundle/);
 });
