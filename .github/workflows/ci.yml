@@ -63,4 +63,7 @@ jobs:
         run: npm run example:review-handoff
       - name: Run integrator example (refusal path)
         shell: bash
-        run: npm run example:review-handoff -- --response fail; test $? -eq 1
+        run: |
+          set +e
+          npm run example:review-handoff -- --response fail
+          test $? -eq 1
