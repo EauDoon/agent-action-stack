@@ -122,3 +122,37 @@ test("GUI run rejects an old runtime before invoking the orchestrator", async ()
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 });
+
+test("GUI run accepts a rail prove mode and rejects unknown modes", async () => {
+  const outputRoot = mkdtempSync(join(tmpdir(), "agent-action-stack-gui-prove-"));
+  const seen = [];
+  const server = createGuiServer({
+    outputRoot,
+    runDemoFn: async (args, options) => {
+      seen.push(args);
+      return {
+        exitCode: 0,
+        report: { run_id: "gui-prove-run", stages: { prove: { status: "passed" } } },
+        manifest: { run_id: "gui-prove-run" },
+      };
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    const origin = `http://127.0.0.1:${address.port}`;
+    const rail = await requestServer(server, "/api/run?response=pass&fault=duplicate&prove=rail", {
+      method: "POST",
+      headers: { origin },
+    });
+    assert.equal(rail.status, 200);
+    assert.deepEqual(seen[0].slice(-2), ["--prove", "rail"]);
+    const bogus = await requestServer(server, "/api/run?response=pass&fault=none&prove=canned", {
+      method: "POST",
+      headers: { origin },
+    });
+    assert.equal(bogus.status, 400);
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});

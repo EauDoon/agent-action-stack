@@ -16,6 +16,7 @@
  * every platform (required for the install step on Windows).
  */
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -148,6 +149,38 @@ function main() {
     check(
       JSON.stringify(stageFiles(bundleDir)) === JSON.stringify(["act.json", "decide.json", "prove.json"]),
       "dispute path: stale or missing stage artifacts",
+    );
+  }
+
+  runDemo(["--fault", "duplicate", "--prove", "rail"]);
+  {
+    const { bundleDir, manifest } = latestBundle();
+    check(manifest.stages.decide?.status === "passed", "rail-review path: decide did not pass");
+    check(manifest.stages.act?.status === "passed", "rail-review path: act did not pass");
+    check(manifest.stages.prove?.status === "passed", "rail-review path: prove did not pass");
+    const report = readJson(join(bundleDir, "report.json"));
+    check(report.flow === "decide -> act -> prove", `rail-review path: unexpected flow ${report.flow}`);
+    check(report.stages.prove?.mode === "rail-review", "rail-review path: prove mode not recorded");
+    check(report.stages.prove?.review_verdict === "recorded", "rail-review path: review not recorded");
+    const act = readJson(join(bundleDir, "stages", "act.json"));
+    const prove = readJson(join(bundleDir, "stages", "prove.json"));
+    const review = prove.result;
+    check(
+      review?.actionId === act.action_id,
+      "rail-review path: review is not bound to the act action id",
+    );
+    check(
+      review?.legalEffect === "not-determined",
+      "rail-review path: review claims a legal effect",
+    );
+    const bundleBytes = Buffer.from(JSON.stringify(act.rail_bundle), "utf8");
+    check(
+      review?.evidenceDigest === `sha256:${createHash("sha256").update(bundleBytes).digest("hex")}`,
+      "rail-review path: review digest does not match the persisted rail bundle",
+    );
+    check(
+      JSON.stringify(stageFiles(bundleDir)) === JSON.stringify(["act.json", "decide.json", "prove.json"]),
+      "rail-review path: stale or missing stage artifacts",
     );
   }
 

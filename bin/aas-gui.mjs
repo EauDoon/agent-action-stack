@@ -122,21 +122,24 @@ export function createGuiServer({
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/run") {
-        const allowedKeys = new Set(["response", "fault", "dispute"]);
+        const allowedKeys = new Set(["response", "fault", "dispute", "prove"]);
         if ([...url.searchParams.keys()].some((key) => !allowedKeys.has(key))) {
           sendJson(response, 400, { error: "Invalid options" });
           return;
         }
         const selectedResponse = url.searchParams.get("response") ?? "pass";
         const selectedFault = url.searchParams.get("fault") ?? "none";
+        const selectedProve = url.searchParams.get("prove") ?? "simulate";
         if (!new Set(["pass", "fail"]).has(selectedResponse)
           || !new Set(["none", "duplicate"]).has(selectedFault)
-          || !new Set([null, "1"]).has(url.searchParams.get("dispute"))) {
+          || !new Set([null, "1"]).has(url.searchParams.get("dispute"))
+          || !new Set(["simulate", "rail"]).has(selectedProve)) {
           sendJson(response, 400, { error: "Invalid options" });
           return;
         }
         const args = ["--response", selectedResponse, "--fault", selectedFault, "--json"];
         if (url.searchParams.get("dispute") === "1") args.push("--dispute");
+        if (selectedProve !== "simulate") args.push("--prove", selectedProve);
         try {
           assertFullStackNodeVersion(
             runOptions.nodeVersion === undefined ? {} : { version: runOptions.nodeVersion },

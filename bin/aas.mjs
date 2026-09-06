@@ -9,16 +9,19 @@
  *
  * Public dependencies only. Each invocation receives an isolated run bundle.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
+  mkdtempSync,
+  readFileSync,
   renameSync,
   rmSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -104,7 +107,8 @@ export const DEFAULT_PATHS = Object.freeze({
 
 const STAGE_NAMES = ["decide", "act", "prove"];
 const DEMO_FLAG_OPTIONS = new Set(["--dispute", "--json"]);
-const DEMO_VALUE_OPTIONS = new Set(["--response", "--fault"]);
+const DEMO_VALUE_OPTIONS = new Set(["--response", "--fault", "--prove"]);
+const PROVE_MODES = new Set(["simulate", "rail"]);
 const STDERR_LIMIT = 800;
 /** Child stdout is capped so a runaway tool cannot inflate the run bundle. */
 export const CHILD_JSON_LIMIT = 1024 * 1024;
@@ -232,13 +236,15 @@ export function helpText() {
   return `Agent Action Stack
 
 Usage:
-  aas demo [--response pass|fail] [--fault none|duplicate] [--dispute] [--json]
+  aas demo [--response pass|fail] [--fault none|duplicate] [--dispute] [--prove simulate|rail] [--json]
   aas help
 
 Options:
   --response pass|fail     Policy fixture to evaluate (default: pass)
   --fault none|duplicate   Rail demo fault (default: none)
   --dispute                Force MandateBound prove after a settled act
+  --prove simulate|rail    Prove path: canned operator simulation (default)
+                           or review of the same-case rail bundle
   --json                   Print the run report as JSON
   -h, --help               Show this help
 
@@ -246,6 +252,7 @@ Flow:
   decide -> constitutional-agent-testbench evaluate
   on pass -> consequence-rail demo refund
   on dispute -> mandatebound simulate --scenario operator
+  on dispute --prove rail -> rail bundle verify + mandatebound review
 
 First-time setup:
   npm run bootstrap
@@ -607,7 +614,7 @@ export function runDecide(
  */
 export function runAct(
   fault,
-  { depsDir = DEFAULT_PATHS.deps, runner = runCapture } = {},
+  { depsDir = DEFAULT_PATHS.deps, runner = runCapture, persistRailBundle = false } = {},
 ) {
   const crctl = join(depsDir, "consequence-rail", "cmd", "crctl.js");
   if (runner === runCapture && !existsSync(crctl)) {
@@ -615,40 +622,62 @@ export function runAct(
   }
   const args = ["demo", "refund", "--json"];
   if (fault && fault !== "none") args.push("--fault", fault);
+  const railDir = join(depsDir, "consequence-rail");
+  let scratch = null;
+  let bundlePath = null;
+  if (persistRailBundle) {
+    scratch = mkdtempSync(join(tmpdir(), "aas-act-"));
+    bundlePath = join(scratch, "rail-bundle.json");
+    args.push("--out", bundlePath);
+  }
   const result = runner(process.execPath, [crctl, ...args], {
-    cwd: join(depsDir, "consequence-rail"),
+    cwd: railDir,
   });
-  if (result.error) throw childProcessError("act", result);
-  const payload = parseStageJson("act", result);
-  if (result.status !== 0) {
-    // A nonzero exit with parseable JSON is an unsuccessful act (the CLI
-    // surfaces structured errors as JSON on stdout), not a child-process
-    // error. Mirror runProve so persistRunBundle and printHuman see the
-    // structured failure and the GUI can render the stage artifact.
-    return { ok: false, raw: payload, status: result.status, ...failedStderr(result) };
-  }
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)
-    || ![null, "settled", "compensated", "disputed"].includes(payload.outcome)) {
-    throw attachChildDiagnostics(new Error("act did not return a valid outcome"), {
-      stage: "act",
-      code: DIAGNOSTIC.CHILD_JSON,
-      stderr: result.stderr,
-    });
-  }
   try {
-    optionalField(payload, "state", ["string", "null"], "act");
-    optionalField(payload, "fault", ["string", "null"], "act");
-    optionalField(payload, "action_id", ["string", "null"], "act");
-    optionalField(payload, "assurance_mode", ["string", "null"], "act");
-    optionalField(payload, "bundle_verification", ["string", "null"], "act");
-  } catch (error) {
-    throw attachChildDiagnostics(error, {
-      stage: "act",
-      code: DIAGNOSTIC.CHILD_JSON,
-      stderr: result.stderr,
-    });
+    if (result.error) throw childProcessError("act", result);
+    const payload = parseStageJson("act", result);
+    if (result.status !== 0) {
+      // A nonzero exit with parseable JSON is an unsuccessful act (the CLI
+      // surfaces structured errors as JSON on stdout), not a child-process
+      // error. Mirror runProve so persistRunBundle and printHuman see the
+      // structured failure and the GUI can render the stage artifact.
+      return { ok: false, raw: payload, status: result.status, ...failedStderr(result) };
+    }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)
+      || ![null, "settled", "compensated", "disputed"].includes(payload.outcome)) {
+      throw attachChildDiagnostics(new Error("act did not return a valid outcome"), {
+        stage: "act",
+        code: DIAGNOSTIC.CHILD_JSON,
+        stderr: result.stderr,
+      });
+    }
+    try {
+      optionalField(payload, "state", ["string", "null"], "act");
+      optionalField(payload, "fault", ["string", "null"], "act");
+      optionalField(payload, "action_id", ["string", "null"], "act");
+      optionalField(payload, "assurance_mode", ["string", "null"], "act");
+      optionalField(payload, "bundle_verification", ["string", "null"], "act");
+    } catch (error) {
+      throw attachChildDiagnostics(error, {
+        stage: "act",
+        code: DIAGNOSTIC.CHILD_JSON,
+        stderr: result.stderr,
+      });
+    }
+    if (scratch !== null) {
+      try {
+        payload.rail_bundle = JSON.parse(readFileSync(bundlePath, "utf8"));
+      } catch (error) {
+        throw attachChildDiagnostics(
+          new Error(`act did not persist a readable rail bundle: ${error.message}`),
+          { stage: "act", code: DIAGNOSTIC.CHILD_JSON, stderr: result.stderr },
+        );
+      }
+    }
+    return { ok: true, raw: payload, status: 0 };
+  } finally {
+    if (scratch !== null) rmSync(scratch, { recursive: true, force: true });
   }
-  return { ok: true, raw: payload, status: 0 };
 }
 
 /**
@@ -691,6 +720,154 @@ export function runProve(
       code: DIAGNOSTIC.CHILD_JSON,
       stderr: result.stderr,
     });
+  }
+}
+
+/**
+ * Build a MandateBound review request binding same-case rail evidence.
+ *
+ * Pure: no child processes or filesystem access, safe to unit-test. The
+ * caller supplies the rail bundle bytes (as first persisted by the act
+ * stage) and the rail verifier's own verdict over those exact bytes.
+ * Upstream validity stays a caller assertion; MandateBound binds it without
+ * re-verifying rail signatures.
+ *
+ * @returns {{request: object, digest: string, bundleBytes: Buffer}}
+ */
+export function buildRailReviewRequest({ bundle, verification }) {
+  const actionId = bundle?.action?.action_id;
+  const receipt = bundle?.settlement_receipt;
+  if (typeof actionId !== "string" || actionId === "" || !receipt || typeof receipt !== "object") {
+    throw new Error("prove rail-review requires an act rail bundle with action and settlement_receipt");
+  }
+  if (!verification || typeof verification !== "object" || verification.valid !== true) {
+    throw new Error("prove rail-review requires a passing rail bundle verification for the handed-off bytes");
+  }
+  for (const [label, value] of [["action_id", verification.action_id], ["outcome", verification.outcome]]) {
+    if (typeof value !== "string" || value === "") {
+      throw new Error(`prove rail-review verification is missing ${label}`);
+    }
+  }
+  if (verification.action_id !== actionId || verification.outcome !== receipt.outcome) {
+    throw new Error("prove rail-review verification does not match the handed-off rail bundle");
+  }
+  const keyIds = [verification.trusted_key_id, verification.trusted_connector_key_id]
+    .filter((key) => typeof key === "string" && key !== "");
+  if (keyIds.length === 0) {
+    throw new Error("prove rail-review verification names no trusted keys");
+  }
+  const bundleBytes = Buffer.from(JSON.stringify(bundle), "utf8");
+  const digest = `sha256:${createHash("sha256").update(bundleBytes).digest("hex")}`;
+  return {
+    request: {
+      source: { sourceId: "consequence-rail", eventClass: "settlement" },
+      evidence: {
+        mediaType: "application/json",
+        bytesBase64: bundleBytes.toString("base64"),
+        digest,
+        byteLength: bundleBytes.length,
+      },
+      anchors: { expectedDigest: digest },
+      upstream: {
+        verifier: "consequence-rail:bundle-verify",
+        valid: true,
+        actionId,
+        outcome: receipt.outcome,
+        trustedKeyIds: keyIds,
+      },
+    },
+    digest,
+    bundleBytes,
+  };
+}
+
+/**
+ * Confirm a MandateBound review record is bound to the handed-off case.
+ * Throws instead of recording a mismatched review.
+ */
+export function validateRailReview({ review, digest, bundle }) {
+  const actionId = bundle?.action?.action_id;
+  if (!review || typeof review !== "object" || review.verdict !== "recorded") {
+    throw new Error("prove rail-review did not record the handed-off evidence");
+  }
+  if (review.actionId !== actionId || review.evidenceDigest !== digest) {
+    throw new Error("prove rail-review record is not bound to the handed-off rail bundle");
+  }
+  if (review.legalEffect !== "not-determined") {
+    throw new Error("prove rail-review record claims a legal effect");
+  }
+}
+
+/**
+ * Prove by reviewing the same-case rail bundle: verify it with the rail's
+ * own verifier, then bind it into a MandateBound review record. Fails
+ * closed on any verification, digest, identity, or verdict mismatch.
+ *
+ * @returns {{ok: boolean, raw: object, status: number}}
+ */
+export function runProveRail(bundle, { depsDir = DEFAULT_PATHS.deps, runner = runCapture } = {}) {
+  if (!bundle || typeof bundle !== "object" || Array.isArray(bundle)) {
+    throw new Error("prove rail-review requires the act stage rail bundle; the act stage did not persist one");
+  }
+  const railDir = join(depsDir, "consequence-rail");
+  const mbDir = join(depsDir, "mandatebound");
+  const crctl = join(railDir, "cmd", "crctl.js");
+  const cli = join(mbDir, "dist", "cli.js");
+  if (runner === runCapture) {
+    if (!existsSync(crctl)) throw missingChildTool("prove CLI (deps/consequence-rail/cmd/crctl.js)");
+    if (!existsSync(cli)) throw missingChildTool("prove CLI (deps/mandatebound/dist/cli.js)");
+  }
+  const scratch = mkdtempSync(join(tmpdir(), "aas-prove-"));
+  try {
+    const bundlePath = join(scratch, "rail-bundle.json");
+    const requestPath = join(scratch, "review-request.json");
+    writeFileSync(bundlePath, JSON.stringify(bundle));
+    const verifyResult = runner(process.execPath, [crctl, "bundle", "verify", bundlePath, "--json"], {
+      cwd: railDir,
+    });
+    if (verifyResult.error) throw childProcessError("prove", verifyResult);
+    const verification = parseStageJson("prove", verifyResult);
+    if (verifyResult.status !== 0) {
+      return { ok: false, raw: verification, status: verifyResult.status, ...failedStderr(verifyResult) };
+    }
+    const stored = readFileSync(bundlePath);
+    let request;
+    let digest;
+    try {
+      ({ request, digest } = buildRailReviewRequest({
+        bundle: JSON.parse(stored.toString("utf8")),
+        verification,
+      }));
+    } catch (error) {
+      throw attachChildDiagnostics(error, {
+        stage: "prove",
+        code: DIAGNOSTIC.CHILD_JSON,
+        stderr: verifyResult.stderr,
+      });
+    }
+    writeFileSync(requestPath, JSON.stringify(request));
+    const reviewResult = runner(process.execPath, [cli, "review", "--input", requestPath], {
+      cwd: mbDir,
+    });
+    if (reviewResult.error) throw childProcessError("prove", reviewResult);
+    const payload = parseStageJson("prove", reviewResult);
+    if (reviewResult.status !== 0) {
+      return { ok: false, raw: payload, status: reviewResult.status, ...failedStderr(reviewResult) };
+    }
+    try {
+      const ok = booleanField(payload, "ok", "prove");
+      optionalField(payload, "result", ["object"], "prove");
+      validateRailReview({ review: payload.result, digest, bundle });
+      return { ok, raw: payload, status: 0, ...(ok ? {} : failedStderr(reviewResult)) };
+    } catch (error) {
+      throw attachChildDiagnostics(error, {
+        stage: "prove",
+        code: DIAGNOSTIC.CHILD_JSON,
+        stderr: reviewResult.stderr,
+      });
+    }
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
   }
 }
 
@@ -828,6 +1005,7 @@ export function printHuman(report, bundleDir = null) {
     `prove: ${report.stages.prove.status}`,
     `prove_scenario: ${report.stages.prove.scenario ?? "none"}`,
     `prove_triggered_by: ${report.stages.prove.triggered_by ?? "none"}`,
+    `prove_mode: ${report.stages.prove.mode ?? "none"}`,
     `flow: ${report.flow}`,
   ];
   for (const name of STAGE_NAMES) {
@@ -867,6 +1045,10 @@ export async function runDemo(args = [], options = {}) {
   }
   const forceDispute = has(args, "--dispute");
   const asJson = has(args, "--json");
+  const proveMode = option(args, "--prove", "simulate");
+  if (!PROVE_MODES.has(proveMode)) {
+    throw new UsageError("--prove must be simulate or rail");
+  }
   const responsePath = join(paths.fixtures, `response.${responseName}.json`);
   if (!existsSync(responsePath) && !options.runDecideFn) throw new Error(`Missing fixture: ${responsePath}`);
   const runId = options.runId ?? createRunId(options.now ? new Date(options.now) : new Date());
@@ -950,7 +1132,11 @@ export async function runDemo(args = [], options = {}) {
   let proveStarted = false;
   try {
     actStarted = true;
-    const act = await (options.runActFn ?? runAct)(fault, { depsDir: paths.deps, runner });
+    const act = await (options.runActFn ?? runAct)(fault, {
+      depsDir: paths.deps,
+      runner,
+      persistRailBundle: proveMode === "rail" && options.runActFn === undefined,
+    });
     const outcome = act.raw?.outcome ?? null;
     stages.act = stageRecord("passed", { raw: act.raw });
     report.stages.act = {
@@ -971,7 +1157,9 @@ export async function runDemo(args = [], options = {}) {
     }
     const scenario = "operator";
     proveStarted = true;
-    const prove = await (options.runProveFn ?? runProve)(scenario, { depsDir: paths.deps, runner });
+    const prove = proveMode === "rail"
+      ? await (options.runProveRailFn ?? runProveRail)(act.raw?.rail_bundle ?? null, { depsDir: paths.deps, runner })
+      : await (options.runProveFn ?? runProve)(scenario, { depsDir: paths.deps, runner });
     const proveStderr = clipChildStderr(prove.stderr);
     stages.prove = stageRecord(prove.ok ? "passed" : "failed", {
       raw: prove.raw,
@@ -980,10 +1168,18 @@ export async function runDemo(args = [], options = {}) {
     if (!prove.ok) exitCode = 1;
     report.stages.prove = {
       status: stages.prove.status,
-      scenario,
+      mode: proveMode === "rail" ? "rail-review" : "simulate",
+      scenario: proveMode === "rail" ? null : scenario,
       triggered_by: forceDispute && outcome === "settled" ? "--dispute" : `act_outcome=${outcome}`,
       ok: prove.ok,
       result_keys: prove.raw?.result && typeof prove.raw.result === "object" ? Object.keys(prove.raw.result) : [],
+      ...(proveMode === "rail" && prove.ok
+        ? {
+          review_verdict: prove.raw?.result?.verdict ?? null,
+          review_id: prove.raw?.result?.reviewId ?? null,
+          review_action_id: prove.raw?.result?.actionId ?? null,
+        }
+        : {}),
       ...(proveStderr ? { stderr: proveStderr } : {}),
     };
     report.flow = "decide -> act -> prove";
