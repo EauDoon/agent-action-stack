@@ -58,4 +58,4 @@ jobs:
         with:
           python-version: "3.13"
       - name: Run full-stack integration proof
-        run: node scripts/integration-check.mjs
+        run: npm run integration --ignore-scripts

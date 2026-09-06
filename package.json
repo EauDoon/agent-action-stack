@@ -15,6 +15,7 @@
     "gui": "node ./bin/aas-gui.mjs",
     "gui:smoke": "node ./bin/aas-gui.mjs --smoke-test",
     "test": "node --test test/gui.test.mjs test/stack.test.mjs",
+    "integration": "node scripts/integration-check.mjs",
     "check": "npm test"
   },
   "keywords": [

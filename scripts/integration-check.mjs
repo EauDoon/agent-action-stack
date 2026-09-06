@@ -11,6 +11,9 @@
  * The prove stage runs the synthetic MandateBound operator simulation only;
  * a passing prove stage does not verify the rail case and claims no evidence
  * handoff or binding to the rail bundle.
+ *
+ * Run through `npm run integration`: the npm runner locates the npm CLI on
+ * every platform (required for the install step on Windows).
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";

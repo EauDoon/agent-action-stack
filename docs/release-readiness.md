@@ -17,7 +17,7 @@ This checklist describes the evidence required before a public versioning update
 - [ ] `npm ci --ignore-scripts` completes on Windows and Ubuntu.
 - [ ] `npm test` passes with lock mismatch, stale dependency, stage, child-process, and atomic-write coverage.
 - [ ] `npm run gui:smoke` passes.
-- [ ] `node scripts/integration-check.mjs` passes on Ubuntu and Windows (Node.js 22.12.0 and 24, Python 3.13).
+- [ ] `npm run integration` passes on Ubuntu and Windows (Node.js 22.12.0 and 24, Python 3.13).
 - [ ] The public-copy scanner reports no punctuation or secret findings.
 - [ ] The final tree contains no placeholders or generated dependency directories.
 
