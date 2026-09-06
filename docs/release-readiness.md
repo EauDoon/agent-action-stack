@@ -163,6 +163,21 @@ stack suite stands at 66/66 and the rail suite at 150/150. Post-merge main
 `npm run integration` to exit 0 across pass, refusal, dispute, and
 rail-review paths.
 
+## Integration evidence, capability batch (GUI review workspace, portable replay, integrator example)
+
+Component pins unchanged (`16b2faa7` / `89811e4` / `e526c4c`); no contract
+changes since the audit-ordering pin. Covered merges: stack PR #26 (GUI
+prove-mode selector, summary, bindings, run-id isolation), PR #27
+(`export`/`replay` with six explicit checks), PR #28 (runnable integrator
+example in pass and refusal modes).
+
+Unit-test coverage: stack suite 81/81. Full-stack coverage: `npm run
+integration` plus the integrator example in both modes, on Ubuntu and
+Windows with Node.js 22.12.0 and 24 and Python 3.13. Post-merge mains for
+each merge were verified with fresh local clones running
+`npm run integration` to exit 0; the replay round-trip and the GUI rail
+path were additionally exercised live against real child processes.
+
 ## Publication boundary
 
 This document is a readiness checklist, not a publication approval. A separate
