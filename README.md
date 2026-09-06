@@ -207,3 +207,23 @@ Browser artifacts are written to `test-results/` and `playwright-report/`
 ## License
 
 Apache-2.0
+
+## Synthetic action domains
+
+`--domain` selects the synthetic action domain; both use the same rail,
+recourse, and review machinery:
+
+- `refund` (default): the documented refund scenario.
+- `inventory`: a bounded synthetic inventory allocation that reserves a
+  declared quantity of one synthetic SKU for one synthetic order; its
+  pre-reserved remedy reverses only the allocation bound to the action.
+
+```bash
+node ./bin/aas.mjs demo --domain inventory --fault duplicate --prove rail
+```
+
+Both domains keep their own policy fixture and their own remedy scope field
+(`max_amount_minor` for refunds, `max_quantity` for allocations), so neither
+is disguised as the other. Everything remains synthetic: no warehouse,
+merchant, payment, or external provider integration is involved, and a
+recorded review proves the handoff rather than any real-world reversibility.
