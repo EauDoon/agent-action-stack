@@ -184,6 +184,25 @@ function main() {
     );
   }
 
+  runDemo(["--dispute", "--prove", "rail"]);
+  {
+    const { bundleDir, manifest } = latestBundle();
+    check(manifest.stages.decide?.status === "passed", "settled-review path: decide did not pass");
+    check(manifest.stages.act?.status === "passed", "settled-review path: act did not pass");
+    check(manifest.stages.prove?.status === "passed", "settled-review path: prove did not pass");
+    const report = readJson(join(bundleDir, "report.json"));
+    check(report.flow === "decide -> act -> prove", `settled-review path: unexpected flow ${report.flow}`);
+    check(report.stages.prove?.mode === "rail-review", "settled-review path: prove mode not recorded");
+    check(report.stages.prove?.triggered_by === "--dispute", "settled-review path: wrong trigger");
+    const act = readJson(join(bundleDir, "stages", "act.json"));
+    const prove = readJson(join(bundleDir, "stages", "prove.json"));
+    check(act.outcome === "settled", "settled-review path: act is not settled");
+    check(
+      prove.result?.verdict === "recorded" && prove.result?.actionId === act.action_id,
+      "settled-review path: review not bound to the settled action",
+    );
+  }
+
   {
     const latest = readJson(join(root, ".out", "latest.json"));
     const casePath = join(root, ".out", "replay-case.json");
@@ -209,7 +228,7 @@ function main() {
     process.exit(1);
   }
   process.stdout.write(
-    `integration check: ${components.length} pinned dependencies verified across pass, refusal, dispute, and rail-review paths\n`,
+    `integration check: ${components.length} pinned dependencies verified across pass, refusal, dispute, settled-review, and rail-review paths\n`,
   );
 }
 
