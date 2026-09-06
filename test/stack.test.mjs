@@ -35,8 +35,11 @@ import {
   runProve,
   runProveRail,
   selectPython,
+  compareRuns,
+  listRunSummaries,
   listRuns,
   pruneRuns,
+  summarizeRun,
   validateRailReview,
   writeAtomicFile,
 } from "../bin/aas.mjs";
@@ -1360,4 +1363,140 @@ test("replay reads piped bundles from stdin without touching the filesystem", as
   const big = await captureMain(["replay", "-"], { stdin: Readable.from([`{"pad":"${"x".repeat(2 * 1024 * 1024)}"}`]) });
   assert.equal(big.exitCode, 1);
   assert.match(big.stderr, /exceeds the .* byte limit/);
+});
+
+test("case summaries stay summary-only and expose supported identities", async () => {
+  const outputRoot = tempRoot();
+  const ids = await makeRuns(outputRoot, 1);
+  const summary = summarizeRun(ids[0], { outputRoot });
+  assert.equal(summary.run_id, ids[0]);
+  assert.equal(summary.schema_version, "agent-action-stack.run/v1");
+  assert.equal(summary.outcome, "settled");
+  assert.equal(summary.policy_id, "refund-v1");
+  assert.ok(Array.isArray(summary.components) && summary.components.length > 0);
+  assert.equal(summary.review_verdict, null);
+  assert.equal(summary.evidence_digest, null);
+  const serialized = JSON.stringify(summary);
+  assert.doesNotMatch(serialized, /rule_results|rail_bundle|"events"/);
+  assert.throws(() => summarizeRun("../escape", { outputRoot }), /Invalid run id/);
+});
+
+test("history is bounded and skips unreadable cases", async () => {
+  const outputRoot = tempRoot();
+  const ids = await makeRuns(outputRoot, 3);
+  const runsDir = join(outputRoot, "runs");
+  mkdirSync(join(runsDir, "2026-09-06T050000000Z-broken"), { recursive: true });
+  writeFileSync(join(runsDir, "2026-09-06T050000000Z-broken", "manifest.json"), "{not json");
+  const all = listRunSummaries({ outputRoot });
+  assert.deepEqual(all.map((entry) => entry.run_id), [...ids].reverse());
+  assert.equal(listRunSummaries({ outputRoot, limit: 2 }).length, 2);
+});
+
+test("compare classifies identical, different, and not-comparable pairs", async () => {
+  const outputRoot = tempRoot();
+  const ids = await makeRuns(outputRoot, 2);
+  const settled = ids[0];
+  const railRun = await runDemo(["--fault", "duplicate", "--prove", "rail"], {
+    paths: { outputRoot },
+    runId: "compare-rail",
+    python: selectPython(),
+  });
+  assert.equal(railRun.exitCode, 0);
+
+  const same = compareRuns(settled, settled, { outputRoot });
+  assert.equal(same.classification, "identical");
+  assert.deepEqual(same.differences, []);
+
+  const different = compareRuns(railRun.report.run_id, settled, { outputRoot });
+  assert.equal(different.classification, "different");
+  const fields = different.differences.map((entry) => entry.field);
+  for (const field of ["outcome", "prove_mode", "review_verdict", "evidence_digest"]) {
+    assert.ok(fields.includes(field), `expected ${field} to differ, saw ${fields.join(", ")}`);
+  }
+
+  const missing = compareRuns(settled, "2026-09-06T050000000Z-absent", { outputRoot });
+  assert.equal(missing.classification, "not-comparable");
+  assert.ok(missing.errors.length >= 1);
+});
+
+test("compare reports unsupported manifest schemas instead of guessing", async () => {
+  const outputRoot = tempRoot();
+  const dir = join(outputRoot, "runs", "2026-09-06T050000000Z-old");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "manifest.json"), JSON.stringify({ schema_version: "agent-action-stack.run/v0", report: "report.json", stages: {} }));
+  writeFileSync(join(dir, "report.json"), JSON.stringify({ run_id: "old" }));
+  assert.throws(() => summarizeRun("2026-09-06T050000000Z-old", { outputRoot }), /unsupported manifest schema/);
+  const compared = compareRuns("2026-09-06T050000000Z-old", "2026-09-06T050000000Z-old", { outputRoot });
+  assert.equal(compared.classification, "not-comparable");
+});
+
+test("cases and compare CLI commands validate arguments and print classifications", async () => {
+  const outputRoot = tempRoot();
+  void outputRoot;
+  const listed = await captureMain(["cases"]);
+  assert.equal(listed.exitCode, 0);
+  const junkCases = await captureMain(["cases", "--bogus"]);
+  assert.equal(junkCases.exitCode, 2);
+  const oneArg = await captureMain(["compare", "only-one"]);
+  assert.equal(oneArg.exitCode, 2);
+  assert.match(oneArg.stderr, /Usage: aas compare/);
+  const badFlag = await captureMain(["compare", "a", "--bogus"]);
+  assert.equal(badFlag.exitCode, 2);
+});
+
+test("run ids cannot escape the runs directory", async () => {
+  const outputRoot = tempRoot();
+  const ids = await makeRuns(outputRoot, 1);
+  writeFileSync(join(outputRoot, "manifest.json"), JSON.stringify({ schema_version: "agent-action-stack.run/v1", report: "canary.json", stages: {} }));
+  writeFileSync(join(outputRoot, "canary.json"), JSON.stringify({ run_id: "canary", flow: "ESCAPED" }));
+  for (const bad of [".", "..", "...", "../..", "/etc/passwd", "..\\", "a/b"]) {
+    assert.throws(() => summarizeRun(bad, { outputRoot }), /Invalid run id/, `expected ${bad} to be rejected`);
+    assert.throws(() => exportRunBundle(bad, { outputRoot }), /Invalid run id/, `expected export of ${bad} to be rejected`);
+  }
+  assert.equal(summarizeRun(ids[0], { outputRoot }).run_id, ids[0]);
+});
+
+test("missing and unreadable artifacts fail closed instead of reporting absence", async () => {
+  const outputRoot = tempRoot();
+  const rail = await runDemo(["--fault", "duplicate", "--prove", "rail"], {
+    paths: { outputRoot },
+    runId: "artifact-rail",
+    python: selectPython(),
+  });
+  assert.equal(rail.exitCode, 0);
+  const bundleDir = join(outputRoot, "runs", "artifact-rail");
+  assert.equal(summarizeRun("artifact-rail", { outputRoot }).review_verdict, "recorded");
+
+  writeFileSync(join(bundleDir, "stages", "prove.json"), "{corrupted");
+  const summary = summarizeRun("artifact-rail", { outputRoot });
+  assert.deepEqual(summary.artifacts_unreadable, ["prove"]);
+  const compared = compareRuns("artifact-rail", "artifact-rail", { outputRoot });
+  assert.equal(compared.classification, "not-comparable");
+  assert.ok(compared.errors.some((entry) => /prove artifact is unreadable/.test(entry)));
+});
+
+test("compare classifies distinct runs with different stage statuses as different", async () => {
+  const outputRoot = tempRoot();
+  const settled = await runDemo(["--response", "pass"], { paths: { outputRoot }, runId: "stages-settled", python: selectPython() });
+  const refused = await runDemo(["--response", "fail"], { paths: { outputRoot }, runId: "stages-refused", python: selectPython() });
+  assert.equal(settled.exitCode, 0);
+  assert.equal(refused.exitCode, 0);
+  const compared = compareRuns("stages-settled", "stages-refused", { outputRoot });
+  assert.equal(compared.classification, "different");
+  assert.ok(compared.differences.some((entry) => entry.field === "stages"));
+  assert.deepEqual(compared.notes, [
+    "differences do not establish causation",
+    "matching metadata does not prove matching evidence",
+    "only the listed compared fields are checked; raw evidence is never loaded into this view",
+  ]);
+});
+
+test("compare CLI exits nonzero when a pair is not comparable", async () => {
+  const outputRoot = tempRoot();
+  void outputRoot;
+  const missing = await captureMain(["compare", "2026-09-06T050000000Z-absent", "2026-09-06T050000000Z-absent"]);
+  assert.equal(missing.exitCode, 1);
+  assert.match(missing.stdout, /not-comparable/);
+  assert.match(missing.stdout, /matching metadata does not prove matching evidence/);
+  assert.doesNotMatch(missing.stdout, /\/(Users|home)\//);
 });

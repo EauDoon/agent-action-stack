@@ -112,6 +112,35 @@ test("an oversized import is rejected by the server", async ({ page }) => {
   await expect(page.locator("#import-status")).toContainText("too large");
 });
 
+test("case history loads and two cases can be compared through the UI", async ({ page }) => {
+  await page.goto("/");
+  await runStack(page, { fault: "duplicate", prove: "rail" });
+  await runStack(page, { response: "pass" });
+
+  await page.click("#load-history");
+  await expect(page.locator("#history-list li").first()).toContainText("outcome settled");
+  // The placeholder option plus at least the two runs made here (a shared
+  // checkout may hold older cases, so this is a lower bound).
+  const optionCount = await page.locator("#left-case option").count();
+  expect(optionCount).toBeGreaterThanOrEqual(3);
+
+  const values = await page.locator("#right-case option").evaluateAll((options) => options.map((option) => option.value).filter(Boolean));
+  expect(values.length).toBeGreaterThanOrEqual(2);
+  await page.selectOption("#left-case", values[0]);
+  await page.selectOption("#right-case", values[1]);
+  await page.click("#compare");
+
+  await expect(page.locator("#compare-result h3")).toHaveText(/Comparison: (identical|different|not-comparable)/);
+  await expect(page.locator("#compare-result")).toContainText("differences do not establish causation");
+  await expect(page.locator("#compare-result")).toContainText("matching metadata does not prove matching evidence");
+});
+
+test("comparison reports an explicit error when a selection is missing", async ({ page }) => {
+  await page.goto("/");
+  await page.click("#compare");
+  await expect(page.locator("#compare-status")).toContainText("Select two cases");
+});
+
 test("tampered evidence is reported as conflicting, not verified", async ({ page }) => {
   await page.goto("/");
   const tampered = JSON.stringify({

@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { bindingsModel, createGuiServer, renderPage, replayHttpStatus, replayResultModel, summaryModel } from "../bin/aas-gui.mjs";
+import { bindingsModel, compareModel, createGuiServer, historyModel, renderPage, replayHttpStatus, replayResultModel, summaryModel } from "../bin/aas-gui.mjs";
 import { exportRunBundle, runDemo, selectPython } from "../bin/aas.mjs";
 
 const provenance = [
@@ -293,7 +293,7 @@ function pageScript() {
 
 function stubDocument() {
   const elements = {};
-  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result"]) {
+  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list"]) {
     elements[id] = { value: "pass", checked: false, disabled: false, textContent: "", innerHTML: "", href: null, style: {}, listeners: {},
       addEventListener(name, fn) { this.listeners[name] = fn; },
       removeAttribute(name) { delete this[name]; } };
@@ -512,4 +512,77 @@ test("replay status mapping and result rendering stay stable", () => {
   assert.match(html, /identity-binding: pass/);
   assert.match(html, /no action execution or remediation runs/);
   assert.match(html, /source truth unknown, legal effect not determined/);
+});
+
+test("GUI history and compare endpoints return summaries and classifications", async () => {
+  const outputRoot = mkdtempSync(join(tmpdir(), "aas-gui-history-"));
+  const first = await runDemo(["--response", "pass"], {
+    paths: { outputRoot },
+    runId: "compare-one",
+    python: selectPython(),
+  });
+  assert.equal(first.exitCode, 0);
+  const second = await runDemo(["--fault", "duplicate", "--prove", "rail"], {
+    paths: { outputRoot },
+    runId: "compare-two",
+    python: selectPython(),
+  });
+  assert.equal(second.exitCode, 0);
+
+  const server = createGuiServer({ outputRoot });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const history = await requestServer(server, "/api/history");
+    assert.equal(history.status, 200);
+    const cases = JSON.parse(history.body).cases;
+    assert.deepEqual(cases.map((entry) => entry.run_id), ["compare-two", "compare-one"]);
+    assert.equal(cases[0].review_verdict, "recorded");
+    assert.equal(cases[1].review_verdict, null);
+
+    const compared = await requestServer(server, "/api/compare?a=compare-two&b=compare-one");
+    assert.equal(compared.status, 200);
+    const result = JSON.parse(compared.body);
+    assert.equal(result.classification, "different");
+    assert.ok(result.differences.some((entry) => entry.field === "evidence_digest"));
+
+    const same = await requestServer(server, "/api/compare?a=compare-one&b=compare-one");
+    assert.equal(JSON.parse(same.body).classification, "identical");
+
+    const missing = await requestServer(server, "/api/compare?a=compare-one&b=absent-run");
+    assert.equal(missing.status, 200);
+    assert.equal(JSON.parse(missing.body).classification, "not-comparable");
+
+    for (const query of ["", "?a=compare-one", "?a=../escape&b=compare-one", "?a=compare-one&b=x/y", "?a=..&b=compare-one", "?a=.&&b=compare-one", "?a=...&b=compare-one"]) {
+      const rejected = await requestServer(server, `/api/compare${query}`);
+      assert.equal(rejected.status, 400, `expected 400 for ${query}`);
+    }
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("history and comparison models escape untrusted values and state limits", () => {
+  assert.match(historyModel([]), /No cases yet/);
+  const listed = historyModel([
+    { run_id: "<b>run</b>", outcome: "settled", policy_id: "p", review_verdict: "recorded" },
+  ]);
+  assert.doesNotMatch(listed, /<b>run<\/b>/);
+  assert.match(listed, /&lt;b&gt;run&lt;\/b&gt;/);
+
+  const html = compareModel({
+    classification: "different",
+    left: { run_id: "<img src=x>" },
+    right: { run_id: "ok" },
+    errors: ["left (<b>): missing"],
+    differences: [{ field: "outcome", left: "<script>", right: "settled" }],
+  });
+  assert.doesNotMatch(html, /<img src=x>/);
+  assert.doesNotMatch(html, /<script>/);
+  assert.doesNotMatch(html, /<b>/);
+  assert.match(html, /Comparison: different/);
+  assert.match(html, /differences do not establish causation/);
+  assert.match(html, /matching metadata does not prove matching evidence/);
+
+  const empty = compareModel({ classification: "identical", left: { run_id: "a" }, right: { run_id: "b" } });
+  assert.match(empty, /No compared field differs/);
 });

@@ -240,6 +240,8 @@ Usage:
   aas demo [--response pass|fail] [--fault none|duplicate] [--dispute] [--prove simulate|rail] [--json]
   aas export <run-id> [--out <path>]
   aas replay <bundle-file|-> [--json]
+  aas cases [--json]
+  aas compare <run-id> <run-id> [--json]
   aas help
 
 Commands:
@@ -247,6 +249,8 @@ Commands:
   export  Print one run bundle as portable JSON (or write it with --out)
   replay  Re-verify an exported bundle offline without rerunning the action
   runs    List persisted runs newest-first
+  cases   List bounded case summaries (outcome, policy, review, digest)
+  compare Compare two cases and classify identical, different, or not comparable
   prune   Remove oldest runs beyond --keep (latest stays; --dry-run previews)
 
 Options:
@@ -1003,7 +1007,7 @@ function safeBundleFile(bundleDir, value, label) {
  * both produce the identical portable document.
  */
 export function readRunBundle(outputRoot, runId) {
-  if (typeof runId !== "string" || !/^[A-Za-z0-9._-]+$/.test(runId)) throw new Error("Invalid run id.");
+  if (!isValidRunId(runId)) throw new Error("Invalid run id.");
   const bundleDir = join(outputRoot, "runs", runId);
   const manifest = JSON.parse(readFileSync(join(bundleDir, "manifest.json"), "utf8"));
   const report = JSON.parse(readFileSync(safeBundleFile(bundleDir, manifest.report, "report path"), "utf8"));
@@ -1018,6 +1022,14 @@ export function readRunBundle(outputRoot, runId) {
 
 const RUN_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
+/**
+ * A run id must look like a real run id: the pattern alone also matches "."
+ * and "..", which would resolve outside the runs directory.
+ */
+export function isValidRunId(runId) {
+  return typeof runId === "string" && RUN_ID_PATTERN.test(runId) && /^[A-Za-z0-9]/.test(runId);
+}
+
 function runsDirectory(outputRoot) {
   return join(outputRoot, "runs");
 }
@@ -1027,7 +1039,7 @@ function runsDirectory(outputRoot) {
  * (interrupted writes, stray files) are omitted; export and replay still
  * fail closed on them when addressed directly.
  */
-export function listRuns({ outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
+export function listRuns({ outputRoot = DEFAULT_PATHS.outputRoot, limit = Number.MAX_SAFE_INTEGER } = {}) {
   const dir = runsDirectory(outputRoot);
   let entries;
   try {
@@ -1036,26 +1048,32 @@ export function listRuns({ outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
     if (error?.code === "ENOENT") return [];
     throw error;
   }
+  // Names sort newest-first, so order the candidates before reading any
+  // manifest: that keeps the result correct and the scan bounded.
+  const candidates = entries
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith(".") && isValidRunId(entry.name))
+    .map((entry) => entry.name)
+    .sort()
+    .reverse()
+    .slice(0, limit);
   const runs = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name.startsWith(".") || !RUN_ID_PATTERN.test(entry.name)) continue;
+  for (const name of candidates) {
     let manifest;
     try {
-      manifest = JSON.parse(readFileSync(join(dir, entry.name, "manifest.json"), "utf8"));
+      manifest = JSON.parse(readFileSync(join(dir, name, "manifest.json"), "utf8"));
     } catch {
       continue;
     }
     if (!manifest || typeof manifest !== "object") continue;
     const stages = {};
-    for (const name of STAGE_NAMES) stages[name] = manifest.stages?.[name]?.status ?? "unknown";
+    for (const name2 of STAGE_NAMES) stages[name2] = manifest.stages?.[name2]?.status ?? "unknown";
     runs.push({
-      run_id: entry.name,
+      run_id: name,
       created_at: typeof manifest.created_at === "string" ? manifest.created_at : null,
       exit_code: manifest.exit_code ?? null,
       stages,
     });
   }
-  runs.sort((left, right) => (left.run_id < right.run_id ? 1 : left.run_id > right.run_id ? -1 : 0));
   return runs;
 }
 
@@ -1091,7 +1109,174 @@ export function pruneRuns({ outputRoot = DEFAULT_PATHS.outputRoot, keep, dryRun 
   return { kept: [...keepSet], removed, latest, dryRun };
 }
 
+const HISTORY_LIMIT = 50;
+const COMPARABLE_SCHEMA = "agent-action-stack.run/v1";
+
+function readJsonFile(path, label) {
+  let text;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    throw new Error(`Cannot read ${label}.`);
+  }
+  return JSON.parse(text);
+}
+
+function readRunManifest(dir, runId) {
+  if (!isValidRunId(runId)) throw new Error("Invalid run id.");
+  const bundleDir = join(dir, runId);
+  return { bundleDir, manifest: readJsonFile(join(bundleDir, "manifest.json"), `run ${runId} manifest`) };
+}
+
+function readRunReport(bundleDir, manifest) {
+  return readJsonFile(safeBundleFile(bundleDir, manifest.report, "report path"), "the run report");
+}
+
+/**
+ * Read a stage artifact. Missing artifacts are normal (a skipped stage has
+ * none); an artifact the manifest names but cannot be parsed is reported so
+ * callers fail closed instead of treating the field as absent.
+ */
+function readStageArtifact(bundleDir, manifest, name) {
+  const entry = manifest.stages?.[name];
+  if (!entry?.artifact) return { value: null, unreadable: false };
+  try {
+    return { value: readJsonFile(safeBundleFile(bundleDir, entry.artifact, `${name} artifact path`), `the ${name} artifact`), unreadable: false };
+  } catch {
+    return { value: null, unreadable: true };
+  }
+}
+
+/**
+ * Bounded, summary-only view of one persisted run. Raw evidence is never
+ * included: callers get identities, statuses, outcomes, digests, and
+ * component revisions only.
+ */
+export function summarizeRun(runId, { outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
+  const { bundleDir, manifest } = readRunManifest(runsDirectory(outputRoot), runId);
+  if (manifest.schema_version !== COMPARABLE_SCHEMA) {
+    throw new Error(`Run ${runId} uses unsupported manifest schema ${String(manifest.schema_version)}.`);
+  }
+  const report = readRunReport(bundleDir, manifest);
+  const prove = readStageArtifact(bundleDir, manifest, "prove");
+  const artifacts_unreadable = prove.unreadable ? ["prove"] : [];
+  const stages = {};
+  for (const name of STAGE_NAMES) stages[name] = manifest.stages?.[name]?.status ?? "unknown";
+  return {
+    run_id: runId,
+    created_at: typeof manifest.created_at === "string" ? manifest.created_at : null,
+    schema_version: manifest.schema_version,
+    exit_code: manifest.exit_code ?? null,
+    flow: typeof report.flow === "string" ? report.flow : null,
+    stages,
+    policy_id: report.stages?.decide?.policy_id ?? null,
+    action_id: report.stages?.act?.action_id ?? null,
+    outcome: report.stages?.act?.outcome ?? null,
+    state: report.stages?.act?.state ?? null,
+    fault: report.stages?.act?.fault ?? null,
+    prove_mode: report.stages?.prove?.mode ?? null,
+    review_verdict: prove.value?.result?.verdict ?? null,
+    review_id: prove.value?.result?.reviewId ?? null,
+    evidence_digest: prove.value?.result?.evidenceDigest ?? null,
+    artifacts_unreadable,
+    components: (Array.isArray(report.component_provenance) ? report.component_provenance : [])
+      .map((entry) => ({ name: entry?.name ?? "unknown", commit: entry?.commit ?? null }))
+      .sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0)),
+  };
+}
+
+/** Newest-first bounded history of run summaries. */
+export function listRunSummaries({ outputRoot = DEFAULT_PATHS.outputRoot, limit = HISTORY_LIMIT } = {}) {
+  // Bound the scan itself: names sort newest-first, so only the newest
+  // `limit` entries are opened at all.
+  const ids = listRuns({ outputRoot, limit }).map((run) => run.run_id);
+  const summaries = [];
+  for (const runId of ids.slice(0, limit)) {
+    try {
+      summaries.push(summarizeRun(runId, { outputRoot }));
+    } catch {
+      // A run whose artifacts are missing or unsupported is skipped from the
+      // history rather than failing the whole list; direct selection still
+      // reports the problem explicitly.
+    }
+  }
+  return summaries;
+}
+
+const COMPARISON_NOTES = [
+  "differences do not establish causation",
+  "matching metadata does not prove matching evidence",
+  "only the listed compared fields are checked; raw evidence is never loaded into this view",
+];
+
+const COMPARED_FIELDS = [
+  "flow",
+  "stages",
+  "policy_id",
+  "action_id",
+  "outcome",
+  "state",
+  "fault",
+  "prove_mode",
+  "review_verdict",
+  "review_id",
+  "evidence_digest",
+  "exit_code",
+];
+
+/**
+ * Compare two persisted runs. Reports which supported fields differ and
+ * classifies the pair as identical, different, or not comparable. It never
+ * infers causation, and identical metadata is not presented as proof of
+ * identical evidence.
+ */
+export function compareRuns(leftId, rightId, { outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
+  let left = null;
+  let right = null;
+  const errors = [];
+  for (const [label, runId] of [["left", leftId], ["right", rightId]]) {
+    try {
+      const summary = summarizeRun(runId, { outputRoot });
+      if (label === "left") left = summary;
+      else right = summary;
+    } catch (error) {
+      errors.push(`${label} (${runId}): ${error.message}`);
+    }
+  }
+  if (left === null || right === null) {
+    return { classification: "not-comparable", differences: [], errors, notes: COMPARISON_NOTES, left, right };
+  }
+  for (const [label, summary] of [["left", left], ["right", right]]) {
+    for (const artifact of summary.artifacts_unreadable) {
+      errors.push(`${label} (${summary.run_id}): the ${artifact} artifact is unreadable`);
+    }
+  }
+  if (errors.length > 0) {
+    return { classification: "not-comparable", differences: [], errors, notes: COMPARISON_NOTES, left, right };
+  }
+  const differences = [];
+  for (const field of COMPARED_FIELDS) {
+    if (JSON.stringify(left[field]) !== JSON.stringify(right[field])) {
+      differences.push({ field, left: left[field], right: right[field] });
+    }
+  }
+  const leftComponents = JSON.stringify(left.components);
+  const rightComponents = JSON.stringify(right.components);
+  if (leftComponents !== rightComponents) {
+    differences.push({ field: "components", left: left.components, right: right.components });
+  }
+  return {
+    classification: differences.length === 0 ? "identical" : "different",
+    differences,
+    errors,
+    notes: COMPARISON_NOTES,
+    left,
+    right,
+  };
+}
+
 /** Export one run bundle as a single portable JSON document. */
+
 
 export function exportRunBundle(runId, { outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
   return readRunBundle(outputRoot, runId);
@@ -1487,6 +1672,58 @@ function runRunsCommand(args, { asJson } = {}) {
   process.exitCode = 0;
 }
 
+function runCasesCommand(args, { asJson } = {}) {
+  if (args.some((token) => token !== "--json")) {
+    throw new UsageError("Unsupported cases option (expected [--json])");
+  }
+  const cases = listRunSummaries({});
+  if (asJson) {
+    process.stdout.write(`${JSON.stringify({ ok: true, cases }, null, 2)}\n`);
+  } else if (cases.length === 0) {
+    process.stdout.write("no cases yet\n");
+  } else {
+    for (const entry of cases) {
+      process.stdout.write(
+        `${entry.run_id} outcome=${entry.outcome ?? "none"} policy=${entry.policy_id ?? "none"} `
+          + `review=${entry.review_verdict ?? "none"} exit=${entry.exit_code ?? "?"}\n`,
+      );
+    }
+  }
+  process.exitCode = 0;
+}
+
+function printComparison(result, asJson) {
+  if (asJson) {
+    process.stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`);
+    return;
+  }
+  process.stdout.write(`comparison: ${result.classification}\n`);
+  for (const error of result.errors) process.stdout.write(`  ${error}\n`);
+  if (result.classification !== "not-comparable") {
+    if (result.differences.length === 0) {
+      process.stdout.write("  no compared field differs\n");
+    } else {
+      for (const difference of result.differences) {
+        process.stdout.write(
+          `  ${difference.field}: ${JSON.stringify(difference.left)} vs ${JSON.stringify(difference.right)}\n`,
+        );
+      }
+    }
+  }
+  for (const note of result.notes ?? []) process.stdout.write(`  ${note}\n`);
+  process.exitCode = result.classification === "not-comparable" ? 1 : 0;
+}
+
+function runCompareCommand(args, { asJson } = {}) {
+  const ids = args.filter((token) => token !== "--json");
+  if (ids.some((token) => typeof token === "string" && token.startsWith("-"))) {
+    throw new UsageError(`Unsupported compare option: ${args.find((token) => String(token).startsWith("-"))}`);
+  }
+  if (ids.length !== 2) throw new UsageError("Usage: aas compare <run-id> <run-id> [--json]");
+  const result = compareRuns(ids[0], ids[1], {});
+  printComparison(result, asJson);
+}
+
 function runPruneCommand(args, { asJson } = {}) {
   let keep = null;
   let dryRun = false;
@@ -1632,9 +1869,11 @@ export async function main(argv = process.argv.slice(2), options = {}) {
     process.exitCode = 0;
     return;
   }
-  if (command === "runs" || command === "prune") {
+  if (command === "runs" || command === "cases" || command === "compare" || command === "prune") {
     try {
       if (command === "runs") runRunsCommand(argv.slice(1), { asJson });
+      else if (command === "cases") runCasesCommand(argv.slice(1), { asJson });
+      else if (command === "compare") runCompareCommand(argv.slice(1), { asJson });
       else runPruneCommand(argv.slice(1), { asJson });
     } catch (error) {
       const usage = error instanceof UsageError;
