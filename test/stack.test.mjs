@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { loadComponentLock, inspectDependencyDirectory, npmInvocation } from "../scripts/bootstrap.mjs";
+import { assertFullStackNodeVersion, compareVersionTuples, loadComponentLock, inspectDependencyDirectory, MIN_FULL_STACK_NODE, npmInvocation, parseNodeVersion, prepareDependencies } from "../scripts/bootstrap.mjs";
 import {
   CHILD_JSON_LIMIT,
   CHILD_TIMEOUT_MAX_MS,
@@ -715,7 +715,7 @@ test("missing child tools fail closed with a bootstrap hint", () => {
   );
 });
 
-async function captureMain(argv) {
+async function captureMain(argv, options) {
   const stdout = [];
   const stderr = [];
   const originalStdout = process.stdout.write;
@@ -735,7 +735,7 @@ async function captureMain(argv) {
   };
   process.exitCode = undefined;
   try {
-    await main(argv);
+    await main(argv, options);
     return { stdout: stdout.join(""), stderr: stderr.join(""), exitCode: process.exitCode ?? 0 };
   } finally {
     process.stdout.write = originalStdout;
@@ -899,4 +899,57 @@ test("AAS_PYTHON rejects an interpreter that cannot report a version", () => {
     }),
     /AAS_PYTHON \(\/nope\/python\) did not report a usable Python version/,
   );
+});
+
+test("parseNodeVersion reads release triples and rejects anything else", () => {
+  assert.deepEqual(parseNodeVersion("22.12.0"), [22, 12, 0]);
+  assert.deepEqual(parseNodeVersion("  24.3.1  "), [24, 3, 1]);
+  assert.equal(parseNodeVersion("22.12"), null);
+  assert.equal(parseNodeVersion("22.12.0.1"), null);
+  assert.equal(parseNodeVersion("v22.12.0"), null);
+  assert.equal(parseNodeVersion("22.12.0-nightly20240101"), null);
+  assert.equal(parseNodeVersion(""), null);
+  assert.equal(parseNodeVersion(undefined), null);
+  assert.equal(parseNodeVersion("22.x.0"), null);
+});
+
+test("compareVersionTuples orders release triples", () => {
+  assert.equal(compareVersionTuples([22, 12, 0], [22, 12, 0]), 0);
+  assert.equal(compareVersionTuples([20, 19, 0], [22, 12, 0]), -1);
+  assert.equal(compareVersionTuples([22, 11, 9], [22, 12, 0]), -1);
+  assert.equal(compareVersionTuples([22, 12, 1], [22, 12, 0]), 1);
+  assert.equal(compareVersionTuples([24, 0, 0], [22, 12, 0]), 1);
+});
+
+test("full-stack node gate accepts the floor and above, rejects below and unreadable", () => {
+  assert.deepEqual(assertFullStackNodeVersion({ version: "22.12.0" }), [22, 12, 0]);
+  assert.deepEqual(assertFullStackNodeVersion({ version: "24.11.1" }), [24, 11, 1]);
+  assert.deepEqual(assertFullStackNodeVersion({}), parseNodeVersion(process.versions.node));
+  for (const version of ["20.19.0", "21.7.3", "22.11.9", "22.12", "not-a-version", "", "  "]) {
+    assert.throws(
+      () => assertFullStackNodeVersion({ version }),
+      (error) => {
+        assert.match(error.message, /full-stack workflow requires Node\.js 22\.12\.0\+/);
+        assert.match(error.message, /pinned mandatebound declares engines >=22\.12\.0/);
+        return true;
+      },
+      `version ${version} should be rejected`,
+    );
+  }
+});
+
+test("bootstrap refuses an old runtime before creating any dependency directory", () => {
+  const root = join(tmpdir(), `agent-action-stack-node-floor-${process.pid}`);
+  assert.throws(
+    () => prepareDependencies({ root, deps: join(root, "deps"), components: [], nodeVersion: "20.19.0" }),
+    /full-stack workflow requires Node\.js 22\.12\.0\+/,
+  );
+  assert.equal(existsSync(root), false);
+});
+
+test("CLI demo rejects an old runtime before selecting Python or running stages", async () => {
+  const result = await captureMain(["demo"], { nodeVersion: "20.19.0" });
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /full-stack workflow requires Node\.js 22\.12\.0\+/);
+  assert.equal(result.stdout, "");
 });

@@ -38,6 +38,6 @@
   },
   "homepage": "https://github.com/EauDoon/agent-action-stack#readme",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12.0"
   }
 }

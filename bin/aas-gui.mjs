@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { DEFAULT_GUI_PORT, DEFAULT_PATHS, resolveGuiPort, runDemo, selectPython } from "./aas.mjs";
+import { assertFullStackNodeVersion } from "../scripts/bootstrap.mjs";
 
 export function renderPage() {
   return `<!doctype html>
@@ -136,6 +137,14 @@ export function createGuiServer({
         }
         const args = ["--response", selectedResponse, "--fault", selectedFault, "--json"];
         if (url.searchParams.get("dispute") === "1") args.push("--dispute");
+        try {
+          assertFullStackNodeVersion(
+            runOptions.nodeVersion === undefined ? {} : { version: runOptions.nodeVersion },
+          );
+        } catch (error) {
+          sendJson(response, 500, { error: error.message });
+          return;
+        }
         let python = runOptions.python ?? null;
         if (python === null) {
           try {

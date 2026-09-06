@@ -20,7 +20,9 @@ On policy failure the stack stops. On a clean `settled` outcome, MandateBound is
 
 ## Requirements
 
-- Node.js 20+
+- Node.js 22.12+ (the full-stack workflow shares the pinned MandateBound
+  floor; Node.js 20 is not supported for any workflow, standalone or
+  full-stack)
 - Python 3.11+ (stdlib only; no pip install required for the testbench)
 - git
 - network access once, for `npm run bootstrap` (clones the three public repos into `deps/`)
