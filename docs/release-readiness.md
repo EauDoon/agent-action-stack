@@ -86,6 +86,31 @@ Prove-stage boundary: the prove stage runs MandateBound
 `legalEffect: "not-determined"`). A passing prove stage does not verify the
 rail case and claims no evidence handoff or binding to the rail bundle.
 
+## Integration evidence, Node-floor candidate (PR #18, merged `1f6577d`)
+
+Component pins unchanged from the 2026-09-06 candidate above. This candidate
+adds the Node.js 22.12.0 full-stack floor (bootstrap, CLI demo, and GUI run
+preflight with actionable messages and injectable versions for tests),
+reconciled README, CLI help, and `engines`, plus the committed
+`scripts/integration-check.mjs` proof and integration CI.
+
+Unit-test coverage (existing suites, no dependency checkouts): stack
+`npm test` 57/57, including 6 new Node-floor boundary tests and 1 new GUI
+rejection test.
+
+Full-stack coverage (real integration, distinct from unit coverage): clean
+install, bootstrap of the committed pins, exact-SHA and clean-tree
+assertions, entrypoint checks, and pass, policy-refusal, and
+compensated/dispute demo runs with structured-outcome, stage-gating, and
+stale-artifact assertions, ending with the synthetic operator-simulation
+boundary.
+
+Job references: PR head run 34007181438 (4 unit jobs and 4 integration jobs
+across Ubuntu and Windows on Node.js 22.12.0 and 24 with Python 3.13, plus
+review, all passing) and post-merge main run 34007299058 (all 8 CI jobs
+passing). Post-merge main `1f6577d` was additionally verified with a fresh
+local clone running `npm run integration` to exit 0.
+
 ## Publication boundary
 
 This document is a readiness checklist, not a publication approval. A separate
