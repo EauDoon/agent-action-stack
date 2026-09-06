@@ -59,7 +59,7 @@ const PROVENANCE = [
   {
     name: "consequence-rail",
     repository: "https://github.com/EauDoon/consequence-rail.git",
-    commit: "89811e423a1a41bad3ecb77e18ebf557615219f8",
+    commit: "6c61e9fdcd1a4701afad1d2371abcb3f13bbab57",
     origin: "https://github.com/EauDoon/consequence-rail.git",
     detached: true,
     clean: true,
@@ -1530,4 +1530,59 @@ test("comparison never implies causation or equivalence of evidence", () => {
   assert.equal(summary.evidence_digest, "sha256:one");
   const serialized = JSON.stringify(summary);
   assert.doesNotMatch(serialized, /rule_results|rail_bundle/);
+});
+
+test("demo accepts a synthetic action domain and threads it through decide and act", async () => {
+  const outputRoot = tempRoot();
+  const calls = [];
+  const result = await runDemo(["--domain", "inventory"], {
+    ...stubOptions(outputRoot, { runId: "inventory-run" }),
+    runDecideFn: async (responsePath, options) => {
+      calls.push(["decide", responsePath, options.domain]);
+      return { ok: true, raw: { passed: true, policy_id: "aas-inventory-gate-v1", rule_results: [] }, status: 0 };
+    },
+    runActFn: async (fault, options) => {
+      calls.push(["act", options.domain]);
+      return { ok: true, raw: { outcome: "settled", state: "CLOSED", fault: "none", action_id: "act_inv" }, status: 0 };
+    },
+  });
+  assert.equal(result.exitCode, 0);
+  assert.equal(calls[0][2], "inventory");
+  assert.match(String(calls[0][1]), /inventory\.response\.pass\.json$/);
+  assert.equal(calls[1][1], "inventory");
+});
+
+test("demo rejects an unknown domain before running any stage", async () => {
+  const outputRoot = tempRoot();
+  await assert.rejects(
+    () => runDemo(["--domain", "payments"], stubOptions(outputRoot)),
+    (error) => /--domain must be refund or inventory/.test(error.message),
+  );
+  const rejected = await captureMain(["demo", "--domain", "payments"]);
+  assert.match(rejected.stderr, /--domain must be refund or inventory/);
+  assert.equal(rejected.exitCode, 2);
+});
+
+test("runAct targets the requested rail demo domain", () => {
+  const seen = [];
+  const runner = (bin, args) => {
+    seen.push(args);
+    return { status: 0, stdout: '{"outcome":"settled","state":"CLOSED","fault":"none","action_id":"a"}\n', stderr: "", error: null };
+  };
+  runAct("none", { depsDir: "deps", runner, domain: "inventory" });
+  assert.equal(seen[0][1], "demo");
+  assert.equal(seen[0][2], "inventory");
+});
+
+test("runDecide uses the domain policy fixture", () => {
+  const seen = [];
+  const runner = (bin, args) => {
+    seen.push(args);
+    return { status: 0, stdout: '{"passed":true,"policy_id":"p","rule_results":[]}\n', stderr: "", error: null };
+  };
+  runDecide("unused", { depsDir: "deps", fixturesDir: "fixtures", runner, domain: "inventory" });
+  assert.ok(
+    seen[0].some((arg) => String(arg).includes("inventory.policy.json")),
+    `policy fixture missing: ${seen[0].join(" ")}`,
+  );
 });

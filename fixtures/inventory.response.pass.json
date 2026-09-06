@@ -1,0 +1,8 @@
+{
+  "summary": "Authorize a bounded synthetic inventory allocation with recourse reserved before execution.",
+  "decision": "accept",
+  "action_type": "allocate_inventory",
+  "risk_level": "moderate",
+  "blocked": false,
+  "recourse_required": true
+}

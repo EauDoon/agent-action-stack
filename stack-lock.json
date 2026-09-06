@@ -13,7 +13,7 @@
     {
       "name": "consequence-rail",
       "repository": "https://github.com/EauDoon/consequence-rail.git",
-      "commit": "89811e423a1a41bad3ecb77e18ebf557615219f8",
+      "commit": "6c61e9fdcd1a4701afad1d2371abcb3f13bbab57",
       "expected_entrypoints": [
         "package.json",
         "cmd/crctl.js"

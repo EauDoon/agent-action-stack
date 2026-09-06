@@ -269,6 +269,29 @@ async function main() {
     }
   }
 
+  const inventory = run(process.execPath, ["./bin/aas.mjs", "demo", "--domain", "inventory", "--fault", "duplicate", "--prove", "rail"]);
+  check(inventory.status === 0, `inventory demo failed: ${inventory.stderr.slice(-400)}`);
+  {
+    const { bundleDir, manifest } = latestBundle();
+    check(manifest.stages.decide?.status === "passed", "inventory: decide did not pass");
+    check(manifest.stages.act?.status === "passed", "inventory: act did not pass");
+    check(manifest.stages.prove?.status === "passed", "inventory: prove did not pass");
+    const report = readJson(join(bundleDir, "report.json"));
+    check(report.flow === "decide -> act -> prove", `inventory: unexpected flow ${report.flow}`);
+    check(report.stages.prove?.mode === "rail-review", "inventory: prove mode not recorded");
+    const act = readJson(join(bundleDir, "stages", "act.json"));
+    check(act.outcome === "compensated", "inventory: act is not compensated");
+    check(
+      report.stages.decide?.policy_id === "aas-inventory-gate-v1",
+      `inventory: unexpected policy ${report.stages.decide?.policy_id}`,
+    );
+    const provenance = readJson(join(bundleDir, "manifest.json"));
+    check(
+      provenance.component_provenance.some((entry) => entry.name === "consequence-rail"),
+      "inventory: rail provenance missing",
+    );
+  }
+
   const cases = run(process.execPath, ["./bin/aas.mjs", "cases", "--json"]);
   check(cases.status === 0, `cases failed: ${cases.stderr.slice(-300)}`);
   if (cases.status === 0) {

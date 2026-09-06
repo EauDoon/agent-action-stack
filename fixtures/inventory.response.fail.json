@@ -1,0 +1,8 @@
+{
+  "summary": "Requested allocation exceeds the bound allowed without recourse.",
+  "decision": "deny",
+  "action_type": "allocate_inventory",
+  "risk_level": "high",
+  "blocked": true,
+  "recourse_required": false
+}

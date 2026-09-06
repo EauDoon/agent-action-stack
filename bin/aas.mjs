@@ -108,7 +108,8 @@ export const DEFAULT_PATHS = Object.freeze({
 
 const STAGE_NAMES = ["decide", "act", "prove"];
 const DEMO_FLAG_OPTIONS = new Set(["--dispute", "--json"]);
-const DEMO_VALUE_OPTIONS = new Set(["--response", "--fault", "--prove"]);
+const DEMO_VALUE_OPTIONS = new Set(["--response", "--fault", "--prove", "--domain"]);
+const DEMO_DOMAINS = new Set(["refund", "inventory"]);
 const PROVE_MODES = new Set(["simulate", "rail"]);
 const STDERR_LIMIT = 800;
 /** Child stdout is capped so a runaway tool cannot inflate the run bundle. */
@@ -237,7 +238,7 @@ export function helpText() {
   return `Agent Action Stack
 
 Usage:
-  aas demo [--response pass|fail] [--fault none|duplicate] [--dispute] [--prove simulate|rail] [--json]
+  aas demo [--response pass|fail] [--fault none|duplicate] [--dispute] [--prove simulate|rail] [--domain refund|inventory] [--json]
   aas export <run-id> [--out <path>]
   aas replay <bundle-file|-> [--json]
   aas cases [--json]
@@ -259,6 +260,7 @@ Options:
   --dispute                Force MandateBound prove after a settled act
   --prove simulate|rail    Prove path: canned operator simulation (default)
                            or review of the same-case rail bundle
+  --domain refund|inventory  Synthetic action domain (default: refund)
   --json                   Print the run report as JSON
   -h, --help               Show this help
 
@@ -573,9 +575,13 @@ export function runDecide(
     fixturesDir = DEFAULT_PATHS.fixtures,
     runner = runCapture,
     python = null,
+    domain = "refund",
   } = {},
 ) {
-  const policyPath = join(fixturesDir, "policy.json");
+  const policyPath = join(
+    fixturesDir,
+    domain === "inventory" ? "inventory.policy.json" : "policy.json",
+  );
   const pythonPath = join(depsDir, "constitutional-agent-testbench", "src");
   const decideCli = join(pythonPath, "constitutional_agent_testbench", "cli.py");
   if (runner === runCapture && !existsSync(decideCli)) {
@@ -628,13 +634,18 @@ export function runDecide(
  */
 export function runAct(
   fault,
-  { depsDir = DEFAULT_PATHS.deps, runner = runCapture, persistRailBundle = false } = {},
+  {
+    depsDir = DEFAULT_PATHS.deps,
+    runner = runCapture,
+    persistRailBundle = false,
+    domain = "refund",
+  } = {},
 ) {
   const crctl = join(depsDir, "consequence-rail", "cmd", "crctl.js");
   if (runner === runCapture && !existsSync(crctl)) {
     throw missingChildTool("act CLI (deps/consequence-rail/cmd/crctl.js)");
   }
-  const args = ["demo", "refund", "--json"];
+  const args = ["demo", domain, "--json"];
   if (fault && fault !== "none") args.push("--fault", fault);
   const railDir = join(depsDir, "consequence-rail");
   let scratch = null;
@@ -1456,7 +1467,15 @@ export async function runDemo(args = [], options = {}) {
   if (!PROVE_MODES.has(proveMode)) {
     throw new UsageError("--prove must be simulate or rail");
   }
-  const responsePath = join(paths.fixtures, `response.${responseName}.json`);
+  const domain = option(args, "--domain", "refund");
+  if (!DEMO_DOMAINS.has(domain)) {
+    throw new UsageError("--domain must be refund or inventory");
+  }
+  const responseFile =
+    domain === "inventory"
+      ? `inventory.response.${responseName}.json`
+      : `response.${responseName}.json`;
+  const responsePath = join(paths.fixtures, responseFile);
   if (!existsSync(responsePath) && !options.runDecideFn) throw new Error(`Missing fixture: ${responsePath}`);
   const runId = options.runId ?? createRunId(options.now ? new Date(options.now) : new Date());
   const componentProvenance = options.componentResolver
@@ -1500,6 +1519,7 @@ export async function runDemo(args = [], options = {}) {
       depsDir: paths.deps,
       fixturesDir: paths.fixtures,
       runner,
+      domain,
       ...(options.python ? { python: options.python } : {}),
     });
     const decideStderr = clipChildStderr(decide.stderr);
@@ -1542,6 +1562,7 @@ export async function runDemo(args = [], options = {}) {
     const act = await (options.runActFn ?? runAct)(fault, {
       depsDir: paths.deps,
       runner,
+      domain,
       persistRailBundle: proveMode === "rail" && options.runActFn === undefined,
     });
     const outcome = act.raw?.outcome ?? null;
