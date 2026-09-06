@@ -293,7 +293,7 @@ function pageScript() {
 
 function stubDocument() {
   const elements = {};
-  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list"]) {
+  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain"]) {
     elements[id] = { value: "pass", checked: false, disabled: false, textContent: "", innerHTML: "", href: null, style: {}, listeners: {},
       addEventListener(name, fn) { this.listeners[name] = fn; },
       removeAttribute(name) { delete this[name]; } };
@@ -614,6 +614,45 @@ test("GUI history and compare endpoints serve summaries and classifications", as
       const rejected = await requestServer(server, `/api/compare${query}`);
       assert.equal(rejected.status, 400, `expected 400 for ${query}`);
     }
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("GUI exposes a domain selector defaulting to refund", () => {
+  const page = renderPage();
+  assert.match(page, /<select id="domain">/);
+  assert.match(page, /<option value="refund">refund<\/option>/);
+  assert.match(page, /<option value="inventory">inventory allocation<\/option>/);
+  const script = pageScript();
+  assert.match(script, /domain:document\.getElementById\('domain'\)\.value/);
+});
+
+test("GUI run accepts a domain and rejects an unknown one", async () => {
+  const outputRoot = mkdtempSync(join(tmpdir(), "aas-gui-domain-"));
+  const seen = [];
+  const server = createGuiServer({
+    outputRoot,
+    runDemoFn: async (args, options) => {
+      seen.push(args);
+      return runDemo(args, { ...options, runId: "domain-run", componentResolver: () => [] });
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    const origin = `http://127.0.0.1:${address.port}`;
+    const posted = await requestServer(server, "/api/run?response=pass&fault=none&domain=inventory", {
+      method: "POST",
+      headers: { origin },
+    });
+    assert.equal(posted.status, 200);
+    assert.deepEqual(seen[0].slice(-2), ["--domain", "inventory"]);
+    const bogus = await requestServer(server, "/api/run?response=pass&fault=none&domain=payments", {
+      method: "POST",
+      headers: { origin },
+    });
+    assert.equal(bogus.status, 400);
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }

@@ -16,10 +16,11 @@ function caseFile(name, contents) {
   return path;
 }
 
-async function runStack(page, { response = "pass", fault = "none", prove = "simulate", dispute = false } = {}) {
+async function runStack(page, { response = "pass", fault = "none", prove = "simulate", domain = "refund", dispute = false } = {}) {
   await page.selectOption("#response", response);
   await page.selectOption("#fault", fault);
   await page.selectOption("#prove", prove);
+  await page.selectOption("#domain", domain);
   if (dispute) await page.check("#dispute");
   else await page.uncheck("#dispute");
   await page.click("#run");
@@ -133,6 +134,15 @@ test("case history loads and two cases can be compared through the UI", async ({
   await expect(page.locator("#compare-result h3")).toHaveText(/Comparison: (identical|different|not-comparable)/);
   await expect(page.locator("#compare-result")).toContainText("differences do not establish causation");
   await expect(page.locator("#compare-result")).toContainText("matching metadata does not prove matching evidence");
+});
+
+test("the inventory domain runs through the UI with its own policy", async ({ page }) => {
+  await page.goto("/");
+  await runStack(page, { domain: "inventory", fault: "duplicate", prove: "rail" });
+  await expect(page.locator("#summary")).toContainText("decide: passed");
+  await expect(page.locator("#summary")).toContainText("policy aas-inventory-gate-v1");
+  await expect(page.locator("#summary")).toContainText("mode rail-review");
+  await expect(page.locator("#bindings")).toContainText("recomputed match");
 });
 
 test("comparison reports an explicit error when a selection is missing", async ({ page }) => {

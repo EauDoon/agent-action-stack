@@ -255,6 +255,7 @@ export function renderPage() {
 <body><h1>Agent Action Stack</h1><p>Run the local decide, act, and prove flow using the reviewed component lock.</p>
 <div class="state"><label>Response <select id="response"><option value="pass">pass</option><option value="fail">fail</option></select></label>
 <label>Fault <select id="fault"><option value="none">none</option><option value="duplicate">duplicate</option></select></label>
+<label>Domain <select id="domain"><option value="refund">refund</option><option value="inventory">inventory allocation</option></select></label>
 <label><input id="dispute" type="checkbox"> force dispute proof</label>
 <label>Prove <select id="prove"><option value="simulate">simulation</option><option value="rail">same-case rail review</option></select></label>
 <br><button id="run">Run stack</button>
@@ -307,7 +308,7 @@ runButton.addEventListener('click',async()=>{
   bindings.innerHTML='';
   clearImported();
   output.textContent='Running...';
-  const query=new URLSearchParams({response:document.getElementById('response').value,fault:document.getElementById('fault').value,prove:document.getElementById('prove').value});
+  const query=new URLSearchParams({response:document.getElementById('response').value,fault:document.getElementById('fault').value,prove:document.getElementById('prove').value,domain:document.getElementById('domain').value});
   if(document.getElementById('dispute').checked) query.set('dispute','1');
   let runBody;
   try {
@@ -460,7 +461,7 @@ export function createGuiServer({
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/run") {
-        const allowedKeys = new Set(["response", "fault", "dispute", "prove"]);
+        const allowedKeys = new Set(["response", "fault", "dispute", "prove", "domain"]);
         if ([...url.searchParams.keys()].some((key) => !allowedKeys.has(key))) {
           sendJson(response, 400, { error: "Invalid options" });
           return;
@@ -468,15 +469,18 @@ export function createGuiServer({
         const selectedResponse = url.searchParams.get("response") ?? "pass";
         const selectedFault = url.searchParams.get("fault") ?? "none";
         const selectedProve = url.searchParams.get("prove") ?? "simulate";
+        const selectedDomain = url.searchParams.get("domain") ?? "refund";
         if (!new Set(["pass", "fail"]).has(selectedResponse)
           || !new Set(["none", "duplicate"]).has(selectedFault)
           || !new Set([null, "1"]).has(url.searchParams.get("dispute"))
-          || !new Set(["simulate", "rail"]).has(selectedProve)) {
+          || !new Set(["simulate", "rail"]).has(selectedProve)
+          || !new Set(["refund", "inventory"]).has(selectedDomain)) {
           sendJson(response, 400, { error: "Invalid options" });
           return;
         }
         const args = ["--response", selectedResponse, "--fault", selectedFault, "--json"];
         if (url.searchParams.get("dispute") === "1") args.push("--dispute");
+        if (selectedDomain !== "refund") args.push("--domain", selectedDomain);
         if (selectedProve !== "simulate") args.push("--prove", selectedProve);
         try {
           assertFullStackNodeVersion(
