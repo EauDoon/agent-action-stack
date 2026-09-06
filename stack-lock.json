@@ -22,7 +22,7 @@
     {
       "name": "mandatebound",
       "repository": "https://github.com/EauDoon/mandatebound.git",
-      "commit": "3682a242e3add6bea2ef0157be75112b83a4cbf9",
+      "commit": "06d3c93bb4331c22efd0fffd0d8ffd67b1ea88c9",
       "expected_entrypoints": [
         "package.json",
         "package-lock.json",

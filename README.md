@@ -50,6 +50,7 @@ act_fault: none
 prove: skipped
 prove_scenario: none
 prove_triggered_by: none
+prove_mode: none
 flow: decide -> act
 bundle: .out/runs/<run-id>
 ```
@@ -71,6 +72,19 @@ Expected flow line:
 ```text
 flow: decide -> act -> prove
 ```
+
+Review the same case instead of simulating one:
+
+```bash
+node ./bin/aas.mjs demo --fault duplicate --prove rail
+```
+
+The rail-review path persists the act-stage rail bundle, verifies it with the
+rail's own verifier, and binds it into a MandateBound review record for the
+same action id and digests. The review records the rail's verdict without
+re-verifying rail signatures, source truth stays unknown, and legal effect
+stays not determined: a recorded review proves the handoff, not the rail's
+claims.
 
 JSON report:
 

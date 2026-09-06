@@ -6,6 +6,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { assertFullStackNodeVersion, compareVersionTuples, loadComponentLock, inspectDependencyDirectory, MIN_FULL_STACK_NODE, npmInvocation, parseNodeVersion, prepareDependencies } from "../scripts/bootstrap.mjs";
 import {
+  buildRailReviewRequest,
   CHILD_JSON_LIMIT,
   CHILD_TIMEOUT_MAX_MS,
   DEFAULT_CHILD_TIMEOUT_MS,
@@ -28,7 +29,9 @@ import {
   runDecide,
   runDemo,
   runProve,
+  runProveRail,
   selectPython,
+  validateRailReview,
   writeAtomicFile,
 } from "../bin/aas.mjs";
 
@@ -56,7 +59,7 @@ const PROVENANCE = [
   {
     name: "mandatebound",
     repository: "https://github.com/EauDoon/mandatebound.git",
-    commit: "3682a242e3add6bea2ef0157be75112b83a4cbf9",
+    commit: "06d3c93bb4331c22efd0fffd0d8ffd67b1ea88c9",
     origin: "https://github.com/EauDoon/mandatebound.git",
     detached: true,
     clean: true,
@@ -952,4 +955,189 @@ test("CLI demo rejects an old runtime before selecting Python or running stages"
   assert.equal(result.exitCode, 1);
   assert.match(result.stderr, /full-stack workflow requires Node\.js 22\.12\.0\+/);
   assert.equal(result.stdout, "");
+});
+
+function railBundleFixture(overrides = {}) {
+  return {
+    profile: "audit",
+    schema_version: "consequence-rail/settlement-bundle/v0.1",
+    action: { action_id: "act_handoff_1", action_digest: `sha256:${"1".repeat(64)}` },
+    settlement_receipt: {
+      receipt_id: "receipt_handoff_1",
+      action_id: "act_handoff_1",
+      outcome: "compensated",
+      recourse_final_status: "consumed",
+      event_chain_head: `sha256:${"2".repeat(64)}`,
+      action_digest: `sha256:${"1".repeat(64)}`,
+    },
+    events: [],
+    ...overrides,
+  };
+}
+
+function railVerificationFixture(overrides = {}) {
+  return {
+    valid: true,
+    action_id: "act_handoff_1",
+    outcome: "compensated",
+    trusted_key_id: "demo-rail-key",
+    trusted_connector_key_id: "demo-connector-key",
+    ...overrides,
+  };
+}
+
+test("buildRailReviewRequest binds bundle bytes, digests, and upstream verdict", () => {
+  const bundle = railBundleFixture();
+  const { request, digest } = buildRailReviewRequest({ bundle, verification: railVerificationFixture() });
+  assert.deepEqual(request.source, { sourceId: "consequence-rail", eventClass: "settlement" });
+  assert.equal(request.evidence.mediaType, "application/json");
+  assert.equal(request.evidence.digest, digest);
+  assert.equal(request.anchors.expectedDigest, digest);
+  assert.equal(request.upstream.verifier, "consequence-rail:bundle-verify");
+  assert.equal(request.upstream.valid, true);
+  assert.equal(request.upstream.actionId, "act_handoff_1");
+  assert.equal(request.upstream.outcome, "compensated");
+  assert.deepEqual(request.upstream.trustedKeyIds, ["demo-rail-key", "demo-connector-key"]);
+});
+
+test("buildRailReviewRequest refuses missing bundles and mismatched verification", () => {
+  const bundle = railBundleFixture();
+  const verification = railVerificationFixture();
+  assert.throws(() => buildRailReviewRequest({ bundle: null, verification }), /act rail bundle/);
+  assert.throws(() => buildRailReviewRequest({ bundle: {}, verification }), /act rail bundle with action/);
+  assert.throws(() => buildRailReviewRequest({ bundle, verification: { ...verification, valid: false } }), /passing rail bundle verification/);
+  assert.throws(
+    () => buildRailReviewRequest({ bundle, verification: { ...verification, outcome: "settled" } }),
+    /does not match the handed-off rail bundle/,
+  );
+  assert.throws(
+    () => buildRailReviewRequest({ bundle, verification: { ...verification, trusted_key_id: "", trusted_connector_key_id: "" } }),
+    /names no trusted keys/,
+  );
+});
+
+test("validateRailReview accepts bound records and rejects anything else", () => {
+  const bundle = railBundleFixture();
+  const { digest } = buildRailReviewRequest({ bundle, verification: railVerificationFixture() });
+  const review = {
+    verdict: "recorded",
+    actionId: "act_handoff_1",
+    evidenceDigest: digest,
+    legalEffect: "not-determined",
+  };
+  validateRailReview({ review, digest, bundle });
+  assert.throws(() => validateRailReview({ review: { ...review, verdict: "conflicting" }, digest, bundle }), /did not record/);
+  assert.throws(() => validateRailReview({ review: { ...review, actionId: "act_other" }, digest, bundle }), /not bound/);
+  assert.throws(() => validateRailReview({ review: { ...review, evidenceDigest: `sha256:${"0".repeat(64)}` }, digest, bundle }), /not bound/);
+  assert.throws(() => validateRailReview({ review: { ...review, legalEffect: "determined" }, digest, bundle }), /legal effect/);
+});
+
+test("runProveRail verifies the persisted bytes and binds the review record", () => {
+  const bundle = railBundleFixture();
+  const { digest } = buildRailReviewRequest({ bundle, verification: railVerificationFixture() });
+  const review = {
+    verdict: "recorded",
+    actionId: "act_handoff_1",
+    evidenceDigest: digest,
+    legalEffect: "not-determined",
+    reviewId: "review-abc",
+  };
+  const calls = [];
+  const runner = (bin, args) => {
+    calls.push(args);
+    if (args.includes("bundle")) {
+      return { status: 0, stdout: `${JSON.stringify(railVerificationFixture())}\n`, stderr: "", error: null };
+    }
+    return { status: 0, stdout: `${JSON.stringify({ ok: true, result: review })}\n`, stderr: "", error: null };
+  };
+  const result = runProveRail(bundle, { depsDir: "deps", runner });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.raw.result, review);
+  assert.ok(calls.some((args) => args.includes("bundle") && args.includes("verify")));
+  assert.ok(calls.some((args) => args.includes("review") && args.includes("--input")));
+});
+
+test("runProveRail fails closed on verification failure and conflicting reviews", () => {
+  const bundle = railBundleFixture();
+  const failing = runProveRail(bundle, {
+    depsDir: "deps",
+    runner: () => ({ status: 1, stdout: '{"valid":false}\n', stderr: "", error: null }),
+  });
+  assert.equal(failing.ok, false);
+
+  const { digest } = buildRailReviewRequest({ bundle, verification: railVerificationFixture() });
+  const conflicting = runProveRail(bundle, {
+    depsDir: "deps",
+    runner: (bin, args) => {
+      if (args.includes("bundle")) {
+        return { status: 0, stdout: `${JSON.stringify(railVerificationFixture())}\n`, stderr: "", error: null };
+      }
+      return { status: 5, stdout: `${JSON.stringify({ ok: false, result: { verdict: "conflicting" } })}\n`, stderr: "", error: null };
+    },
+  });
+  assert.equal(conflicting.ok, false);
+  assert.equal(digest.slice(0, 7), "sha256:");
+
+  assert.throws(
+    () => runProveRail(null, { depsDir: "deps", runner: () => ({}) }),
+    /requires the act stage rail bundle/,
+  );
+});
+
+test("runAct persists the rail bundle only when asked", () => {
+  const bundle = railBundleFixture();
+  const calls = [];
+  const runner = (bin, args) => {
+    calls.push(args);
+    const out = args[args.indexOf("--out") + 1];
+    if (out) writeFileSync(out, JSON.stringify(bundle));
+    return { status: 0, stdout: `${JSON.stringify({ outcome: "compensated", state: "CLOSED", fault: "duplicate" })}\n`, stderr: "", error: null };
+  };
+  const persisted = runAct("duplicate", { depsDir: "deps", runner, persistRailBundle: true });
+  assert.equal(persisted.ok, true);
+  assert.deepEqual(persisted.raw.rail_bundle, bundle);
+  assert.ok(calls[0].includes("--out"));
+
+  const plain = runAct("duplicate", {
+    depsDir: "deps",
+    runner: () => ({ status: 0, stdout: `${JSON.stringify({ outcome: "settled", state: "CLOSED" })}\n`, stderr: "", error: null }),
+  });
+  assert.equal(plain.ok, true);
+  assert.equal("rail_bundle" in plain.raw, false);
+});
+
+test("demo rail mode records the review binding and fails closed without a bundle", async () => {
+  const outputRoot = mkdtempSync(join(tmpdir(), "agent-action-stack-rail-"));
+  const bundle = railBundleFixture();
+  const review = {
+    verdict: "recorded",
+    actionId: "act_handoff_1",
+    evidenceDigest: "sha256:bound",
+    legalEffect: "not-determined",
+    reviewId: "review-abc",
+  };
+  const bound = await runDemo(["--fault", "duplicate", "--prove", "rail"], {
+    ...stubOptions(outputRoot, { runId: "rail-run" }),
+    runActFn: async () => ({ ok: true, raw: { outcome: "compensated", state: "CLOSED", fault: "duplicate", action_id: "act_handoff_1", rail_bundle: bundle }, status: 0 }),
+    runProveRailFn: async () => ({ ok: true, raw: { ok: true, result: review }, status: 0 }),
+  });
+  assert.equal(bound.exitCode, 0);
+  assert.equal(bound.report.flow, "decide -> act -> prove");
+  assert.equal(bound.report.stages.prove.mode, "rail-review");
+  assert.equal(bound.report.stages.prove.review_verdict, "recorded");
+  assert.equal(bound.report.stages.prove.review_action_id, "act_handoff_1");
+
+  const missing = await runDemo(["--fault", "duplicate", "--prove", "rail"], {
+    ...stubOptions(outputRoot, { runId: "rail-missing" }),
+    runActFn: async () => ({ ok: true, raw: { outcome: "compensated", state: "CLOSED" }, status: 0 }),
+  });
+  assert.equal(missing.exitCode, 1);
+  assert.equal(missing.report.stages.prove.status, "error");
+  assert.match(missing.report.stages.prove.reason, /act stage rail bundle/);
+});
+
+test("demo rejects an unknown prove mode", async () => {
+  const bad = await captureMain(["demo", "--prove", "canned"]);
+  assert.equal(bad.exitCode, 2);
+  assert.match(bad.stderr, /--prove must be simulate or rail/);
 });
