@@ -22,6 +22,7 @@ import {
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+  assertFullStackNodeVersion,
   inspectDependencyDirectory,
   loadComponentLock,
 } from "../scripts/bootstrap.mjs";
@@ -248,6 +249,8 @@ Flow:
 
 First-time setup:
   npm run bootstrap
+
+Requires Node.js 22.12+ and Python 3.11+.
 
 Missing child tools fail closed with a bootstrap hint. Each run is written to
 .out/runs/<run-id>. The .out/latest.json pointer identifies the most recent
@@ -1020,7 +1023,7 @@ function writeCliError(error, { asJson = false, usage = false } = {}) {
   if (usage) process.stderr.write("Try `aas help` for usage.\n");
 }
 
-export async function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2), options = {}) {
   const command = argv[0] ?? "help";
   const asJson = has(argv, "--json");
   if (isHelpToken(command) || (command === "demo" && demoRequestsHelp(argv.slice(1)))) {
@@ -1035,6 +1038,9 @@ export async function main(argv = process.argv.slice(2)) {
     return;
   }
   try {
+    assertFullStackNodeVersion(
+      options.nodeVersion === undefined ? {} : { version: options.nodeVersion },
+    );
     const python = selectPython();
     const result = await runDemo(argv.slice(1), { ...(python ? { python } : {}) });
     if (asJson) process.stdout.write(`${JSON.stringify(result.report, null, 2)}\n`);

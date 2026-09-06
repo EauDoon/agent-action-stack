@@ -17,6 +17,7 @@ This checklist describes the evidence required before a public versioning update
 - [ ] `npm ci --ignore-scripts` completes on Windows and Ubuntu.
 - [ ] `npm test` passes with lock mismatch, stale dependency, stage, child-process, and atomic-write coverage.
 - [ ] `npm run gui:smoke` passes.
+- [ ] `npm run integration` passes on Ubuntu and Windows (Node.js 22.12.0 and 24, Python 3.13).
 - [ ] The public-copy scanner reports no punctuation or secret findings.
 - [ ] The final tree contains no placeholders or generated dependency directories.
 
@@ -69,8 +70,8 @@ Component suites at the pinned revisions:
   unknown-recourse regression tests (also rerun inside the pinned
   `deps/consequence-rail` tree: 3 passed).
 - mandatebound `3682a24`: `npm run verify` exit 0; 220 passed; coverage lines
-  93.80 against threshold 90, functions 87.85 against threshold 90, branches
-  98.14 against threshold 85; license check 12 packages, dependency check
+  93.80 against threshold 90, functions 98.14 against threshold 90, branches
+  87.85 against threshold 85; license check 12 packages, dependency check
   12 packages, package check 98 files.
 
 Cross-repository CI and review references for the pinned merges: rail PR #20

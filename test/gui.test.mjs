@@ -96,3 +96,29 @@ test("GUI rejects rebinding requests, cross-origin runs, unsafe options, and uns
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 });
+
+test("GUI run rejects an old runtime before invoking the orchestrator", async () => {
+  const outputRoot = mkdtempSync(join(tmpdir(), "agent-action-stack-gui-node-"));
+  let calls = 0;
+  const server = createGuiServer({
+    outputRoot,
+    runDemoFn: () => {
+      calls += 1;
+      throw new Error("must not run on an old runtime");
+    },
+    runOptions: { nodeVersion: "20.19.0" },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    const run = await requestServer(server, "/api/run?response=pass&fault=none", {
+      method: "POST",
+      headers: { origin: `http://127.0.0.1:${address.port}` },
+    });
+    assert.equal(run.status, 500);
+    assert.match(JSON.parse(run.body).error, /full-stack workflow requires Node\.js 22\.12\.0\+/);
+    assert.equal(calls, 0);
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});

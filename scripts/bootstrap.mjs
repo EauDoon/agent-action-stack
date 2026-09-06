@@ -11,6 +11,43 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const lockPath = join(root, "stack-lock.json");
 
+/** Full-stack floor: the pinned MandateBound package declares engines >=22.12.0. */
+export const MIN_FULL_STACK_NODE = Object.freeze([22, 12, 0]);
+
+/**
+ * @param {string} value
+ * @returns {[number, number, number]|null}
+ */
+export function parseNodeVersion(value) {
+  if (typeof value !== "string") return null;
+  const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u.exec(value.trim());
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+export function compareVersionTuples(left, right) {
+  for (let index = 0; index < 3; index += 1) {
+    if (left[index] !== right[index]) return left[index] < right[index] ? -1 : 1;
+  }
+  return 0;
+}
+
+/**
+ * Reject runtimes below the full-stack floor before any clone, install, or
+ * build side effect. Accepts an explicit version string so callers and tests
+ * can exercise the boundary without switching runtimes.
+ */
+export function assertFullStackNodeVersion({ version = process.versions.node } = {}) {
+  const parsed = parseNodeVersion(version);
+  if (parsed === null || compareVersionTuples(parsed, MIN_FULL_STACK_NODE) < 0) {
+    const minimum = MIN_FULL_STACK_NODE.join(".");
+    throw new Error(
+      `agent-action-stack full-stack workflow requires Node.js ${minimum}+ (pinned mandatebound declares engines >=${minimum}); running on ${typeof version === "string" ? version.trim() || "an unreadable version" : "an unreadable version"}. Use Node.js ${minimum} or newer for bootstrap, demo, and GUI runs.`,
+    );
+  }
+  return parsed;
+}
+
 function normalizeRemote(value) {
   return value.trim().replace(/\.git$/, "").replace(/\/$/, "").toLowerCase();
 }
@@ -149,7 +186,8 @@ function runNpm(target, args) {
   requireCommand(invocation.command, invocation.args, { cwd: target, stdio: "inherit" });
 }
 
-export function prepareDependencies({ root: projectRoot = root, deps = join(projectRoot, "deps"), components = loadComponentLock(join(projectRoot, "stack-lock.json")) } = {}) {
+export function prepareDependencies({ root: projectRoot = root, deps = join(projectRoot, "deps"), components = loadComponentLock(join(projectRoot, "stack-lock.json")), nodeVersion } = {}) {
+  assertFullStackNodeVersion(nodeVersion === undefined ? {} : { version: nodeVersion });
   mkdirSync(deps, { recursive: true });
   const prepared = [];
   for (const component of components) {
