@@ -8,7 +8,7 @@ This checklist describes the evidence required before a public versioning update
 - [ ] Confirm `stack-lock.json` still contains the approved public URLs and commits:
   - Constitutional Agent Testbench: `16b2faa71b0f92b9afa15b13afad8c48da8132f4`
   - Consequence Rail: `64cb304381006c69a03ec375da7b192122b463db`
-  - MandateBound: `06d3c93bb4331c22efd0fffd0d8ffd67b1ea88c9`
+  - MandateBound: `e526c4c32ac61571757a98ca1a69189821c3dce7`
 - [ ] Run bootstrap from a clean workspace and verify detached, clean, exact dependency checkouts.
 - [ ] Confirm no private repository, credential, or production endpoint is referenced.
 
@@ -143,6 +143,15 @@ Job references: mandatebound PR #27 (Node 22.12.0 and 24.18.0, plus
 review); stack PR #20 (4 unit jobs and 4 integration jobs across Ubuntu and
 Windows on Node.js 22.12.0 and 24 with Python 3.13, plus review, all
 passing on the head revision).
+
+## Integration evidence, capability-declaration pin (PR #22, merged `58d1f46`)
+
+Component pins: testbench `16b2faa7` and rail `64cb304` unchanged;
+MandateBound moves to `e526c4c` (PR #28, conformance declaration for the
+`review` command; no behavior change to any integrated path). Post-merge
+main `58d1f46` was verified with a fresh local clone running
+`npm run integration` to exit 0 across pass, refusal, dispute, and
+rail-review paths.
 
 ## Publication boundary
 
