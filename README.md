@@ -92,6 +92,23 @@ JSON report:
 node ./bin/aas.mjs demo --fault duplicate --json
 ```
 
+Export a run and replay its verification offline, without rerunning the
+action:
+
+```bash
+node ./bin/aas.mjs demo --fault duplicate --prove rail
+node ./bin/aas.mjs export "$(ls -t .out/runs | head -1)" --out case.json
+node ./bin/aas.mjs replay case.json
+```
+
+Replay recomputes the evidence digest, re-runs the rail's own bundle
+verification over the exported bytes, and re-executes the MandateBound
+review, requiring a byte-identical review digest. It reports unavailable
+evidence, conflicts, and unsupported verification explicitly, and exits
+nonzero unless every check passes. Trust basis: the rail's synthetic demo
+keys via its own verifier; nothing embedded in the bundle is trusted for
+its own integrity.
+
 ## Reproducibility and run bundles
 
 `stack-lock.json` records the reviewed public repository URLs, exact commits, and

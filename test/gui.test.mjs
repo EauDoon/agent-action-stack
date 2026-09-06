@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { bindingsModel, createGuiServer, renderPage, summaryModel } from "../bin/aas-gui.mjs";
-import { runDemo } from "../bin/aas.mjs";
+import { exportRunBundle, runDemo } from "../bin/aas.mjs";
 
 const provenance = [
   { name: "constitutional-agent-testbench", repository: "https://github.com/EauDoon/constitutional-agent-testbench.git", commit: "a7a51907eaaab68a52b66edef28b3ee0fcb3ff97", detached: true, clean: true, entrypoints: [] },
@@ -372,6 +372,34 @@ test("GUI rail run and CLI agree on the same review binding", async () => {
     const rendered = await bindingsModel(JSON.parse(bundleRes.body));
     assert.match(rendered, new RegExp(`evidence digest: ${digest} — recomputed match`));
     assert.match(rendered, /review-agree-1/);
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("CLI export and GUI bundle download agree on the same run", async () => {
+  const outputRoot = mkdtempSync(join(tmpdir(), "agent-action-stack-export-agree-"));
+  const server = createGuiServer({
+    outputRoot,
+    runDemoFn: (args, options) => runDemo(args, {
+      ...options,
+      runId: "agree-run",
+      componentResolver: () => [],
+      runDecideFn: async () => ({ ok: true, raw: { passed: true }, status: 0 }),
+      runActFn: async () => ({ ok: true, raw: { outcome: "settled", state: "CLOSED" }, status: 0 }),
+    }),
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    const posted = await requestServer(server, "/api/run?response=pass&fault=none", {
+      method: "POST",
+      headers: { origin: `http://127.0.0.1:${address.port}` },
+    });
+    assert.equal(posted.status, 200);
+    const downloaded = await requestServer(server, "/api/bundle/agree-run");
+    assert.equal(downloaded.status, 200);
+    assert.deepEqual(exportRunBundle("agree-run", { outputRoot }), JSON.parse(downloaded.body));
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }

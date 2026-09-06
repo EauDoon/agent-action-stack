@@ -22,7 +22,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   assertFullStackNodeVersion,
@@ -237,7 +237,14 @@ export function helpText() {
 
 Usage:
   aas demo [--response pass|fail] [--fault none|duplicate] [--dispute] [--prove simulate|rail] [--json]
+  aas export <run-id> [--out <path>]
+  aas replay <bundle-file|-> [--json]
   aas help
+
+Commands:
+  demo    Run decide, act, and prove and persist one run bundle
+  export  Print one run bundle as portable JSON (or write it with --out)
+  replay  Re-verify an exported bundle offline without rerunning the action
 
 Options:
   --response pass|fail     Policy fixture to evaluate (default: pass)
@@ -871,8 +878,144 @@ export function runProveRail(bundle, { depsDir = DEFAULT_PATHS.deps, runner = ru
   }
 }
 
+/**
+ * Reproduce the supported verification/review process for one exported run
+ * bundle without rerunning the action. Every check is explicit: digest
+ * recomputation, the rail's own bundle verification over the exported
+ * bytes, and a deterministic re-execution of the MandateBound review whose
+ * digest must equal the recorded one. Trust basis: the rail's synthetic
+ * demo keys via its own verifier; nothing embedded in the bundle is
+ * trusted for its own integrity, and caller-owned digests come from the
+ * recorded review, never from untrusted annotations.
+ *
+ * @returns {{ok: boolean, runId: string|null, checks: Array<{name: string, passed: boolean, detail: string}>}}
+ */
+export function replayBundle(bundleDoc, { depsDir = DEFAULT_PATHS.deps, runner = runCapture } = {}) {
+  const checks = [];
+  const record = (name, passed, detail) => {
+    checks.push({ name, passed, detail });
+    return passed;
+  };
+  const fail = (reason) => ({ ok: false, runId: null, checks, reason });
+  if (!bundleDoc || typeof bundleDoc !== "object" || Array.isArray(bundleDoc)) {
+    return fail("bundle document is not an object");
+  }
+  const runId = bundleDoc.report?.run_id ?? null;
+  const stages = bundleDoc.stages && typeof bundleDoc.stages === "object" ? bundleDoc.stages : null;
+  const railBundle = stages?.act && typeof stages.act === "object" ? stages.act.rail_bundle ?? null : null;
+  const review = stages?.prove && typeof stages.prove === "object" && stages.prove.result && typeof stages.prove.result === "object"
+    ? stages.prove.result
+    : null;
+  if (!stages || railBundle === null || typeof railBundle !== "object" || Array.isArray(railBundle)) {
+    record("evidence-available", false, "no same-case rail bundle in this run");
+    return { ok: false, runId, checks, reason: "unavailable: this run persisted no rail bundle (simulate mode or skipped act)" };
+  }
+  if (review === null || review.verdict !== "recorded") {
+    record("evidence-available", false, "no recorded same-case review in this run");
+    return { ok: false, runId, checks, reason: "unavailable: this run recorded no review verdict" };
+  }
+  record("evidence-available", true, "rail bundle and recorded review present");
+  const actionId = stages.act.action_id ?? null;
+  const bundleBytes = Buffer.from(JSON.stringify(railBundle), "utf8");
+  const digest = `sha256:${createHash("sha256").update(bundleBytes).digest("hex")}`;
+  if (!record("identity-binding", review.actionId === actionId && actionId !== null,
+    review.actionId === actionId && actionId !== null
+      ? `review bound to ${actionId}`
+      : "review action id does not match the act action id")) {
+    return { ok: false, runId, checks, reason: "conflicting: review is not bound to this run's action" };
+  }
+  if (!record("digest-binding", review.evidenceDigest === digest,
+    review.evidenceDigest === digest ? `evidence digest ${digest}` : "recomputed digest does not match the review")) {
+    return { ok: false, runId, checks, reason: "conflicting: exported bytes do not match the recorded digest" };
+  }
+  const railDir = join(depsDir, "consequence-rail");
+  const mbDir = join(depsDir, "mandatebound");
+  const crctl = join(railDir, "cmd", "crctl.js");
+  const cli = join(mbDir, "dist", "cli.js");
+  if (runner === runCapture) {
+    if (!existsSync(crctl)) throw missingChildTool("replay CLI (deps/consequence-rail/cmd/crctl.js)");
+    if (!existsSync(cli)) throw missingChildTool("replay CLI (deps/mandatebound/dist/cli.js)");
+  }
+  const scratch = mkdtempSync(join(tmpdir(), "aas-replay-"));
+  try {
+    const bundlePath = join(scratch, "rail-bundle.json");
+    const requestPath = join(scratch, "review-request.json");
+    writeFileSync(bundlePath, bundleBytes);
+    const verifyResult = runner(process.execPath, [crctl, "bundle", "verify", bundlePath, "--json"], {
+      cwd: railDir,
+    });
+    if (verifyResult.error) throw childProcessError("replay", verifyResult);
+    const verification = parseStageJson("replay", verifyResult);
+    const verified = verifyResult.status === 0 && verification && verification.valid === true
+      && verification.action_id === actionId && verification.outcome === review.upstream?.outcome;
+    if (!record("rail-verification", verified, verified
+      ? `rail verifier accepts ${actionId} with outcome ${verification.outcome}`
+      : "rail verifier rejected the exported bytes")) {
+      return { ok: false, runId, checks, reason: "unsupported: rail verification failed for the exported bytes" };
+    }
+    let request;
+    try {
+      ({ request } = buildRailReviewRequest({ bundle: JSON.parse(bundleBytes.toString("utf8")), verification }));
+    } catch (error) {
+      record(false, "review-request", `cannot rebuild the review request: ${error.message}`);
+      return { ok: false, runId, checks, reason: "unsupported: review request cannot be rebuilt" };
+    }
+    record("review-request", true, "review request rebuilt from exported bytes");
+    writeFileSync(requestPath, JSON.stringify(request));
+    const reviewResult = runner(process.execPath, [cli, "review", "--input", requestPath], {
+      cwd: mbDir,
+    });
+    if (reviewResult.error) throw childProcessError("replay", reviewResult);
+    const replayed = parseStageJson("replay", reviewResult);
+    const reproduced = reviewResult.status === 0 && replayed && replayed.ok === true
+      && replayed.result && replayed.result.verdict === "recorded"
+      && replayed.result.reviewDigest === review.reviewDigest;
+    if (!record("review-replay", reproduced,
+      reproduced ? `re-executed review digest ${replayed.result.reviewDigest}` : "re-executed review does not match the record")) {
+      return { ok: false, runId, checks, reason: "conflicting: replayed review differs from the record" };
+    }
+    return { ok: true, runId, checks };
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 export function createRunId(now = new Date(), nonce = randomUUID()) {
   return `${now.toISOString().replace(/[:.]/g, "")}-${nonce.slice(0, 12)}`;
+}
+
+function safeBundleFile(bundleDir, value, label) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 100) {
+    throw new Error(`Invalid ${label}.`);
+  }
+  if (isAbsolute(value) || !/^(?:[A-Za-z0-9_-]+\/)?[A-Za-z0-9_-][A-Za-z0-9._-]*\.json$/.test(value)) {
+    throw new Error(`Invalid ${label}.`);
+  }
+  return join(bundleDir, value);
+}
+
+/**
+ * Read one persisted run bundle: manifest, report, and every stage artifact
+ * the manifest references. Shared by the GUI download and `aas export`, so
+ * both produce the identical portable document.
+ */
+export function readRunBundle(outputRoot, runId) {
+  if (typeof runId !== "string" || !/^[A-Za-z0-9._-]+$/.test(runId)) throw new Error("Invalid run id.");
+  const bundleDir = join(outputRoot, "runs", runId);
+  const manifest = JSON.parse(readFileSync(join(bundleDir, "manifest.json"), "utf8"));
+  const report = JSON.parse(readFileSync(safeBundleFile(bundleDir, manifest.report, "report path"), "utf8"));
+  const stages = {};
+  for (const [name, stage] of Object.entries(manifest.stages ?? {})) {
+    if (stage.artifact) {
+      stages[name] = JSON.parse(readFileSync(safeBundleFile(bundleDir, stage.artifact, "stage artifact path"), "utf8"));
+    }
+  }
+  return { manifest, report, stages };
+}
+
+/** Export one run bundle as a single portable JSON document. */
+export function exportRunBundle(runId, { outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
+  return readRunBundle(outputRoot, runId);
 }
 
 export function writeAtomicFile(
@@ -1219,12 +1362,148 @@ function writeCliError(error, { asJson = false, usage = false } = {}) {
   if (usage) process.stderr.write("Try `aas help` for usage.\n");
 }
 
+function readReplayInput(source, { stdin = process.stdin } = {}) {
+  if (source === "-") {
+    if (stdin.isTTY) throw new UsageError("replay reads stdin only from a pipe; pass a bundle file instead");
+    const text = readFileSync(0, "utf8");
+    if (text.trim() === "") throw new Error("replay received an empty bundle document");
+    return text;
+  }
+  let text;
+  try {
+    text = readFileSync(source, "utf8");
+  } catch {
+    throw new Error(`replay cannot read bundle file: ${source}`);
+  }
+  if (text.length > CHILD_JSON_LIMIT) {
+    throw new Error(`replay bundle exceeds the ${CHILD_JSON_LIMIT} byte limit`);
+  }
+  if (text.trim() === "") throw new Error("replay received an empty bundle document");
+  return text;
+}
+
+function printReplayReport(result, asJson) {
+  if (asJson) {
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+  const lines = [
+    `replay: ${result.ok ? "verified" : "failed"}`,
+    `run: ${result.runId ?? "unknown"}`,
+    ...result.checks.map((check) => `check ${check.name}: ${check.passed ? "pass" : "FAIL"} — ${check.detail}`),
+  ];
+  if (!result.ok && result.reason) lines.push(`reason: ${result.reason}`);
+  process.stdout.write(`${lines.join("\n")}\n`);
+}
+
+function runExportCommand(args, { asJson } = {}) {
+  let runId = null;
+  let out = null;
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === "--out") {
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith("-")) throw new UsageError("Missing value for export option: --out");
+      if (out !== null) throw new UsageError("Duplicate export option: --out");
+      out = value;
+      index += 1;
+    } else if (typeof token === "string" && token.startsWith("-")) {
+      throw new UsageError(`Unsupported export option: ${token}`);
+    } else if (runId !== null) {
+      throw new UsageError("export accepts exactly one run id");
+    } else if (token.trim() === "") {
+      throw new UsageError("export requires a non-empty run id");
+    } else {
+      runId = token;
+    }
+  }
+  if (runId === null) throw new UsageError("Usage: aas export <run-id> [--out <path>]");
+  let bundle;
+  try {
+    bundle = exportRunBundle(runId, {});
+  } catch (error) {
+    writeCliError(error, { asJson, usage: false });
+    process.exitCode = 1;
+    return;
+  }
+  const text = `${JSON.stringify(bundle, null, 2)}\n`;
+  if (out === null) {
+    process.stdout.write(text);
+    process.exitCode = 0;
+    return;
+  }
+  try {
+    writeAtomicFile(out, text, {});
+  } catch (error) {
+    writeCliError(error, { asJson, usage: false });
+    process.exitCode = 1;
+    return;
+  }
+  if (!asJson) process.stdout.write(`exported: ${out}\n`);
+  else process.stdout.write(`${JSON.stringify({ ok: true, out }, null, 2)}\n`);
+  process.exitCode = 0;
+}
+
+async function runReplayCommand(args, { asJson, nodeVersion, stdin } = {}) {
+  let source = null;
+  let json = false;
+  for (const token of args) {
+    if (token === "--json") {
+      json = true;
+    } else if (typeof token === "string" && token.startsWith("-") && token !== "-") {
+      throw new UsageError(`Unsupported replay option: ${token}`);
+    } else if (source !== null) {
+      throw new UsageError("replay accepts exactly one bundle file or -");
+    } else {
+      source = token;
+    }
+  }
+  if (source === null) throw new UsageError("Usage: aas replay <bundle-file|-> [--json]");
+  assertFullStackNodeVersion(nodeVersion === undefined ? {} : { version: nodeVersion });
+  let bundleDoc;
+  try {
+    bundleDoc = JSON.parse(readReplayInput(source, { stdin }));
+  } catch (error) {
+    if (error instanceof UsageError) throw error;
+    writeCliError(error, { asJson: json || asJson, usage: false });
+    process.exitCode = 1;
+    return;
+  }
+  let result;
+  try {
+    result = replayBundle(bundleDoc, {});
+  } catch (error) {
+    writeCliError(error, { asJson: json || asJson, usage: false });
+    process.exitCode = 1;
+    return;
+  }
+  printReplayReport(result, json || asJson);
+  process.exitCode = result.ok ? 0 : 1;
+}
+
 export async function main(argv = process.argv.slice(2), options = {}) {
   const command = argv[0] ?? "help";
   const asJson = has(argv, "--json");
   if (isHelpToken(command) || (command === "demo" && demoRequestsHelp(argv.slice(1)))) {
     printHelp();
     process.exitCode = 0;
+    return;
+  }
+  if (command === "export" || command === "replay") {
+    try {
+      if (command === "export") runExportCommand(argv.slice(1), { asJson });
+      else {
+        await runReplayCommand(argv.slice(1), {
+          asJson,
+          nodeVersion: options.nodeVersion,
+          stdin: options.stdin,
+        });
+      }
+    } catch (error) {
+      const usage = error instanceof UsageError;
+      writeCliError(error, { asJson, usage });
+      process.exitCode = usage ? 2 : 1;
+    }
     return;
   }
   if (command !== "demo") {

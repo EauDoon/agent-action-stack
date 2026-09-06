@@ -184,6 +184,23 @@ function main() {
     );
   }
 
+  {
+    const latest = readJson(join(root, ".out", "latest.json"));
+    const casePath = join(root, ".out", "replay-case.json");
+    const exported = run(process.execPath, ["./bin/aas.mjs", "export", latest.run_id, "--out", casePath]);
+    check(exported.status === 0, `export failed: ${exported.stderr.slice(-400)}`);
+    const replayed = run(process.execPath, ["./bin/aas.mjs", "replay", casePath, "--json"]);
+    check(replayed.status === 0, `replay failed: ${replayed.stdout.slice(-400)}${replayed.stderr.slice(-400)}`);
+    if (replayed.status === 0) {
+      const replayReport = JSON.parse(replayed.stdout);
+      check(replayReport.ok === true, "replay report is not ok");
+      check(
+        replayReport.checks.every((check) => check.passed),
+        "replay left a failing check",
+      );
+    }
+  }
+
   const tree = git(root, ["status", "--porcelain", "--untracked-files=no"]);
   check(tree.stdout.trim() === "", `integration runs left tracked modifications: ${tree.stdout.trim().slice(0, 200)}`);
 

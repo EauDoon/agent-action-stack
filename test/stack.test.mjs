@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import { assertFullStackNodeVersion, compareVersionTuples, loadComponentLock, in
 import {
   buildRailReviewRequest,
   CHILD_JSON_LIMIT,
+  exportRunBundle,
   CHILD_TIMEOUT_MAX_MS,
   DEFAULT_CHILD_TIMEOUT_MS,
   DEFAULT_GUI_PORT,
@@ -26,6 +28,7 @@ import {
   runAct,
   runCapture,
   pythonCandidates,
+  replayBundle,
   runDecide,
   runDemo,
   runProve,
@@ -1140,4 +1143,133 @@ test("demo rejects an unknown prove mode", async () => {
   const bad = await captureMain(["demo", "--prove", "canned"]);
   assert.equal(bad.exitCode, 2);
   assert.match(bad.stderr, /--prove must be simulate or rail/);
+});
+
+function replayBundleFixture() {
+  const railBundle = {
+    profile: "audit",
+    action: { action_id: "act_replay_1", action_digest: `sha256:${"1".repeat(64)}` },
+    settlement_receipt: {
+      receipt_id: "receipt_replay_1",
+      action_id: "act_replay_1",
+      outcome: "compensated",
+      recourse_final_status: "consumed",
+      event_chain_head: `sha256:${"2".repeat(64)}`,
+      action_digest: `sha256:${"1".repeat(64)}`,
+    },
+    events: [],
+  };
+  const bundleBytes = Buffer.from(JSON.stringify(railBundle), "utf8");
+  const digest = `sha256:${createHash("sha256").update(bundleBytes).digest("hex")}`;
+  return { railBundle, digest };
+}
+
+function replayRunnerFixture(verification, review) {
+  return (bin, args) => {
+    if (args.includes("bundle")) {
+      return { status: 0, stdout: `${JSON.stringify(verification)}\n`, stderr: "", error: null };
+    }
+    return { status: 0, stdout: `${JSON.stringify({ ok: true, result: review })}\n`, stderr: "", error: null };
+  };
+}
+
+test("export reads the persisted run bundle", async () => {
+  const outputRoot = tempRoot();
+  const run = await runDemo(["--response", "pass"], stubOptions(outputRoot, { runId: "export-run" }));
+  assert.equal(run.exitCode, 0);
+  const exported = exportRunBundle("export-run", { outputRoot });
+  assert.equal(exported.report.run_id, "export-run");
+  assert.deepEqual(Object.keys(exported.stages).sort(), ["act", "decide"]);
+  assert.throws(() => exportRunBundle("no-such-run", { outputRoot }), /Invalid run id|ENOENT/);
+  assert.throws(() => exportRunBundle("../escape", { outputRoot }), /Invalid run id/);
+});
+
+test("replay agrees on an intact export and names every check", () => {
+  const { railBundle, digest } = replayBundleFixture();
+  const review = {
+    verdict: "recorded",
+    reviewId: "review-replay-1",
+    actionId: "act_replay_1",
+    evidenceDigest: digest,
+    legalEffect: "not-determined",
+    receipt: { outcome: "compensated" },
+    upstream: { valid: true, verifier: "consequence-rail:bundle-verify", outcome: "compensated", trustedKeyIds: ["k"] },
+    reviewDigest: "sha256:replayed",
+  };
+  const verification = { valid: true, action_id: "act_replay_1", outcome: "compensated", trusted_key_id: "k", trusted_connector_key_id: "c" };
+  const bundleDoc = {
+    report: { run_id: "run-replay-1" },
+    stages: { act: { action_id: "act_replay_1", rail_bundle: railBundle }, prove: { result: review } },
+  };
+  const result = replayBundle(bundleDoc, { depsDir: "deps", runner: replayRunnerFixture(verification, { ...review }) });
+  assert.equal(result.ok, true);
+  assert.equal(result.runId, "run-replay-1");
+  assert.deepEqual(result.checks.map((check) => check.name), [
+    "evidence-available",
+    "identity-binding",
+    "digest-binding",
+    "rail-verification",
+    "review-request",
+    "review-replay",
+  ]);
+  assert.ok(result.checks.every((check) => check.passed));
+});
+
+test("replay reports unavailable evidence and conflicts explicitly", () => {
+  const { railBundle } = replayBundleFixture();
+  const never = () => { throw new Error("must not spawn children"); };
+  const simulate = replayBundle({ report: { run_id: "r" }, stages: { act: {}, prove: { status: "skipped" } } }, { runner: never });
+  assert.equal(simulate.ok, false);
+  assert.match(simulate.reason, /^unavailable:/);
+
+  const noReview = replayBundle(
+    { report: { run_id: "r" }, stages: { act: { action_id: "a", rail_bundle: railBundle }, prove: {} } },
+    { runner: never },
+  );
+  assert.equal(noReview.ok, false);
+  assert.match(noReview.reason, /^unavailable:/);
+
+  const tampered = JSON.parse(JSON.stringify(railBundle));
+  tampered.settlement_receipt.outcome = "settled";
+  const review = { verdict: "recorded", actionId: "act_replay_1", evidenceDigest: "sha256:stale", legalEffect: "not-determined", upstream: {} };
+  const conflict = replayBundle(
+    { report: { run_id: "r" }, stages: { act: { action_id: "act_replay_1", rail_bundle: tampered }, prove: { result: review } } },
+    { runner: never },
+  );
+  assert.equal(conflict.ok, false);
+  assert.match(conflict.reason, /^conflicting:/);
+
+  const badDoc = replayBundle(null, { runner: never });
+  assert.equal(badDoc.ok, false);
+});
+
+test("replay fails closed when child verification rejects the bytes", () => {
+  const { railBundle, digest } = replayBundleFixture();
+  const review = { verdict: "recorded", actionId: "act_replay_1", evidenceDigest: digest, legalEffect: "not-determined", upstream: { outcome: "compensated" } };
+  const bundleDoc = {
+    report: { run_id: "r" },
+    stages: { act: { action_id: "act_replay_1", rail_bundle: railBundle }, prove: { result: review } },
+  };
+  const rejected = replayBundle(bundleDoc, {
+    depsDir: "deps",
+    runner: () => ({ status: 1, stdout: '{"valid":false}\n', stderr: "", error: null }),
+  });
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.reason, /unsupported/);
+});
+
+test("export and replay CLI validate arguments and missing files", async () => {
+  const noRun = await captureMain(["export", "no-such-run"]);
+  assert.equal(noRun.exitCode, 1);
+  const noArgs = await captureMain(["export"]);
+  assert.equal(noArgs.exitCode, 2);
+  const twoRuns = await captureMain(["export", "a", "b"]);
+  assert.equal(twoRuns.exitCode, 2);
+  const missing = await captureMain(["replay", "/tmp/aas-no-such-bundle.json"]);
+  assert.equal(missing.exitCode, 1);
+  assert.match(missing.stderr, /cannot read bundle file/);
+  const noSource = await captureMain(["replay"]);
+  assert.equal(noSource.exitCode, 2);
+  const extra = await captureMain(["replay", "a", "b"]);
+  assert.equal(extra.exitCode, 2);
 });

@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 /** Lightweight local GUI for the Agent Action Stack orchestrator. */
 import { createServer } from "node:http";
-import { readFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { DEFAULT_GUI_PORT, DEFAULT_PATHS, resolveGuiPort, runDemo, selectPython } from "./aas.mjs";
+import { DEFAULT_GUI_PORT, DEFAULT_PATHS, exportRunBundle, resolveGuiPort, runDemo, selectPython } from "./aas.mjs";
 import { assertFullStackNodeVersion } from "../scripts/bootstrap.mjs";
 
 export function escapeHtml(value) {
@@ -218,30 +216,6 @@ function requestBoundaryFailure(request) {
   return null;
 }
 
-function safeBundleFile(bundleDir, value, label) {
-  if (typeof value !== "string" || value.length === 0 || value.length > 100) {
-    throw new Error(`Invalid ${label}.`);
-  }
-  if (isAbsolute(value) || !/^(?:[A-Za-z0-9_-]+\/)?[A-Za-z0-9_-][A-Za-z0-9._-]*\.json$/.test(value)) {
-    throw new Error(`Invalid ${label}.`);
-  }
-  return join(bundleDir, value);
-}
-
-function readBundle(outputRoot, runId) {
-  if (!/^[A-Za-z0-9._-]+$/.test(runId)) throw new Error("Invalid run id.");
-  const bundleDir = join(outputRoot, "runs", runId);
-  const manifest = JSON.parse(readFileSync(join(bundleDir, "manifest.json"), "utf8"));
-  const report = JSON.parse(readFileSync(safeBundleFile(bundleDir, manifest.report, "report path"), "utf8"));
-  const stages = {};
-  for (const [name, stage] of Object.entries(manifest.stages)) {
-    if (stage.artifact) {
-      stages[name] = JSON.parse(readFileSync(safeBundleFile(bundleDir, stage.artifact, "stage artifact path"), "utf8"));
-    }
-  }
-  return { manifest, report, stages };
-}
-
 export function createGuiServer({
   runDemoFn = runDemo,
   outputRoot = DEFAULT_PATHS.outputRoot,
@@ -325,7 +299,7 @@ export function createGuiServer({
       }
       if (request.method === "GET" && url.pathname.startsWith("/api/bundle/")) {
         const runId = decodeURIComponent(url.pathname.slice("/api/bundle/".length));
-        const bundle = readBundle(outputRoot, runId);
+        const bundle = exportRunBundle(runId, { outputRoot });
         sendJson(response, 200, bundle, {
           "content-disposition": `attachment; filename="agent-action-stack-${runId}.json"`,
         });
