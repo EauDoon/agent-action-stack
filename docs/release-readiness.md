@@ -8,7 +8,7 @@ This checklist describes the evidence required before a public versioning update
 - [ ] Confirm `stack-lock.json` still contains the approved public URLs and commits:
   - Constitutional Agent Testbench: `16b2faa71b0f92b9afa15b13afad8c48da8132f4`
   - Consequence Rail: `64cb304381006c69a03ec375da7b192122b463db`
-  - MandateBound: `3682a242e3add6bea2ef0157be75112b83a4cbf9`
+  - MandateBound: `06d3c93bb4331c22efd0fffd0d8ffd67b1ea88c9`
 - [ ] Run bootstrap from a clean workspace and verify detached, clean, exact dependency checkouts.
 - [ ] Confirm no private repository, credential, or production endpoint is referenced.
 
@@ -110,6 +110,39 @@ across Ubuntu and Windows on Node.js 22.12.0 and 24 with Python 3.13, plus
 review, all passing) and post-merge main run 34007299058 (all 8 CI jobs
 passing). Post-merge main `1f6577d` was additionally verified with a fresh
 local clone running `npm run integration` to exit 0.
+
+## Integration evidence, rail-review candidate (PR #20, merged `b1861590`)
+
+Component pins: testbench `16b2faa7` and rail `64cb304` unchanged;
+MandateBound moves to `06d3c93` (PR #27, `review` command). This candidate
+adds the opt-in `--prove rail` path: the act stage persists the rail
+settlement bundle, the prove stage verifies those bytes with the rail's own
+`bundle verify`, and MandateBound `review` binds them into a deterministic
+record for the same action id and digests. The default `--prove simulate`
+path is unchanged.
+
+Unit-test coverage: stack `npm test` 66/66 (9 new rail-handoff tests plus 1
+new GUI prove-param test); mandatebound `npm run verify` exit 0, 228/228
+(8 new review tests), coverage thresholds hold.
+
+Full-stack coverage: `npm run integration` exit 0 on a clean tree, now also
+exercising `demo --fault duplicate --prove rail` with digest recomputation
+(review `evidenceDigest` recomputed from the persisted bundle bytes),
+`review_verdict: recorded`, `legalEffect: not-determined`, and
+prove/act/dispute artifact assertions. Post-merge main `b1861590` was
+verified with a fresh local clone running `npm run integration` to exit 0.
+
+Prove-stage boundary, updated: simulate mode runs the synthetic operator
+scenario (no rail-case verification, as before); rail-review mode records a
+handoff binding (same action id and digests, caller-asserted upstream
+verdict) without re-verifying rail signatures, without establishing source
+truth, and without legal effect. Neither mode relabels rail artifacts as
+AP2/UCP evidence.
+
+Job references: mandatebound PR #27 (Node 22.12.0 and 24.18.0, plus
+review); stack PR #20 (4 unit jobs and 4 integration jobs across Ubuntu and
+Windows on Node.js 22.12.0 and 24 with Python 3.13, plus review, all
+passing on the head revision).
 
 ## Publication boundary
 
