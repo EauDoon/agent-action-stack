@@ -7,7 +7,7 @@ This checklist describes the evidence required before a public versioning update
 - [ ] Review the final raw tree and changed-file list.
 - [ ] Confirm `stack-lock.json` still contains the approved public URLs and commits:
   - Constitutional Agent Testbench: `16b2faa71b0f92b9afa15b13afad8c48da8132f4`
-  - Consequence Rail: `64cb304381006c69a03ec375da7b192122b463db`
+  - Consequence Rail: `89811e423a1a41bad3ecb77e18ebf557615219f8`
   - MandateBound: `e526c4c32ac61571757a98ca1a69189821c3dce7`
 - [ ] Run bootstrap from a clean workspace and verify detached, clean, exact dependency checkouts.
 - [ ] Confirm no private repository, credential, or production endpoint is referenced.
@@ -150,6 +150,16 @@ Component pins: testbench `16b2faa7` and rail `64cb304` unchanged;
 MandateBound moves to `e526c4c` (PR #28, conformance declaration for the
 `review` command; no behavior change to any integrated path). Post-merge
 main `58d1f46` was verified with a fresh local clone running
+`npm run integration` to exit 0 across pass, refusal, dispute, and
+rail-review paths.
+
+## Integration evidence, audit-ordering pin (PR #24, merged `cc952ab`)
+
+Component pins: testbench `16b2faa7` and mandatebound `e526c4c` unchanged;
+Consequence Rail moves to `89811e4` (PR #21, audit-before-mutation on every
+lifecycle path; behavior-compatible for all previously valid flows). The
+stack suite stands at 66/66 and the rail suite at 150/150. Post-merge main
+`cc952ab` was verified with a fresh local clone running
 `npm run integration` to exit 0 across pass, refusal, dispute, and
 rail-review paths.
 
