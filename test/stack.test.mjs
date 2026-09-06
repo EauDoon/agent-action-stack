@@ -50,7 +50,7 @@ const PROVENANCE = [
   {
     name: "consequence-rail",
     repository: "https://github.com/EauDoon/consequence-rail.git",
-    commit: "64cb304381006c69a03ec375da7b192122b463db",
+    commit: "89811e423a1a41bad3ecb77e18ebf557615219f8",
     origin: "https://github.com/EauDoon/consequence-rail.git",
     detached: true,
     clean: true,
