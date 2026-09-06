@@ -16,6 +16,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   unlinkSync,
@@ -245,6 +246,8 @@ Commands:
   demo    Run decide, act, and prove and persist one run bundle
   export  Print one run bundle as portable JSON (or write it with --out)
   replay  Re-verify an exported bundle offline without rerunning the action
+  runs    List persisted runs newest-first
+  prune   Remove oldest runs beyond --keep (latest stays; --dry-run previews)
 
 Options:
   --response pass|fail     Policy fixture to evaluate (default: pass)
@@ -1013,7 +1016,83 @@ export function readRunBundle(outputRoot, runId) {
   return { manifest, report, stages };
 }
 
+const RUN_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+
+function runsDirectory(outputRoot) {
+  return join(outputRoot, "runs");
+}
+
+/**
+ * List persisted runs newest-first. Entries without a readable manifest
+ * (interrupted writes, stray files) are omitted; export and replay still
+ * fail closed on them when addressed directly.
+ */
+export function listRuns({ outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
+  const dir = runsDirectory(outputRoot);
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+  const runs = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith(".") || !RUN_ID_PATTERN.test(entry.name)) continue;
+    let manifest;
+    try {
+      manifest = JSON.parse(readFileSync(join(dir, entry.name, "manifest.json"), "utf8"));
+    } catch {
+      continue;
+    }
+    if (!manifest || typeof manifest !== "object") continue;
+    const stages = {};
+    for (const name of STAGE_NAMES) stages[name] = manifest.stages?.[name]?.status ?? "unknown";
+    runs.push({
+      run_id: entry.name,
+      created_at: typeof manifest.created_at === "string" ? manifest.created_at : null,
+      exit_code: manifest.exit_code ?? null,
+      stages,
+    });
+  }
+  runs.sort((left, right) => (left.run_id < right.run_id ? 1 : left.run_id > right.run_id ? -1 : 0));
+  return runs;
+}
+
+function readLatestRunId(outputRoot) {
+  try {
+    const pointer = JSON.parse(readFileSync(join(outputRoot, "latest.json"), "utf8"));
+    const runId = pointer?.run_id;
+    return typeof runId === "string" && RUN_ID_PATTERN.test(runId) ? runId : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Remove oldest runs beyond `keep`, newest-first retention. The run the
+ * latest pointer identifies is always kept so exports and downloads never
+ * dangle; dry runs report without deleting. Returns kept/removed run ids.
+ */
+export function pruneRuns({ outputRoot = DEFAULT_PATHS.outputRoot, keep, dryRun = false } = {}) {
+  if (!Number.isInteger(keep) || keep < 1) {
+    throw new UsageError("prune requires --keep <positive integer>");
+  }
+  const runs = [...listRuns({ outputRoot })].reverse();
+  const latest = readLatestRunId(outputRoot);
+  const keepSet = new Set(runs.slice(-keep).map((run) => run.run_id));
+  if (latest !== null && runs.some((run) => run.run_id === latest)) keepSet.add(latest);
+  const removed = [];
+  for (const run of runs) {
+    if (keepSet.has(run.run_id)) continue;
+    removed.push(run.run_id);
+    if (!dryRun) rmSync(join(runsDirectory(outputRoot), run.run_id), { recursive: true, force: true });
+  }
+  return { kept: [...keepSet], removed, latest, dryRun };
+}
+
 /** Export one run bundle as a single portable JSON document. */
+
 export function exportRunBundle(runId, { outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
   return readRunBundle(outputRoot, runId);
 }
@@ -1382,6 +1461,63 @@ function readReplayInput(source, { stdin = process.stdin } = {}) {
   return text;
 }
 
+function runRunsCommand(args, { asJson } = {}) {
+  if (args.some((token) => token !== "--json")) {
+    throw new UsageError(`Unsupported runs option (expected [--json])`);
+  }
+  const runs = listRuns({});
+  if (asJson) {
+    process.stdout.write(`${JSON.stringify({ ok: true, runs }, null, 2)}\n`);
+  } else if (runs.length === 0) {
+    process.stdout.write("no runs yet\n");
+  } else {
+    for (const run of runs) {
+      process.stdout.write(
+        `${run.run_id} exit=${run.exit_code ?? "?"} decide=${run.stages.decide} act=${run.stages.act} prove=${run.stages.prove}\n`,
+      );
+    }
+  }
+  process.exitCode = 0;
+}
+
+function runPruneCommand(args, { asJson } = {}) {
+  let keep = null;
+  let dryRun = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === "--keep") {
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith("-")) throw new UsageError("Missing value for prune option: --keep");
+      if (keep !== null) throw new UsageError("Duplicate prune option: --keep");
+      if (!/^[0-9]+$/.test(value) || Number(value) < 1) throw new UsageError("prune requires --keep <positive integer>");
+      keep = Number(value);
+      index += 1;
+    } else if (token === "--dry-run") {
+      dryRun = true;
+    } else if (token !== "--json") {
+      throw new UsageError(`Unsupported prune option: ${token} (expected --keep <n> [--dry-run] [--json])`);
+    }
+  }
+  if (keep === null) throw new UsageError("Usage: aas prune --keep <positive integer> [--dry-run] [--json]");
+  const result = pruneRuns({ keep, dryRun });
+  if (asJson) {
+    process.stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`);
+  } else if (dryRun) {
+    process.stdout.write(
+      result.removed.length === 0
+        ? `would keep ${result.kept.length} run(s); nothing to remove\n`
+        : `would remove ${result.removed.length} run(s): ${result.removed.join(", ")}\n`,
+    );
+  } else {
+    process.stdout.write(
+      result.removed.length === 0
+        ? `kept ${result.kept.length} run(s); nothing removed\n`
+        : `removed ${result.removed.length} run(s): ${result.removed.join(", ")}\n`,
+    );
+  }
+  process.exitCode = 0;
+}
+
 function printReplayReport(result, asJson) {
   if (asJson) {
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
@@ -1487,6 +1623,17 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   if (isHelpToken(command) || (command === "demo" && demoRequestsHelp(argv.slice(1)))) {
     printHelp();
     process.exitCode = 0;
+    return;
+  }
+  if (command === "runs" || command === "prune") {
+    try {
+      if (command === "runs") runRunsCommand(argv.slice(1), { asJson });
+      else runPruneCommand(argv.slice(1), { asJson });
+    } catch (error) {
+      const usage = error instanceof UsageError;
+      writeCliError(error, { asJson, usage });
+      process.exitCode = usage ? 2 : 1;
+    }
     return;
   }
   if (command === "export" || command === "replay") {
