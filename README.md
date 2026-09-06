@@ -135,6 +135,11 @@ Each invocation writes one atomic bundle under `.out/runs/<run-id>/`:
 `.out/latest.json` is an atomic pointer to the most recent complete bundle. A
 failed or skipped stage cannot leave an older stage artifact looking current.
 
+List runs newest-first with `aas runs`, and remove oldest runs beyond a
+window with `aas prune --keep <n>` (`--dry-run` previews). Pruning never
+deletes the run the latest pointer identifies, and nothing is deleted
+without an explicit `--keep`.
+
 ## Guided local GUI
 
 Run `npm run gui` and open the printed loopback URL. The GUI calls the same

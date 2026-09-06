@@ -34,6 +34,8 @@ import {
   runProve,
   runProveRail,
   selectPython,
+  listRuns,
+  pruneRuns,
   validateRailReview,
   writeAtomicFile,
 } from "../bin/aas.mjs";
@@ -1272,4 +1274,70 @@ test("export and replay CLI validate arguments and missing files", async () => {
   assert.equal(noSource.exitCode, 2);
   const extra = await captureMain(["replay", "a", "b"]);
   assert.equal(extra.exitCode, 2);
+});
+
+async function makeRuns(outputRoot, count) {
+  const ids = [];
+  for (let index = 0; index < count; index += 1) {
+    const runId = `2026-09-06T050000000Z-run${String(index).padStart(2, "0")}`;
+    const result = await runDemo(["--response", "pass"], stubOptions(outputRoot, { runId }));
+    assert.equal(result.exitCode, 0);
+    ids.push(runId);
+  }
+  return ids;
+}
+
+test("runs lists persisted runs newest-first", async () => {
+  const outputRoot = tempRoot();
+  assert.deepEqual(listRuns({ outputRoot }), []);
+  const ids = await makeRuns(outputRoot, 3);
+  const listed = listRuns({ outputRoot });
+  assert.deepEqual(listed.map((run) => run.run_id), [...ids].reverse());
+  assert.equal(listed[0].stages.decide, "passed");
+  assert.equal(listed[0].exit_code, 0);
+});
+
+test("prune keeps the newest runs and never the latest pointer target", async () => {
+  const outputRoot = tempRoot();
+  const ids = await makeRuns(outputRoot, 5);
+  const preview = pruneRuns({ outputRoot, keep: 2, dryRun: true });
+  assert.deepEqual(preview.removed.sort(), [ids[0], ids[1], ids[2]].sort());
+  assert.equal(listRuns({ outputRoot }).length, 5);
+  const done = pruneRuns({ outputRoot, keep: 2 });
+  assert.deepEqual(done.removed.sort(), [ids[0], ids[1], ids[2]].sort());
+  assert.deepEqual(listRuns({ outputRoot }).map((run) => run.run_id).sort(), [ids[3], ids[4]].sort());
+  const exported = exportRunBundle(ids[4], { outputRoot });
+  assert.equal(exported.report.run_id, ids[4]);
+});
+
+test("prune protects the latest pointer target beyond the keep window", async () => {
+  const outputRoot = tempRoot();
+  const ids = await makeRuns(outputRoot, 3);
+  writeFileSync(join(outputRoot, "latest.json"), `${JSON.stringify({ run_id: ids[0], manifest: `runs/${ids[0]}/manifest.json` })}\n`);
+  const done = pruneRuns({ outputRoot, keep: 1 });
+  assert.deepEqual(done.removed, [ids[1]]);
+  assert.deepEqual(listRuns({ outputRoot }).map((run) => run.run_id).sort(), [ids[0], ids[2]].sort());
+});
+
+test("prune validates input and handles empty stores", async () => {
+  const outputRoot = tempRoot();
+  assert.throws(() => pruneRuns({ outputRoot }), /positive integer/);
+  assert.throws(() => pruneRuns({ outputRoot, keep: 0 }), /positive integer/);
+  assert.throws(() => pruneRuns({ outputRoot, keep: -2 }), /positive integer/);
+  assert.throws(() => pruneRuns({ outputRoot, keep: 1.5 }), /positive integer/);
+  assert.deepEqual(pruneRuns({ outputRoot, keep: 5 }), { kept: [], removed: [], latest: null, dryRun: false });
+});
+
+test("runs and prune CLI commands validate arguments", async () => {
+  const listed = await captureMain(["runs"]);
+  assert.equal(listed.exitCode, 0);
+  const junk = await captureMain(["runs", "--bogus"]);
+  assert.equal(junk.exitCode, 2);
+  const missing = await captureMain(["prune"]);
+  assert.equal(missing.exitCode, 2);
+  assert.match(missing.stderr, /Usage: aas prune/);
+  const zero = await captureMain(["prune", "--keep", "0"]);
+  assert.equal(zero.exitCode, 2);
+  const words = await captureMain(["prune", "--keep", "many"]);
+  assert.equal(words.exitCode, 2);
 });
