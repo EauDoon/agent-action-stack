@@ -178,6 +178,25 @@ each merge were verified with fresh local clones running
 `npm run integration` to exit 0; the replay round-trip and the GUI rail
 path were additionally exercised live against real child processes.
 
+## Integration evidence, review-workspace batch (GUI #26, replay #27, example #28, settled-review #30)
+
+Component pins unchanged (`16b2faa7` / `89811e4` / `e526c4c`); no contract
+changes. The GUI gained a prove-mode selector, a readable summary, a
+bindings panel with recomputed digests, run-id isolation, and export
+parity with the CLI. Portable `export`/`replay` reproduce verification
+offline with six explicit checks. The runnable integrator example covers
+pass and refusal modes. The integration proof additionally covers forced
+review of a settled act.
+
+Unit-test coverage: stack suite 81/81. Full-stack coverage: `npm run
+integration` plus the integrator example in both modes, on Ubuntu and
+Windows with Node.js 22.12.0 and 24 and Python 3.13. Post-merge mains
+were verified with fresh local clones running `npm run integration` to
+exit 0; the replay round-trip, the GUI rail path, and the settled-review
+path were exercised live against real child processes. No browser
+harness exists in this repository; DOM event dispatch is covered through
+a stub-DOM test of the real page script.
+
 ## Publication boundary
 
 This document is a readiness checklist, not a publication approval. A separate
