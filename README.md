@@ -244,6 +244,10 @@ or unreadable cases. **Inspect left case** loads a saved report and its bindings
 a separate panel and enables an identity-checked download. Inspection does not
 verify source truth. Use imported replay to re-verify synthetic evidence.
 
+GUI runs, Python discovery, and replay verification execute in a worker thread,
+so synchronous component commands leave HTTP health checks and admission
+responsive. Existing child timeouts and output caps remain enforced. The server
+retains admission until the worker exits, including after a client disconnect.
 Only one run or replay upload is admitted at a time per GUI server. Busy callers
 receive HTTP 503 with Retry-After; retry after the current operation finishes.
 Ambiguous duplicate run or comparison options are rejected. File changes clear

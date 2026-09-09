@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** Lightweight local GUI for the Agent Action Stack orchestrator. */
 import { createServer } from "node:http";
+import { runGuiTask } from "./aas-gui-worker.mjs";
 import { pathToFileURL } from "node:url";
 import {
   CHILD_JSON_LIMIT,
@@ -14,7 +15,6 @@ import {
   replayBundle,
   resolveGuiPort,
   runCapture,
-  runDemo,
   selectPython,
 } from "./aas.mjs";
 import { assertFullStackNodeVersion } from "../scripts/bootstrap.mjs";
@@ -521,7 +521,7 @@ function requestBoundaryFailure(request) {
 }
 
 export function createGuiServer({
-  runDemoFn = runDemo,
+  runDemoFn,
   outputRoot = DEFAULT_PATHS.outputRoot,
   runOptions = {},
   replayRunner,
@@ -596,20 +596,21 @@ export function createGuiServer({
           sendJson(response, 500, { error: error.message });
           return;
         }
-        let python = runOptions.python ?? null;
-        if (python === null) {
-          try {
-            python = selectPython();
-          } catch (error) {
-            sendJson(response, 500, { error: error.message });
-            return;
-          }
-        }
-        const result = await runDemoFn(args, {
+        const options = {
           ...runOptions,
-          ...(python ? { python } : {}),
           paths: { ...(runOptions.paths ?? {}), outputRoot },
-        });
+        };
+        // Function injection remains available for local unit tests. The default
+        // production path moves Python discovery and every component to a worker.
+        let result;
+        try {
+          result = runDemoFn
+            ? await runDemoFn(args, { ...options, python: options.python ?? selectPython() })
+            : await runGuiTask({ operation: "run", args, options });
+        } catch (error) {
+          sendJson(response, 500, { error: error.message });
+          return;
+        }
         sendJson(response, result.exitCode === 0 ? 200 : 500, {
           run_id: result.report.run_id,
           exit_code: result.exitCode,
@@ -643,10 +644,10 @@ export function createGuiServer({
         }
         let result;
         try {
-          result = replayBundle(imported, {
-            ...(depsDir === undefined ? {} : { depsDir }),
-            ...(replayRunner === undefined ? {} : { runner: replayRunner }),
-          });
+          const options = { ...(depsDir === undefined ? {} : { depsDir }) };
+          result = replayRunner
+            ? replayBundle(imported, { ...options, runner: replayRunner })
+            : await runGuiTask({ operation: "replay", bundle: imported, options });
         } catch (error) {
           sendJson(response, 500, { error: error.message });
           return;

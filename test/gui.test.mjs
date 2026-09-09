@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 import { createHash } from "node:crypto";
 import { request } from "node:http";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -787,4 +789,102 @@ test("comparison detects domain changes and refreshed missing selections clear s
   await document.elements['load-history'].listeners.click();
   assert.equal(document.elements['left-case'].value,'');
   assert.equal(document.elements['saved-download'].href,undefined);
+});
+
+// These cases use the default GUI worker and actual runCapture/spawnSync child
+// processes. Promise-only runDemoFn mocks cannot detect a blocked HTTP loop.
+function blockingChild(started, release, output) {
+  return "const fs=require('node:fs');fs.writeFileSync("+JSON.stringify(started)+",'started');"+
+    "const until=Date.now()+8000;while(!fs.existsSync("+JSON.stringify(release)+")&&Date.now()<until){Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,20);}"+
+    "process.stdout.write("+JSON.stringify(JSON.stringify(output))+");";
+}
+async function awaitStarted(path) {
+  for(let attempt=0;attempt<200&&!existsSync(path);attempt++) await delay(25);
+  assert.ok(existsSync(path), 'blocking component started');
+}
+async function assertResponsiveAndBusy(server) {
+  const headers={origin:'http://127.0.0.1:'+server.address().port};
+  const requests=await Promise.all([
+    requestServer(server,'/api/health'),
+    requestServer(server,'/api/run',{method:'POST',headers}),
+    requestServer(server,'/api/replay',{method:'POST',headers}),
+  ]);
+  assert.deepEqual(requests.map((entry)=>entry.status),[200,503,503]);
+}
+
+test('production GUI worker keeps HTTP responsive during a synchronous decide child', {timeout:20000}, async()=>{
+  const root=mkdtempSync(join(tmpdir(),'aas-worker-run-'));
+  const deps=join(root,'deps');
+  const components=JSON.parse(readFileSync(new URL('../stack-lock.json',import.meta.url),'utf8')).components;
+  for(const component of components){
+    const dir=join(deps,component.name); mkdirSync(dir,{recursive:true});
+    for(const file of [...component.expected_entrypoints,...(component.post_build_entrypoints??[])]){
+      const path=join(dir,file);mkdirSync(join(path,'..'),{recursive:true});writeFileSync(path,'fixture');
+    }
+    const git=(...args)=>execFileSync('git',['-c','user.name=Fixture','-c','user.email=fixture@example.invalid',...args],{cwd:dir,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
+    git('init','-q');git('remote','add','origin',component.repository);git('add','.');git('commit','-qm','Synthetic component fixture');
+    component.commit=git('rev-parse','HEAD');git('checkout','--detach','-q');
+  }
+  const lock=join(root,'lock.json');writeFileSync(lock,JSON.stringify({schema_version:'agent-action-stack.lock/v1',components}));
+  const started=join(root,'started');const release=join(root,'release');const child=join(root,'decide.cjs');
+  writeFileSync(child,blockingChild(started,release,{passed:false}));
+  const options={paths:{deps,lock},python:{bin:process.execPath,prefix:[child]},childTimeoutMs:10000};
+  const server=createGuiServer({outputRoot:join(root,'out'),runOptions:options});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const headers={origin:'http://127.0.0.1:'+server.address().port};
+  let pending;
+  try {
+    pending=requestServer(server,'/api/run',{method:'POST',headers});
+    await awaitStarted(started);await assertResponsiveAndBusy(server);
+    writeFileSync(release,'release');
+    const first=await pending;assert.equal(first.status,200);
+    assert.equal(JSON.parse(first.body).report.stages.decide.status,'failed');
+    // A real child timeout retains the existing diagnostic and releases admission.
+    writeFileSync(child,'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,5000)');
+    options.childTimeoutMs=100;
+    const failed=await requestServer(server,'/api/run',{method:'POST',headers});
+    assert.equal(failed.status,500);
+    assert.equal(JSON.parse(failed.body).report.stages.decide.code,'AAS_CHILD_TIMEOUT');
+    options.childTimeoutMs=10000;
+    writeFileSync(child,"process.stdout.write('x'.repeat(2*1024*1024))");
+    const oversized=await requestServer(server,'/api/run',{method:'POST',headers});
+    assert.equal(oversized.status,500);
+    assert.equal(JSON.parse(oversized.body).report.stages.decide.status,'error');
+    assert.ok(oversized.body.length<10000,'bounded diagnostic response');
+    const originalLock=options.paths.lock;options.paths.lock=join(root,'missing-lock');
+    const workerFailure=await requestServer(server,'/api/run',{method:'POST',headers});
+    assert.equal(workerFailure.status,500);assert.match(JSON.parse(workerFailure.body).error,/lock/i);
+    options.paths.lock=originalLock;
+    writeFileSync(child,'process.stdout.write(JSON.stringify({passed:false}))');
+    assert.equal((await requestServer(server,'/api/run',{method:'POST',headers})).status,200);
+    const disconnectedStarted=join(root,'disconnected-started'),disconnectedRelease=join(root,'disconnected-release');
+    writeFileSync(child,blockingChild(disconnectedStarted,disconnectedRelease,{passed:false}));
+    const disconnected=request({hostname:'127.0.0.1',port:server.address().port,path:'/api/run',method:'POST',headers});
+    disconnected.on('error',()=>{});disconnected.end();await awaitStarted(disconnectedStarted);disconnected.destroy();
+    try {await assertResponsiveAndBusy(server);} finally {writeFileSync(disconnectedRelease,'release');}
+    let available;
+    for(let attempt=0;attempt<100;attempt++){
+      available=await requestServer(server,'/api/run?domain=invalid',{method:'POST',headers});
+      if(available.status!==503) break;await delay(25);
+    }
+    assert.equal(available.status,400,'disconnected work releases only after completion');
+  } finally {writeFileSync(release,'release');if(pending) await pending;await new Promise(resolve=>server.close(resolve));}
+});
+
+test('production GUI replay worker rejects overlapping work while its verifier blocks', {timeout:15000}, async()=>{
+  const root=mkdtempSync(join(tmpdir(),'aas-worker-replay-'));
+  const started=join(root,'started'),release=join(root,'release');
+  mkdirSync(join(root,'consequence-rail','cmd'),{recursive:true});mkdirSync(join(root,'mandatebound','dist'),{recursive:true});
+  writeFileSync(join(root,'consequence-rail','cmd','crctl.js'),blockingChild(started,release,{valid:false}));
+  writeFileSync(join(root,'mandatebound','dist','cli.js'),'throw new Error("must not reach review")');
+  const rail={action:{action_id:'synthetic'}};
+  const bundle={report:{run_id:'synthetic'},stages:{act:{action_id:'synthetic',rail_bundle:rail},prove:{result:{verdict:'recorded',actionId:'synthetic',evidenceDigest:'sha256:'+createHash('sha256').update(JSON.stringify(rail)).digest('hex')}}}};
+  const server=createGuiServer({depsDir:root});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  let pending;
+  try {
+    pending=replayPost(server,JSON.stringify(bundle));await awaitStarted(started);
+    await assertResponsiveAndBusy(server);writeFileSync(release,'release');
+    assert.equal((await pending).status,422);
+    assert.equal((await replayPost(server,JSON.stringify({stages:{}}))).status,422);
+  } finally {writeFileSync(release,'release');if(pending) await pending;await new Promise(resolve=>server.close(resolve));}
 });
