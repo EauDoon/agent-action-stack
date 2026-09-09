@@ -411,7 +411,10 @@ runButton.addEventListener('click',async()=>{
     validateRunBundle(bundle,runId);
   } catch(error) { if(token!==latestToken) return; bindings.textContent='Bundle unavailable: '+error.message; runButton.disabled=false; return; }
   if(token!==latestToken) return;
-  try { bindings.innerHTML=await bindingsModel(bundle); } catch(error) { bindings.innerHTML='<p class="error">Bindings unavailable.</p>'; }
+  let bindingHtml;
+  try { bindingHtml=await bindingsModel(bundle); } catch(error) { bindingHtml='<p class="error">Bindings unavailable.</p>'; }
+  if(token!==latestToken) return;
+  bindings.innerHTML=bindingHtml;
   if(token!==latestToken) return;
   download.href='/api/bundle/'+encodeURIComponent(runId);
   download.style.display='inline-block';
@@ -453,9 +456,11 @@ async function refreshHistory(token){
   leftCase.innerHTML='<option value="">(select a case)</option>'+options;
   rightCase.innerHTML='<option value="">(select a case)</option>'+options;
   if(cases.some(function(entry){return entry.run_id===leftValue;})) leftCase.value=leftValue;
+  else { leftCase.value=""; clearSaved(); clearComparison(); }
   if(cases.some(function(entry){return entry.run_id===rightValue;})) rightCase.value=rightValue;
+  else { rightCase.value=""; clearComparison(); }
 }
-loadHistoryButton.addEventListener('click',function(){ refreshHistory(++historyToken); });
+loadHistoryButton.addEventListener('click',function(){ return refreshHistory(++historyToken); });
 compareButton.addEventListener('click',async()=>{
   const token=++compareToken;
   compareButton.disabled=true;

@@ -1222,6 +1222,7 @@ const COMPARISON_NOTES = [
 ];
 
 const COMPARED_FIELDS = [
+  "domain",
   "flow",
   "stages",
   "policy_id",

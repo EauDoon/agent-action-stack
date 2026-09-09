@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { scenarioPreset, filterHistory, bindingsModel, compareModel, createGuiServer, historyModel, renderPage, replayHttpStatus, replayResultModel, summaryModel } from "../bin/aas-gui.mjs";
-import { exportRunBundle, runDemo, selectPython } from "../bin/aas.mjs";
+import { compareRuns, exportRunBundle, runDemo, selectPython } from "../bin/aas.mjs";
 
 const provenance = [
   { name: "constitutional-agent-testbench", repository: "https://github.com/EauDoon/constitutional-agent-testbench.git", commit: "a7a51907eaaab68a52b66edef28b3ee0fcb3ff97", detached: true, clean: true, entrypoints: [] },
@@ -729,7 +729,7 @@ test("import file changes release stale requests and reject oversized files befo
 
 test("history refresh does not strand comparisons and selection changes invalidate results", async () => {
   const document = stubDocument(); let complete;
-  const fetch = async (url) => url.startsWith('/api/compare') ? new Promise((resolve) => { complete = resolve; }) : { json: async () => ({ cases: [] }) };
+  const fetch = async (url) => url.startsWith('/api/compare') ? new Promise((resolve) => { complete = resolve; }) : { json: async () => ({ cases: [{run_id:'pass'}] }) };
   new Function('document', 'fetch', 'crypto', pageScript())(document, fetch, globalThis.crypto);
   const pending = document.elements.compare.listeners.click();
   await document.elements['load-history'].listeners.click();
@@ -773,4 +773,18 @@ test("scenario presets prepare explicit synthetic workflows without calling exec
   assert.equal(scenarioPreset('__proto__'),null);
   assert.equal(scenarioPreset('refusal').response,'fail');
   assert.equal(scenarioPreset('review').dispute,true);
+});
+
+test("comparison detects domain changes and refreshed missing selections clear saved exports", async () => {
+  const outputRoot=mkdtempSync(join(tmpdir(),'aas-domain-comparison-'));
+  const report={flow:'decide',stages:{},component_provenance:[]};
+  writeCase(outputRoot,'left',{report:{...report,domain:'refund'},prove:{}});
+  writeCase(outputRoot,'right',{report:{...report,domain:'inventory'},prove:{}});
+  assert.ok(compareRuns('left','right',{outputRoot}).differences.some((entry)=>entry.field==='domain'));
+  const document=stubDocument();
+  new Function('document','fetch','crypto',pageScript())(document,async()=>({json:async()=>({cases:[]})}),globalThis.crypto);
+  document.elements['saved-download'].href='/api/bundle/removed';
+  await document.elements['load-history'].listeners.click();
+  assert.equal(document.elements['left-case'].value,'');
+  assert.equal(document.elements['saved-download'].href,undefined);
 });
