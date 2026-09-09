@@ -388,6 +388,10 @@ compareButton.addEventListener('click',async()=>{
 </script></body></html>`;
 }
 
+export function hasOnlySingleOptions(params, allowed) {
+  return [...params.keys()].every((key) => allowed.has(key) && params.getAll(key).length === 1);
+}
+
 function sendJson(response, status, body, headers = {}) {
   response.writeHead(status, {
     "cache-control": "no-store",
@@ -462,7 +466,7 @@ export function createGuiServer({
       }
       if (request.method === "POST" && url.pathname === "/api/run") {
         const allowedKeys = new Set(["response", "fault", "dispute", "prove", "domain"]);
-        if ([...url.searchParams.keys()].some((key) => !allowedKeys.has(key))) {
+        if (!hasOnlySingleOptions(url.searchParams, allowedKeys)) {
           sendJson(response, 400, { error: "Invalid options" });
           return;
         }
@@ -568,7 +572,7 @@ export function createGuiServer({
         const left = url.searchParams.get("a");
         const right = url.searchParams.get("b");
         const valid = (value) => isValidRunId(value);
-        if (!valid(left) || !valid(right)) {
+        if (!hasOnlySingleOptions(url.searchParams, new Set(["a", "b"])) || !valid(left) || !valid(right)) {
           sendJson(response, 400, { error: "Compare requires two valid run ids." });
           return;
         }

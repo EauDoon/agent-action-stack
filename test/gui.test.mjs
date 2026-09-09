@@ -658,3 +658,18 @@ test("GUI run accepts a domain and rejects an unknown one", async () => {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 });
+
+test("GUI rejects duplicate and unknown options before invoking a run", async () => {
+  let calls = 0;
+  const server = createGuiServer({ runDemoFn: () => { calls++; throw new Error("must not run"); } });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    for (const query of ["domain=refund&domain=inventory", "response=pass&response=fail", "fault=none&fault=none", "dispute=1&dispute=1", "prove=rail&prove=simulate", "account=live"]) {
+      const res = await requestServer(server, "/api/run?" + query, { method: "POST", headers: { origin: "http://127.0.0.1:" + server.address().port } });
+      assert.equal(res.status, 400, query);
+    }
+    assert.equal(calls, 0);
+    const compare = await requestServer(server, "/api/compare?a=x&a=y&b=z");
+    assert.equal(compare.status, 400);
+  } finally { await new Promise((resolve) => server.close(resolve)); }
+});
