@@ -10,7 +10,7 @@ import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { validatedRunSettings, scenarioPreset, filterHistory, bindingsModel, compareModel, createGuiServer, historyModel, renderPage, replayHttpStatus, replayResultModel, summaryModel } from "../bin/aas-gui.mjs";
+import { stageDetailsModel, validatedRunSettings, scenarioPreset, filterHistory, bindingsModel, compareModel, createGuiServer, historyModel, renderPage, replayHttpStatus, replayResultModel, summaryModel } from "../bin/aas-gui.mjs";
 import { compareRuns, exportRunBundle, runDemo, selectPython } from "../bin/aas.mjs";
 
 const provenance = [
@@ -299,7 +299,7 @@ function pageScript() {
 
 function stubDocument() {
   const elements = {};
-  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count", "inspect-case", "saved-download", "saved-status", "saved-summary", "saved-bindings", "scenario", "apply-scenario", "scenario-note", "restore-settings", "older-history", "history-page-status", "saved-case-id", "lookup-case", "saved-link", "replay-saved", "saved-review-status", "saved-review-result"]) {
+  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count", "inspect-case", "saved-download", "saved-status", "saved-summary", "saved-bindings", "scenario", "apply-scenario", "scenario-note", "restore-settings", "older-history", "history-page-status", "saved-case-id", "lookup-case", "saved-link", "replay-saved", "saved-review-status", "saved-review-result", "saved-artifacts"]) {
     elements[id] = { value: "pass", checked: false, disabled: false, textContent: "", innerHTML: "", href: null, style: {}, listeners: {},
       addEventListener(name, fn) { const prior = this.listeners[name]; this.listeners[name] = prior ? (...args) => { prior(...args); return fn(...args); } : fn; },
       removeAttribute(name) { delete this[name]; } };
@@ -979,4 +979,10 @@ test('saved verification rereads the selected case through a worker without exec
     assert.equal((await requestServer(server,'/api/replay-saved/missing',{method:'POST',headers})).status,404);
     assert.equal((await requestServer(server,'/api/replay-saved/saved-refusal',{method:'POST'})).status,400);
   } finally {await new Promise(resolve=>server.close(resolve));}
+});
+
+test('stage inspection exposes skipped artifacts and diagnostics without rendering untrusted markup',()=>{
+  const html=stageDetailsModel({manifest:{stages:{decide:{status:'error',code:'AAS_CHILD_TIMEOUT',stderr:'<script>bad</script>'},act:{status:'skipped'}}},stages:{decide:{message:'<img src=x>'}}});
+  assert.match(html,/AAS_CHILD_TIMEOUT/);assert.match(html,/No persisted artifact/);assert.match(html,/act: skipped/);
+  assert.doesNotMatch(html,/<script>|<img src=x>/);assert.match(html,/&lt;img/);assert.match(html,/not proof of source truth/);
 });

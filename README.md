@@ -266,3 +266,5 @@ In the workbench, **Load older cases** appends the next page while keeping exist
 **Inspect by ID** reaches a saved case outside loaded history. A successful inspection provides a local fragment bookmark. Opening that bookmark pre-fills the ID only; it does not execute a run or verification. Missing and structurally invalid cases produce distinct HTTP 404 and 422 responses.
 
 **Verify saved case** reopens the selected persisted case on the server and re-verifies its evidence in a worker. It uses the same origin and admission checks as other verification requests, never invokes action execution, and displays the saved-case result separately from imported evidence.
+
+Saved inspection includes expandable decide, act, and prove artifacts with persisted status, reason, diagnostic code, and captured stderr where available. Skipped or absent artifacts are labeled explicitly. JSON and diagnostics remain escaped text, and artifact inspection is separate from verification.

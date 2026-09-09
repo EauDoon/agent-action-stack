@@ -261,6 +261,18 @@ export function validateRunBundle(bundle, runId) {
 
 export function isReviewRunId(value) { return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(value); }
 
+export function stageDetailsModel(bundle) {
+  return '<h3>Persisted stage artifacts</h3>' + ["decide", "act", "prove"].map((name) => {
+    const stage = bundle?.manifest?.stages?.[name];
+    const artifact = bundle?.stages?.[name];
+    const diagnostics = [stage?.reason, stage?.code, stage?.stderr].filter((value) => typeof value === "string" && value.length > 0).join(" | ");
+    return '<details><summary>' + escapeHtml(name + ': ' + (stage?.status ?? "unknown")) + '</summary>'
+      + (diagnostics ? '<p>' + escapeHtml(diagnostics) + '</p>' : '')
+      + (artifact === undefined ? '<p>No persisted artifact for this stage.</p>' : '<pre>' + escapeHtml(JSON.stringify(artifact, null, 2)) + '</pre>')
+      + '</details>';
+  }).join('') + '<p>Persisted content is evidence to inspect, not proof of source truth. Use Verify saved case for receipt checks.</p>';
+}
+
 export function validatedRunSettings(report) {
   const value = report?.requested_options;
   if (!value || !["refund", "inventory"].includes(value.domain)
@@ -280,7 +292,7 @@ export function scenarioPreset(name) {
 }
 
 export function renderPage() {
-  const embedded = [isReviewRunId, validatedRunSettings, scenarioPreset, filterHistory, validateRunBundle, escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, compareModel, historyModel, renderCaseOptions, sha256HexText]
+  const embedded = [stageDetailsModel, isReviewRunId, validatedRunSettings, scenarioPreset, filterHistory, validateRunBundle, escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, compareModel, historyModel, renderCaseOptions, sha256HexText]
     .map((fn) => fn.toString()).join("\n");
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -322,7 +334,7 @@ export function renderPage() {
 <button id="restore-settings" disabled>Use saved settings</button>
 <button id="replay-saved" disabled>Verify saved case</button><div id="saved-review-status" role="status"></div><div id="saved-review-result"></div>
 <a id="saved-download" class="download" download>Download selected saved case</a>
-<div id="saved-status" role="status" aria-live="polite"></div><div id="saved-summary"></div><div id="saved-bindings"></div>
+<div id="saved-status" role="status" aria-live="polite"></div><div id="saved-summary"></div><div id="saved-bindings"></div><div id="saved-artifacts"></div>
 <div id="history-list"></div>
 <div id="compare-status" role="status" aria-live="polite"></div>
 <div id="compare-result"></div></div>
@@ -385,7 +397,7 @@ restoreButton.addEventListener("click",()=>{
 const inspectButton=document.getElementById('inspect-case');
 const savedDownload=document.getElementById('saved-download');
 const savedStatus=document.getElementById('saved-status');
-function clearSaved(){ savedToken++; savedBundle=null; restoreButton.disabled=true; savedReplayButton.disabled=true; savedReviewStatus.textContent=""; savedReviewResult.innerHTML=""; savedLink.style.display="none"; savedLink.removeAttribute("href"); inspectButton.disabled=false; savedDownload.style.display='none'; savedDownload.removeAttribute('href'); document.getElementById('saved-summary').innerHTML=''; document.getElementById('saved-bindings').innerHTML=''; savedStatus.textContent=''; }
+function clearSaved(){ savedToken++; savedBundle=null; restoreButton.disabled=true; savedReplayButton.disabled=true; savedReviewStatus.textContent=""; savedReviewResult.innerHTML=""; savedLink.style.display="none"; savedLink.removeAttribute("href"); inspectButton.disabled=false; savedDownload.style.display='none'; savedDownload.removeAttribute('href'); document.getElementById('saved-summary').innerHTML=''; document.getElementById('saved-bindings').innerHTML=''; document.getElementById('saved-artifacts').innerHTML=''; savedStatus.textContent=''; }
 leftCase.addEventListener('change',clearSaved);
 async function inspectSaved(runId){
   clearSaved();
@@ -404,6 +416,7 @@ async function inspectSaved(runId){
     savedIdInput.value=runId; savedLink.href='#case='+encodeURIComponent(runId); savedLink.style.display='inline-block';
     document.getElementById('saved-summary').innerHTML=summaryModel(bundle.report);
     document.getElementById('saved-bindings').innerHTML=html;
+    document.getElementById('saved-artifacts').innerHTML=stageDetailsModel(bundle);
     savedDownload.href='/api/bundle/'+encodeURIComponent(runId);
     savedDownload.style.display='inline-block';
     savedStatus.textContent='Saved case '+runId+'. Inspection only; use imported replay for verification.';
