@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_PATHS, exportRunBundle, isValidRunId, summarizeRun } from "./aas.mjs";
+import { DEFAULT_PATHS, UsageError, exportRunBundle, isValidRunId, summarizeRun } from "./aas.mjs";
 
 export function listCasePage({ outputRoot = DEFAULT_PATHS.outputRoot, before = null, limit = 25 } = {}) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error("History limit must be an integer from 1 to 50.");
@@ -76,4 +76,22 @@ export function renderCaseMarkdown(review) {
   lines.push('', '## Limits', '');
   for(const limit of review.limits??[]) lines.push('- '+markdownText(limit));
   return lines.join('\n')+'\n';
+}
+
+export function parseInspectArgs(args) {
+  let runId=null, outputRoot=DEFAULT_PATHS.outputRoot, format=null, seenRoot=false;
+  for(let index=0;index<args.length;index++) {
+    const token=args[index];
+    if(token==='--root') {
+      if(seenRoot || !args[index+1] || args[index+1].startsWith('--')) throw new UsageError('inspect requires one output root path.');
+      seenRoot=true;outputRoot=args[++index];
+    } else if(token==='--json'||token==='--markdown') {
+      if(format!==null) throw new UsageError('Choose one inspect output format.');
+      format=token.slice(2);
+    } else if(token.startsWith('-') || runId!==null || !isValidRunId(token) || token.length>200) {
+      throw new UsageError('Usage: aas inspect <run-id> [--root output-dir] [--json|--markdown]');
+    } else runId=token;
+  }
+  if(runId===null) throw new UsageError('inspect requires a saved run ID.');
+  return {runId,outputRoot,format:format??'markdown'};
 }

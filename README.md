@@ -270,3 +270,5 @@ In the workbench, **Load older cases** appends the next page while keeping exist
 Saved inspection includes expandable decide, act, and prove artifacts with persisted status, reason, diagnostic code, and captured stderr where available. Skipped or absent artifacts are labeled explicitly. JSON and diagnostics remain escaped text, and artifact inspection is separate from verification.
 
 **Download case review** creates a Markdown handoff with case identity, stage records, component revisions, recorded and recomputed evidence digests, and explicit verification limits. It summarizes persisted data and does not certify receipts, source truth, legal effect, or real-world execution.
+
+For offline handoffs, `aas inspect <run-id> --root <output-directory> --markdown` prints the same readable case review; `--json` emits its versioned machine-readable model. The default root is this checkout’s `.out` and the default format is Markdown. This command only reads saved files, needs no component bootstrap, and returns exit 2 for invalid arguments or exit 1 for unreadable cases.

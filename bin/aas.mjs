@@ -242,6 +242,7 @@ Usage:
   aas demo [--response pass|fail] [--fault none|duplicate] [--dispute] [--prove simulate|rail] [--domain refund|inventory] [--json]
   aas export <run-id> [--out <path>]
   aas replay <bundle-file|-> [--json]
+  aas inspect <run-id> [--root output-dir] [--json|--markdown]
   aas cases [--before run-id] [--limit 1..50] [--json]
   aas compare <run-id> <run-id> [--json]
   aas help
@@ -1919,6 +1920,19 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   if (isHelpToken(command) || (command === "demo" && demoRequestsHelp(argv.slice(1)))) {
     printHelp();
     process.exitCode = 0;
+    return;
+  }
+  if (command === "inspect") {
+    try {
+      const { parseInspectArgs, inspectCase, renderCaseMarkdown } = await import("./case-review.mjs");
+      const { runId, outputRoot, format } = parseInspectArgs(argv.slice(1));
+      const review = inspectCase(runId, { outputRoot });
+      process.stdout.write(format === "json" ? JSON.stringify({ ok: true, ...review }, null, 2) + "\n" : renderCaseMarkdown(review));
+      process.exitCode = 0;
+    } catch (error) {
+      const usage = error instanceof UsageError;
+      writeCliError(error, { asJson, usage }); process.exitCode = usage ? 2 : 1;
+    }
     return;
   }
   if (command === "runs" || command === "cases" || command === "compare" || command === "prune") {

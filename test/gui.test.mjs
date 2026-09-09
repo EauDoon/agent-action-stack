@@ -1,5 +1,6 @@
-import { inspectCase, renderCaseMarkdown, listCasePage, parseCasePageArgs } from "../bin/case-review.mjs";
+import { parseInspectArgs, inspectCase, renderCaseMarkdown, listCasePage, parseCasePageArgs } from "../bin/case-review.mjs";
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { runGuiTask } from "../bin/aas-gui-worker.mjs";
 import { execFileSync } from "node:child_process";
@@ -996,4 +997,16 @@ test('case review downloads readable evidence limits and escapes injected Markdo
   const server=createGuiServer({outputRoot});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   try {const res=await requestServer(server,'/api/review/review-case');assert.equal(res.status,200);assert.match(res.headers['content-disposition'],/case-review-review-case.md/);assert.match(res.body,/decide: failed/);}
   finally {await new Promise(resolve=>server.close(resolve));}
+});
+
+test('standalone inspect CLI produces the same review model and rejects ambiguous output formats',async()=>{
+  const outputRoot=mkdtempSync(join(tmpdir(),'aas-inspect-cli-'));
+  await runDemo([],{paths:{outputRoot},runId:'cli-review',componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false},status:0})});
+  const cli=new URL('../bin/aas.mjs',import.meta.url);
+  const actual=JSON.parse(execFileSync(process.execPath,[fileURLToPath(cli),'inspect','cli-review','--root',outputRoot,'--json'],{encoding:'utf8'}));
+  assert.equal(actual.schema_version,'agent-action-stack.case-review/v1');assert.equal(actual.run_id,'cli-review');assert.equal(actual.digest_matches,null);
+  assert.throws(()=>parseInspectArgs(['cli-review','--json','--markdown']),/one inspect/);
+  assert.throws(()=>parseInspectArgs(['../escape']),/Usage/);
+  const markdown=execFileSync(process.execPath,[fileURLToPath(cli),'inspect','cli-review','--root',outputRoot],{encoding:'utf8'});
+  assert.match(markdown,/# Saved case review/);assert.match(markdown,/no receipt verification/);
 });
