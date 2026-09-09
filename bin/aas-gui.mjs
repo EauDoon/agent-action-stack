@@ -291,6 +291,9 @@ export function renderPage() {
 <label>Left <select id="left-case"><option value="">(select a case)</option></select></label>
 <label>Right <select id="right-case"><option value="">(select a case)</option></select></label>
 <button id="compare">Compare selected cases</button>
+<button id="inspect-case">Inspect left case</button>
+<a id="saved-download" class="download" download>Download selected saved case</a>
+<div id="saved-status"></div><div id="saved-summary"></div><div id="saved-bindings"></div>
 <div id="history-list"></div>
 <div id="compare-status"></div>
 <div id="compare-result"></div></div>
@@ -312,6 +315,34 @@ const loadHistoryButton=document.getElementById('load-history');
 const compareButton=document.getElementById('compare');
 const compareStatus=document.getElementById('compare-status');
 const compareResult=document.getElementById('compare-result');
+let savedToken=0;
+const inspectButton=document.getElementById('inspect-case');
+const savedDownload=document.getElementById('saved-download');
+const savedStatus=document.getElementById('saved-status');
+function clearSaved(){ savedToken++; inspectButton.disabled=false; savedDownload.style.display='none'; savedDownload.removeAttribute('href'); document.getElementById('saved-summary').innerHTML=''; document.getElementById('saved-bindings').innerHTML=''; savedStatus.textContent=''; }
+leftCase.addEventListener('change',clearSaved);
+inspectButton.addEventListener('click',async()=>{
+  clearSaved();
+  const token=savedToken;
+  const runId=leftCase.value;
+  if(!runId){ savedStatus.textContent='Select a saved case on the left first.'; return; }
+  inspectButton.disabled=true;
+  savedStatus.textContent='Loading saved case '+runId+'...';
+  try {
+    const response=await fetch('/api/bundle/'+encodeURIComponent(runId));
+    const bundle=await response.json();
+    if(response.ok===false) throw new Error(bundle?.error ?? 'Case unavailable');
+    validateRunBundle(bundle,runId);
+    const html=await bindingsModel(bundle);
+    if(token!==savedToken) return;
+    document.getElementById('saved-summary').innerHTML=summaryModel(bundle.report);
+    document.getElementById('saved-bindings').innerHTML=html;
+    savedDownload.href='/api/bundle/'+encodeURIComponent(runId);
+    savedDownload.style.display='inline-block';
+    savedStatus.textContent='Saved case '+runId+'. Inspection only; use imported replay for verification.';
+  } catch(error){ if(token!==savedToken) return; savedStatus.textContent='Saved case unavailable: '+error.message; }
+  if(token===savedToken) inspectButton.disabled=false;
+});
 let latestToken=0;
 let importToken=0;
 let compareToken=0;

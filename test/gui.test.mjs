@@ -293,9 +293,9 @@ function pageScript() {
 
 function stubDocument() {
   const elements = {};
-  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count"]) {
+  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count", "inspect-case", "saved-download", "saved-status", "saved-summary", "saved-bindings"]) {
     elements[id] = { value: "pass", checked: false, disabled: false, textContent: "", innerHTML: "", href: null, style: {}, listeners: {},
-      addEventListener(name, fn) { this.listeners[name] = fn; },
+      addEventListener(name, fn) { const prior = this.listeners[name]; this.listeners[name] = prior ? (...args) => { prior(...args); return fn(...args); } : fn; },
       removeAttribute(name) { delete this[name]; } };
   }
   elements.response.value = "pass";
@@ -746,4 +746,17 @@ test("history search matches case metadata without broadening outcome filters", 
   assert.deepEqual(filterHistory(cases, 'inventory', 'compensated'), []);
   assert.deepEqual(filterHistory(cases, 'recorded'), [cases[1]]);
   assert.deepEqual(filterHistory(cases), cases);
+});
+
+test("saved case inspection binds its download and keeps live output separate", async () => {
+  const document = stubDocument(); document.elements['left-case'].value='saved-1';
+  document.elements.summary.innerHTML='live result';
+  const fetch = async () => ({ json: async () => ({ manifest: {run_id: 'saved-1'}, report: {run_id: 'saved-1', domain: 'inventory', stages: {}}, stages: {} }) });
+  new Function('document','fetch','crypto',pageScript())(document,fetch,globalThis.crypto);
+  await document.elements['inspect-case'].listeners.click();
+  assert.equal(document.elements['saved-download'].href, '/api/bundle/saved-1');
+  assert.match(document.elements['saved-summary'].innerHTML, /inventory/);
+  assert.equal(document.elements.summary.innerHTML, 'live result');
+  document.elements['left-case'].listeners.change();
+  assert.equal(document.elements['saved-download'].href, undefined);
 });
