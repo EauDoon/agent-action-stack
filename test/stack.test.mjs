@@ -1650,3 +1650,26 @@ test('saved case FIFO cannot block the shared reader', {skip:process.platform===
   const child=spawnSync(process.execPath,['--input-type=module','-e',script],{encoding:'utf8',timeout:2000});
   assert.equal(child.error,undefined,'reader must not block until child timeout');assert.equal(child.status,0,child.stderr);assert.equal(child.stdout,'rejected');
 });
+
+test('saved manifests reject missing records arrays and invalid artifact fields consistently',async()=>{
+  const {listCasePage,inspectCase}=await import('../bin/case-review.mjs');
+  const outputRoot=tempRoot(),runId='stage-shapes';
+  const {bundleDir,manifest}=persistRunBundle({outputRoot,runId,report:{run_id:runId,stages:{}},stages:{decide:{status:'failed',raw:{passed:false}}},componentProvenance:[],exitCode:1});
+  assert.deepEqual(Object.keys(manifest.stages),['decide','act','prove']);
+  assert.equal(manifest.stages.act.artifact,null);
+  assert.equal(exportRunBundle(runId,{outputRoot}).manifest.stages.prove.status,'skipped');
+  assert.equal(listCasePage({outputRoot}).cases.length,1);
+  const malformed=[{},[],{...manifest.stages,other:{}},...['decide','act','prove'].map(name=>{const stages=structuredClone(manifest.stages);delete stages[name];return stages;})];
+  for(const value of [[],null,false]) malformed.push({...manifest.stages,act:value});
+  for(const value of [undefined,false,0,{},[],'','../escape.json']) malformed.push({...manifest.stages,act:{...manifest.stages.act,artifact:value}});
+  for(const stages of malformed){
+    writeFileSync(join(bundleDir,'manifest.json'),JSON.stringify({...manifest,stages}));
+    assert.throws(()=>exportRunBundle(runId,{outputRoot}),/stage|artifact/i);
+    assert.throws(()=>inspectCase(runId,{outputRoot}),/stage|artifact/i);
+    assert.deepEqual(listCasePage({outputRoot}).unavailable,[runId]);
+    assert.equal(compareRuns(runId,runId,{outputRoot}).classification,'not-comparable');
+  }
+  const full=persistRunBundle({outputRoot,runId:'complete-stages',report:{run_id:'complete-stages',stages:{}},stages:Object.fromEntries(['decide','act','prove'].map(name=>[name,{status:'passed',raw:{ok:true}}])),componentProvenance:[],exitCode:0});
+  assert.equal(Object.keys(exportRunBundle('complete-stages',{outputRoot}).stages).length,3);
+  assert.equal(full.manifest.stages.prove.artifact,'stages/prove.json');
+});

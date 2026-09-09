@@ -1039,19 +1039,30 @@ function readBoundedCaseJson(path) {
   } finally { closeSync(fd); }
 }
 
+function validateSavedManifest(manifest, bundleDir) {
+  if (manifest?.schema_version !== COMPARABLE_SCHEMA) throw new Error("Case uses unsupported manifest schema.");
+  const stages = manifest.stages;
+  if (!stages || typeof stages !== "object" || Array.isArray(stages)
+    || Object.keys(stages).length !== STAGE_NAMES.length
+    || !STAGE_NAMES.every((name) => Object.hasOwn(stages, name))) throw new Error("Invalid case stages.");
+  for (const name of STAGE_NAMES) {
+    const stage = stages[name];
+    if (!stage || typeof stage !== "object" || Array.isArray(stage)) throw new Error("Invalid case stage entry.");
+    if (stage.artifact !== null) safeBundleFile(bundleDir, stage.artifact, "stage artifact path");
+  }
+}
+
 export function readRunBundle(outputRoot, runId) {
   if (!isValidRunId(runId)) throw new Error("Invalid run id.");
   const bundleDir = join(outputRoot, "runs", runId);
   const directory = lstatSync(bundleDir);
   if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error("Case directory must be a regular directory.");
   const manifest = readBoundedCaseJson(join(bundleDir, "manifest.json"));
-  if (manifest?.schema_version !== "agent-action-stack.run/v1") throw new Error("Unsupported case schema.");
+  validateSavedManifest(manifest, bundleDir);
   const report = readBoundedCaseJson(safeBundleFile(bundleDir, manifest.report, "report path"));
   if (manifest.run_id !== runId || report?.run_id !== runId) throw new Error("Case identity does not match its directory.");
-  if (!manifest.stages || typeof manifest.stages !== "object" || Array.isArray(manifest.stages)) throw new Error("Invalid case stages.");
   const stages = {};
   for (const [name, stage] of Object.entries(manifest.stages)) {
-    if (!STAGE_NAMES.includes(name) || !stage || typeof stage !== "object") throw new Error("Invalid case stage entry.");
     if (stage.artifact) stages[name] = readBoundedCaseJson(safeBundleFile(bundleDir, stage.artifact, "stage artifact path"));
   }
   const bundle = { manifest, report, stages };
@@ -1188,9 +1199,7 @@ function readStageArtifact(bundleDir, manifest, name) {
  */
 export function summarizeRun(runId, { outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
   const { bundleDir, manifest } = readRunManifest(runsDirectory(outputRoot), runId);
-  if (manifest.schema_version !== COMPARABLE_SCHEMA) {
-    throw new Error(`Run ${runId} uses unsupported manifest schema ${String(manifest.schema_version)}.`);
-  }
+  validateSavedManifest(manifest, bundleDir);
   const report = readRunReport(bundleDir, manifest);
   if (manifest.run_id !== runId || report?.run_id !== runId) throw new Error("Case identity does not match its directory.");
   const prove = readStageArtifact(bundleDir, manifest, "prove");

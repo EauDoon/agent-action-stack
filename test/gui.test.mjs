@@ -959,6 +959,38 @@ test('GUI loads older history pages while retaining selected comparison cases',a
   assert.equal(document.elements['older-history'].disabled,true);
 });
 
+test('partial history pages never retain more than 250 unique summaries',async()=>{
+  const document=stubDocument();let pages=0;
+  document.elements['history-search'].value='';document.elements['history-outcome'].value='';
+  const fetch=async()=>({json:async()=>{const page=pages++;return {cases:Array.from({length:page===0?24:25},(_,index)=>({run_id:'case-'+page+'-'+index})),next_cursor:'cursor-'+page,unavailable:page===0?['unreadable']:[]};}});
+  new Function('document','fetch','crypto',pageScript())(document,fetch,globalThis.crypto);
+  await document.elements['load-history'].listeners.click();
+  document.elements['left-case'].value='case-0-0';
+  for(let index=0;index<10;index++) await document.elements['older-history'].listeners.click();
+  assert.match(document.elements['history-count'].textContent,/250 of 250 loaded/);
+  assert.equal((document.elements['left-case'].innerHTML.match(/<option /g)??[]).length,251);
+  assert.equal(document.elements['left-case'].value,'case-0-0');
+  assert.equal(document.elements['older-history'].disabled,true);
+});
+
+test('saved replay runtime rejection precedes its worker and releases admission',async()=>{
+  const outputRoot=mkdtempSync(join(tmpdir(),'aas-saved-runtime-'));
+  const runOptions={nodeVersion:'20.19.0'};
+  const server=createGuiServer({outputRoot,runOptions});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const headers={origin:'http://127.0.0.1:'+server.address().port};
+  try{
+    for(let index=0;index<2;index++){
+      const response=await requestServer(server,'/api/replay-saved/missing',{method:'POST',headers});
+      assert.equal(response.status,500);
+      assert.match(JSON.parse(response.body).error,/full-stack workflow requires Node\.js 22\.12\.0\+/);
+      assert.equal((await requestServer(server,'/api/health')).status,200);
+    }
+    runOptions.nodeVersion='22.12.0';
+    assert.equal((await requestServer(server,'/api/replay-saved/missing',{method:'POST',headers})).status,404);
+  }finally{await new Promise(resolve=>server.close(resolve));}
+});
+
 test('direct saved lookup validates identity and creates a local-only bookmark',async()=>{
   const document=stubDocument();const urls=[];
   const fetch=async url=>{urls.push(url);return {json:async()=>({manifest:{run_id:'older-case'},report:{run_id:'older-case'},stages:{}})};};

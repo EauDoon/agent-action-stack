@@ -518,7 +518,7 @@ async function refreshHistory(token,append=false){
   try { const response=await fetch('/api/history'+(append?'?before='+encodeURIComponent(nextHistoryCursor):'')); body=await response.json(); if(response.ok===false || !Array.isArray(body?.cases)) throw new Error(body?.error ?? 'Invalid history response'); }
   catch(error){ if(token!==historyToken) return; historyPageStatus.textContent='History unavailable: '+error.message; loadHistoryButton.disabled=false; olderHistoryButton.disabled=!nextHistoryCursor; return; }
   if(token!==historyToken) return;
-  const cases=[...new Map([...(append?loadedCases:[]),...body.cases].map(entry=>[entry.run_id,entry])).values()];
+  const cases=[...new Map([...(append?loadedCases:[]),...body.cases].map(entry=>[entry.run_id,entry])).values()].slice(0,250);
   nextHistoryCursor=typeof body.next_cursor==="string"?body.next_cursor:null;
   loadedCases=cases; drawHistory();
   historyPageStatus.textContent=(body.unavailable?.length??0)+" unavailable entries in this page. "+(nextHistoryCursor?"Older cases remain.":"End of history.");
@@ -700,6 +700,14 @@ export function createGuiServer({
       if (request.method === "POST" && url.pathname.startsWith("/api/replay-saved/")) {
         const runId = decodeURIComponent(url.pathname.slice("/api/replay-saved/".length));
         if (!isReviewRunId(runId) || url.search) { sendJson(response, 400, { error: "Invalid saved verification request." }); return; }
+        try {
+          assertFullStackNodeVersion(
+            runOptions.nodeVersion === undefined ? {} : { version: runOptions.nodeVersion },
+          );
+        } catch (error) {
+          sendJson(response, 500, { error: error.message });
+          return;
+        }
         try {
           const result = await runGuiTask({ operation: "replay-saved", runId, options: { outputRoot, ...(depsDir === undefined ? {} : { depsDir }) } });
           sendJson(response, replayHttpStatus(result), { ok: result.ok, run_id: result.runId, checks: result.checks, reason: result.reason ?? null });
