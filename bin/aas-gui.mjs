@@ -306,7 +306,8 @@ const compareResult=document.getElementById('compare-result');
 let latestToken=0;
 let importToken=0;
 let compareToken=0;
-function clearImported(){ importToken++; importResult.innerHTML=''; importStatus.textContent=''; }
+function clearImported(){ importToken++; importResult.innerHTML=''; importStatus.textContent=''; replayButton.disabled=false; }
+caseFile.addEventListener('change',clearImported);
 runButton.addEventListener('click',async()=>{
   const token=++latestToken;
   runButton.disabled=true;
@@ -348,9 +349,10 @@ replayButton.addEventListener('click',async()=>{
   importResult.innerHTML='';
   const file=caseFile.files&&caseFile.files[0];
   if(!file){ importStatus.textContent='Choose an exported case file first.'; replayButton.disabled=false; return; }
+  if(file.size>${CHILD_JSON_LIMIT}) { importStatus.textContent='Imported case is too large (maximum ${CHILD_JSON_LIMIT} bytes).'; replayButton.disabled=false; return; }
   let text;
   try { text=await file.text(); }
-  catch(error){ importStatus.textContent='Cannot read that file.'; replayButton.disabled=false; return; }
+  catch(error){ if(token!==importToken) return; importStatus.textContent='Cannot read that file.'; replayButton.disabled=false; return; }
   if(token!==importToken) return;
   importStatus.textContent='Replaying (verification only, no execution)...';
   let body;

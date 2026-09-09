@@ -707,3 +707,22 @@ test("page reports actionable API failures and refuses mismatched bundle exports
     assert.match(mismatch ? document.elements.bindings.textContent : document.elements.output.textContent, mismatch ? /identity does not match/ : /Another run is active/);
   }
 });
+
+test("import file changes release stale requests and reject oversized files before reading", async () => {
+  const document = stubDocument();
+  let resolveText, reads = 0, calls = 0;
+  const run = new Function("document", "fetch", "crypto", pageScript());
+  run(document, async () => { calls++; return { json: async () => ({}) }; }, globalThis.crypto);
+  document.elements['case-file'].files = [{ size: 10, text: () => new Promise((resolve) => { resolveText = resolve; }) }];
+  const pending = document.elements.replay.listeners.click();
+  assert.equal(document.elements.replay.disabled, true);
+  document.elements['case-file'].listeners.change();
+  assert.equal(document.elements.replay.disabled, false);
+  resolveText('{}'); await pending;
+  assert.equal(calls, 0);
+  document.elements['case-file'].files = [{ size: 2 * 1024 * 1024, text: () => { reads++; return '{}'; } }];
+  await document.elements.replay.listeners.click();
+  assert.equal(reads, 0);
+  assert.match(document.elements['import-status'].textContent, /too large/);
+  assert.equal(document.elements.replay.disabled, false);
+});
