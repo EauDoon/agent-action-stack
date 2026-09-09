@@ -256,3 +256,5 @@ as well as at the server boundary. No preset, inspection, or history workflow
 performs real account operations.
 
 Saved cases now retain the exact requested response, fault, domain, proof mode, and dispute flag, including refused runs. After inspection, **Use saved settings** prepares those controls without starting work. Older cases without complete valid settings cannot be restored.
+
+Saved exports fail closed when the directory, manifest, or report identities disagree, the schema is unsupported, or persisted JSON exceeds the one-megabyte import budget. Linked case directories/files are rejected. These structural checks do not replace receipt verification.

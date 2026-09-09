@@ -1586,3 +1586,14 @@ test("runDecide uses the domain policy fixture", () => {
     `policy fixture missing: ${seen[0].join(" ")}`,
   );
 });
+
+test('case exports reject mismatched identities and oversized persisted reports', async()=>{
+  const outputRoot=tempRoot();
+  const result=await runDemo([], {paths:{outputRoot},runId:'bounded-export',componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false},status:0})});
+  const reportPath=join(result.bundleDir,'report.json');
+  const report=JSON.parse(readFileSync(reportPath,'utf8'));
+  writeFileSync(reportPath,JSON.stringify({...report,run_id:'other-run'}));
+  assert.throws(()=>exportRunBundle('bounded-export',{outputRoot}),/identity/i);
+  writeFileSync(reportPath,JSON.stringify({...report,pad:'x'.repeat(CHILD_JSON_LIMIT)}));
+  assert.throws(()=>exportRunBundle('bounded-export',{outputRoot}),/limit|large/i);
+});

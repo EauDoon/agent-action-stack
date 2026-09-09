@@ -13,6 +13,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
+  openSync, closeSync, fstatSync, readSync, lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -1017,18 +1018,42 @@ function safeBundleFile(bundleDir, value, label) {
  * the manifest references. Shared by the GUI download and `aas export`, so
  * both produce the identical portable document.
  */
+function readBoundedCaseJson(path) {
+  if (lstatSync(dirname(path)).isSymbolicLink() || lstatSync(path).isSymbolicLink()) throw new Error("Case files must not be symbolic links.");
+  const fd = openSync(path, "r");
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > CHILD_JSON_LIMIT) throw new Error("Case file exceeds the byte limit or is not a regular file.");
+    const buffer = Buffer.alloc(CHILD_JSON_LIMIT + 1);
+    let size = 0;
+    while (size < buffer.length) {
+      const read = readSync(fd, buffer, size, buffer.length - size, null);
+      if (read === 0) break;
+      size += read;
+    }
+    if (size > CHILD_JSON_LIMIT) throw new Error("Case file exceeds the byte limit.");
+    return JSON.parse(buffer.subarray(0, size).toString("utf8"));
+  } finally { closeSync(fd); }
+}
+
 export function readRunBundle(outputRoot, runId) {
   if (!isValidRunId(runId)) throw new Error("Invalid run id.");
   const bundleDir = join(outputRoot, "runs", runId);
-  const manifest = JSON.parse(readFileSync(join(bundleDir, "manifest.json"), "utf8"));
-  const report = JSON.parse(readFileSync(safeBundleFile(bundleDir, manifest.report, "report path"), "utf8"));
+  const directory = lstatSync(bundleDir);
+  if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error("Case directory must be a regular directory.");
+  const manifest = readBoundedCaseJson(join(bundleDir, "manifest.json"));
+  if (manifest?.schema_version !== "agent-action-stack.run/v1") throw new Error("Unsupported case schema.");
+  const report = readBoundedCaseJson(safeBundleFile(bundleDir, manifest.report, "report path"));
+  if (manifest.run_id !== runId || report?.run_id !== runId) throw new Error("Case identity does not match its directory.");
+  if (!manifest.stages || typeof manifest.stages !== "object" || Array.isArray(manifest.stages)) throw new Error("Invalid case stages.");
   const stages = {};
-  for (const [name, stage] of Object.entries(manifest.stages ?? {})) {
-    if (stage.artifact) {
-      stages[name] = JSON.parse(readFileSync(safeBundleFile(bundleDir, stage.artifact, "stage artifact path"), "utf8"));
-    }
+  for (const [name, stage] of Object.entries(manifest.stages)) {
+    if (!STAGE_NAMES.includes(name) || !stage || typeof stage !== "object") throw new Error("Invalid case stage entry.");
+    if (stage.artifact) stages[name] = readBoundedCaseJson(safeBundleFile(bundleDir, stage.artifact, "stage artifact path"));
   }
-  return { manifest, report, stages };
+  const bundle = { manifest, report, stages };
+  if (Buffer.byteLength(JSON.stringify(bundle)) > CHILD_JSON_LIMIT) throw new Error("Exported case exceeds the replay byte limit.");
+  return bundle;
 }
 
 const RUN_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
