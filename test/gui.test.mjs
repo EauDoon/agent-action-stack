@@ -299,7 +299,7 @@ function pageScript() {
 
 function stubDocument() {
   const elements = {};
-  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count", "inspect-case", "saved-download", "saved-status", "saved-summary", "saved-bindings", "scenario", "apply-scenario", "scenario-note", "restore-settings", "older-history", "history-page-status", "saved-case-id", "lookup-case", "saved-link"]) {
+  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count", "inspect-case", "saved-download", "saved-status", "saved-summary", "saved-bindings", "scenario", "apply-scenario", "scenario-note", "restore-settings", "older-history", "history-page-status", "saved-case-id", "lookup-case", "saved-link", "replay-saved", "saved-review-status", "saved-review-result"]) {
     elements[id] = { value: "pass", checked: false, disabled: false, textContent: "", innerHTML: "", href: null, style: {}, listeners: {},
       addEventListener(name, fn) { const prior = this.listeners[name]; this.listeners[name] = prior ? (...args) => { prior(...args); return fn(...args); } : fn; },
       removeAttribute(name) { delete this[name]; } };
@@ -965,4 +965,18 @@ test('direct saved lookup validates identity and creates a local-only bookmark',
   document.elements['saved-case-id'].value='../bad';await document.elements['lookup-case'].listeners.click();assert.equal(urls.length,0);
   document.elements['saved-case-id'].value='older-case';await document.elements['lookup-case'].listeners.click();
   assert.deepEqual(urls,['/api/bundle/older-case']);assert.equal(document.elements['saved-link'].href,'#case=older-case');
+});
+
+test('saved verification rereads the selected case through a worker without execution',async()=>{
+  const outputRoot=mkdtempSync(join(tmpdir(),'aas-saved-replay-'));
+  await runDemo([],{paths:{outputRoot},runId:'saved-refusal',componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false},status:0})});
+  let executions=0;const server=createGuiServer({outputRoot,runDemoFn:()=>{executions++;}});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const headers={origin:'http://127.0.0.1:'+server.address().port};
+  try {
+    const res=await requestServer(server,'/api/replay-saved/saved-refusal',{method:'POST',headers});
+    assert.equal(res.status,422);assert.equal(JSON.parse(res.body).run_id,'saved-refusal');assert.equal(executions,0);
+    assert.equal((await requestServer(server,'/api/replay-saved/missing',{method:'POST',headers})).status,404);
+    assert.equal((await requestServer(server,'/api/replay-saved/saved-refusal',{method:'POST'})).status,400);
+  } finally {await new Promise(resolve=>server.close(resolve));}
 });

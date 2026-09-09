@@ -185,7 +185,7 @@ export async function bindingsModel(bundle) {
  * always labelled separately from any live run, and every value is
  * escaped. Pure and browser-safe.
  */
-export function replayResultModel(result) {
+export function replayResultModel(result, { saved = false } = {}) {
   const body = result && typeof result === "object" ? result : {};
   const runId = typeof body.run_id === "string" ? body.run_id : null;
   const checks = Array.isArray(body.checks) ? body.checks : [];
@@ -196,11 +196,11 @@ export function replayResultModel(result) {
   const verdictLabel = body.ok === true
     ? "replay verified under synthetic demo keys"
     : "not verified";
-  return `<h3>Imported case ${escapeHtml(runId ?? "(unknown run id)")} — ${verdictLabel}</h3>`
+  return `<h3>${saved ? "Saved" : "Imported"} case ${escapeHtml(runId ?? "(unknown run id)")} — ${verdictLabel}</h3>`
     + `<ul>${rows.join("")}</ul>`
     + reason
     + `<ul><li>verification only: no action execution or remediation runs</li>`
-    + `<li>imported identity is untrusted text; this panel proves no provenance and no link to a local run</li>`
+    + `<li>${saved ? "saved identity checked against its persisted case; source truth is still unknown" : "imported identity is untrusted text; this panel proves no provenance and no link to a local run"}</li>`
     + `<li>synthetic keys, source truth unknown, legal effect not determined</li></ul>`;
 }
 
@@ -320,6 +320,7 @@ export function renderPage() {
 <label>Saved run ID <input id="saved-case-id" type="text" maxlength="200" placeholder="Enter an exact saved run ID"></label><button id="lookup-case">Inspect by ID</button>
 <a id="saved-link" class="download">Bookmark this local case</a>
 <button id="restore-settings" disabled>Use saved settings</button>
+<button id="replay-saved" disabled>Verify saved case</button><div id="saved-review-status" role="status"></div><div id="saved-review-result"></div>
 <a id="saved-download" class="download" download>Download selected saved case</a>
 <div id="saved-status" role="status" aria-live="polite"></div><div id="saved-summary"></div><div id="saved-bindings"></div>
 <div id="history-list"></div>
@@ -357,6 +358,22 @@ const savedIdInput=document.getElementById("saved-case-id");
 const savedLink=document.getElementById("saved-link");
 const bookmarkId=new URLSearchParams(globalThis.location?.hash?.slice(1)??"").get("case");
 if(isReviewRunId(bookmarkId)) savedIdInput.value=bookmarkId;
+const savedReplayButton=document.getElementById("replay-saved");
+const savedReviewStatus=document.getElementById("saved-review-status");
+const savedReviewResult=document.getElementById("saved-review-result");
+savedReplayButton.addEventListener("click",async()=>{
+  if(!savedBundle) return;
+  const token=savedToken; const runId=savedBundle.report.run_id;
+  savedReplayButton.disabled=true; savedReviewResult.innerHTML=""; savedReviewStatus.textContent="Verifying saved evidence only...";
+  try {
+    const response=await fetch("/api/replay-saved/"+encodeURIComponent(runId),{method:"POST"});
+    const result=await response.json();
+    if(token!==savedToken) return;
+    if(!Array.isArray(result.checks)||result.run_id!==runId) throw new Error(result.error??"Saved verification identity unavailable.");
+    savedReviewResult.innerHTML=replayResultModel(result,{saved:true});savedReviewStatus.textContent="";
+  } catch(error){if(token!==savedToken) return;savedReviewStatus.textContent="Saved verification failed: "+error.message;}
+  if(token===savedToken) savedReplayButton.disabled=false;
+});
 const restoreButton=document.getElementById("restore-settings");
 restoreButton.addEventListener("click",()=>{
   const settings=validatedRunSettings(savedBundle?.report);
@@ -368,7 +385,7 @@ restoreButton.addEventListener("click",()=>{
 const inspectButton=document.getElementById('inspect-case');
 const savedDownload=document.getElementById('saved-download');
 const savedStatus=document.getElementById('saved-status');
-function clearSaved(){ savedToken++; savedBundle=null; restoreButton.disabled=true; savedLink.style.display="none"; savedLink.removeAttribute("href"); inspectButton.disabled=false; savedDownload.style.display='none'; savedDownload.removeAttribute('href'); document.getElementById('saved-summary').innerHTML=''; document.getElementById('saved-bindings').innerHTML=''; savedStatus.textContent=''; }
+function clearSaved(){ savedToken++; savedBundle=null; restoreButton.disabled=true; savedReplayButton.disabled=true; savedReviewStatus.textContent=""; savedReviewResult.innerHTML=""; savedLink.style.display="none"; savedLink.removeAttribute("href"); inspectButton.disabled=false; savedDownload.style.display='none'; savedDownload.removeAttribute('href'); document.getElementById('saved-summary').innerHTML=''; document.getElementById('saved-bindings').innerHTML=''; savedStatus.textContent=''; }
 leftCase.addEventListener('change',clearSaved);
 async function inspectSaved(runId){
   clearSaved();
@@ -383,7 +400,7 @@ async function inspectSaved(runId){
     validateRunBundle(bundle,runId);
     const html=await bindingsModel(bundle);
     if(token!==savedToken) return;
-    savedBundle=bundle; restoreButton.disabled=validatedRunSettings(bundle.report)===null;
+    savedBundle=bundle; savedReplayButton.disabled=false; restoreButton.disabled=validatedRunSettings(bundle.report)===null;
     savedIdInput.value=runId; savedLink.href='#case='+encodeURIComponent(runId); savedLink.style.display='inline-block';
     document.getElementById('saved-summary').innerHTML=summaryModel(bundle.report);
     document.getElementById('saved-bindings').innerHTML=html;
@@ -583,7 +600,7 @@ export function createGuiServer({
         sendJson(response, 403, { error: "Forbidden" });
         return;
       }
-      if (request.method === "POST" && ["/api/run", "/api/replay"].includes(url.pathname)) {
+      if (request.method === "POST" && (["/api/run", "/api/replay"].includes(url.pathname) || url.pathname.startsWith("/api/replay-saved/"))) {
         if (activeWork) {
           sendJson(response, 503, { error: "Another run or replay is already running; wait for it to finish." }, { "retry-after": "1" });
           return;
@@ -658,6 +675,15 @@ export function createGuiServer({
           report: result.report,
           manifest: result.manifest,
         });
+        return;
+      }
+      if (request.method === "POST" && url.pathname.startsWith("/api/replay-saved/")) {
+        const runId = decodeURIComponent(url.pathname.slice("/api/replay-saved/".length));
+        if (!isReviewRunId(runId) || url.search) { sendJson(response, 400, { error: "Invalid saved verification request." }); return; }
+        try {
+          const result = await runGuiTask({ operation: "replay-saved", runId, options: { outputRoot, ...(depsDir === undefined ? {} : { depsDir }) } });
+          sendJson(response, replayHttpStatus(result), { ok: result.ok, run_id: result.runId, checks: result.checks, reason: result.reason ?? null });
+        } catch (error) { sendJson(response, error.code === "ENOENT" ? 404 : 500, { error: error.code === "ENOENT" ? "Saved case not found." : "Saved verification could not complete." }); }
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/replay") {

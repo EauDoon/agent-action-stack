@@ -264,3 +264,5 @@ History is now cursor-paged: `aas cases --limit 25 --before <run-id> --json` and
 In the workbench, **Load older cases** appends the next page while keeping existing search and comparison selections. Each page reports unreadable entries and whether more remain. Up to 250 summaries can be loaded at once; refresh starts again from the newest page. Only one history worker runs per server at a time.
 
 **Inspect by ID** reaches a saved case outside loaded history. A successful inspection provides a local fragment bookmark. Opening that bookmark pre-fills the ID only; it does not execute a run or verification. Missing and structurally invalid cases produce distinct HTTP 404 and 422 responses.
+
+**Verify saved case** reopens the selected persisted case on the server and re-verifies its evidence in a worker. It uses the same origin and admission checks as other verification requests, never invokes action execution, and displays the saved-case result separately from imported evidence.
