@@ -434,11 +434,11 @@ export function createGuiServer({
   replayRunner,
   depsDir,
 } = {}) {
-  return createServer(async (request, response) => {
+  let activeWork = false;
+  return createServer({ requestTimeout: 30_000, headersTimeout: 10_000 }, async (request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    // Replay runs child verifiers synchronously; allow only one at a time so
-    // repeated clicks cannot queue unbounded blocking work.
-    let replaysInFlight = 0;
+
+    let ownsWork = false;
     try {
       const boundary = requestBoundaryFailure(request);
       if (boundary === "missing-origin") {
@@ -448,6 +448,15 @@ export function createGuiServer({
       if (boundary !== null) {
         sendJson(response, 403, { error: "Forbidden" });
         return;
+      }
+      if (request.method === "POST" && ["/api/run", "/api/replay"].includes(url.pathname)) {
+        if (activeWork) {
+          sendJson(response, 503, { error: "Another run or replay is already running; wait for it to finish." }, { "retry-after": "1" });
+          return;
+        }
+        activeWork = true;
+        ownsWork = true;
+        // Keep the lease until the handler finishes, even if the client disconnects.
       }
       if (request.method === "GET" && url.pathname === "/") {
         response.writeHead(200, {
@@ -539,12 +548,7 @@ export function createGuiServer({
           sendJson(response, 400, { error: "Imported case must be a JSON object." });
           return;
         }
-        if (replaysInFlight > 0) {
-          sendJson(response, 503, { error: "Another replay is already running; wait for it to finish." });
-          return;
-        }
         let result;
-        replaysInFlight += 1;
         try {
           result = replayBundle(imported, {
             ...(depsDir === undefined ? {} : { depsDir }),
@@ -553,8 +557,6 @@ export function createGuiServer({
         } catch (error) {
           sendJson(response, 500, { error: error.message });
           return;
-        } finally {
-          replaysInFlight -= 1;
         }
         sendJson(response, replayHttpStatus(result), {
           ok: result.ok,
@@ -591,6 +593,8 @@ export function createGuiServer({
       sendJson(response, 404, { error: "Not found" });
     } catch {
       sendJson(response, 500, { error: "Request failed" });
+    } finally {
+      if (ownsWork) activeWork = false;
     }
   });
 }

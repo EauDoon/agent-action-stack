@@ -673,3 +673,25 @@ test("GUI rejects duplicate and unknown options before invoking a run", async ()
     assert.equal(compare.status, 400);
   } finally { await new Promise((resolve) => server.close(resolve)); }
 });
+
+test("GUI bounds concurrent synthetic work and releases the lease after failure", async () => {
+  let release, started;
+  const entered = new Promise((resolve) => { started = resolve; });
+  const pending = new Promise((resolve) => { release = resolve; });
+  const server = createGuiServer({ runOptions: { python: "synthetic" }, runDemoFn: async () => { started(); await pending; throw new Error("fixture failure"); } });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const headers = { origin: "http://127.0.0.1:" + server.address().port };
+  try {
+    const first = requestServer(server, "/api/run", { method: "POST", headers });
+    await entered;
+    assert.equal((await requestServer(server, "/api/health")).status, 200);
+    for (const path of ["/api/run", "/api/replay"]) {
+      const blocked = await requestServer(server, path, { method: "POST", headers });
+      assert.equal(blocked.status, 503);
+      assert.equal(blocked.headers["retry-after"], "1");
+    }
+    release();
+    assert.equal((await first).status, 500);
+    assert.equal((await requestServer(server, "/api/run?domain=bad", { method: "POST", headers })).status, 400);
+  } finally { release(); await new Promise((resolve) => server.close(resolve)); }
+});
