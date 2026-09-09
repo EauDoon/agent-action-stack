@@ -307,6 +307,7 @@ export function renderPage() {
 <div class="panel"><h2>Case history and comparison</h2>
 <p>Compare two persisted cases by identity, policy reference, component revisions, outcome, evidence digest, and review result. This view loads summaries only, never raw evidence, and never modifies or deletes a case.</p>
 <button id="load-history">Load history</button>
+<button id="older-history" disabled>Load older cases</button><p id="history-page-status" role="status"></p>
 <label>Search loaded cases <input id="history-search" type="search" placeholder="Run, policy, domain, review"></label>
 <label>Outcome <select id="history-outcome"><option value="">all</option><option value="settled">settled</option><option value="compensated">compensated</option></select></label>
 <p id="history-count" role="status" aria-live="polite">Load recent cases to search. The bounded history may omit older or unreadable cases.</p>
@@ -388,6 +389,9 @@ let latestToken=0;
 let importToken=0;
 let compareToken=0;
 let historyToken=0;
+let nextHistoryCursor=null;
+const olderHistoryButton=document.getElementById("older-history");
+const historyPageStatus=document.getElementById("history-page-status");
 let loadedCases=[];
 function drawHistory(){
   const cases=filterHistory(loadedCases,document.getElementById("history-search").value,document.getElementById("history-outcome").value);
@@ -461,14 +465,20 @@ replayButton.addEventListener('click',async()=>{
   else { importStatus.textContent='Replay rejected: '+(body&&body.error?body.error:'unknown error'); }
   replayButton.disabled=false;
 });
-async function refreshHistory(token){
-  historyList.textContent='Loading history...';
+async function refreshHistory(token,append=false){
+  if(append&&!nextHistoryCursor) return;
+  loadHistoryButton.disabled=true; olderHistoryButton.disabled=true;
+  historyPageStatus.textContent="Loading case page...";
   let body;
-  try { const response=await fetch('/api/history'); body=await response.json(); if(response.ok===false || !Array.isArray(body?.cases)) throw new Error(body?.error ?? 'Invalid history response'); }
-  catch(error){ if(token!==historyToken) return; historyList.textContent='History unavailable: '+error.message; return; }
+  try { const response=await fetch('/api/history'+(append?'?before='+encodeURIComponent(nextHistoryCursor):'')); body=await response.json(); if(response.ok===false || !Array.isArray(body?.cases)) throw new Error(body?.error ?? 'Invalid history response'); }
+  catch(error){ if(token!==historyToken) return; historyPageStatus.textContent='History unavailable: '+error.message; loadHistoryButton.disabled=false; olderHistoryButton.disabled=!nextHistoryCursor; return; }
   if(token!==historyToken) return;
-  const cases=(body&&Array.isArray(body.cases))?body.cases:[];
+  const cases=[...new Map([...(append?loadedCases:[]),...body.cases].map(entry=>[entry.run_id,entry])).values()];
+  nextHistoryCursor=typeof body.next_cursor==="string"?body.next_cursor:null;
   loadedCases=cases; drawHistory();
+  historyPageStatus.textContent=(body.unavailable?.length??0)+" unavailable entries in this page. "+(nextHistoryCursor?"Older cases remain.":"End of history.");
+  loadHistoryButton.disabled=false; olderHistoryButton.disabled=!nextHistoryCursor||cases.length>=250;
+  if(cases.length>=250) historyPageStatus.textContent+=" Loaded-case limit reached. Use direct lookup for another case.";
   const options=renderCaseOptions(cases);
   const leftValue=leftCase.value;
   const rightValue=rightCase.value;
@@ -480,6 +490,7 @@ async function refreshHistory(token){
   else { rightCase.value=""; clearComparison(); }
 }
 loadHistoryButton.addEventListener('click',function(){ return refreshHistory(++historyToken); });
+olderHistoryButton.addEventListener('click',function(){ return refreshHistory(++historyToken,true); });
 compareButton.addEventListener('click',async()=>{
   const token=++compareToken;
   compareButton.disabled=true;
@@ -547,6 +558,7 @@ export function createGuiServer({
   depsDir,
 } = {}) {
   let activeWork = false;
+  let historyInFlight = false;
   return createServer({ requestTimeout: 30_000, headersTimeout: 10_000 }, async (request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
 
@@ -685,7 +697,10 @@ export function createGuiServer({
           || (url.searchParams.has("limit") && !/^(?:[1-9]|[1-4][0-9]|50)$/.test(url.searchParams.get("limit")))) {
           sendJson(response, 400, { error: "Invalid history page options." }); return;
         }
-        const page = await runGuiTask({ operation: "history", options: { outputRoot, before: url.searchParams.get("before"), limit: Number(url.searchParams.get("limit") ?? 25) } });
+        if (historyInFlight) { sendJson(response, 503, { error: "A history page is already loading." }); return; }
+        historyInFlight = true;
+        let page;
+        try { page = await runGuiTask({ operation: "history", options: { outputRoot, before: url.searchParams.get("before"), limit: Number(url.searchParams.get("limit") ?? 25) } }); } finally { historyInFlight = false; }
         sendJson(response, 200, { ok: true, ...page });
         return;
       }

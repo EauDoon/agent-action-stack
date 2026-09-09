@@ -298,7 +298,7 @@ function pageScript() {
 
 function stubDocument() {
   const elements = {};
-  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count", "inspect-case", "saved-download", "saved-status", "saved-summary", "saved-bindings", "scenario", "apply-scenario", "scenario-note", "restore-settings"]) {
+  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count", "inspect-case", "saved-download", "saved-status", "saved-summary", "saved-bindings", "scenario", "apply-scenario", "scenario-note", "restore-settings", "older-history", "history-page-status"]) {
     elements[id] = { value: "pass", checked: false, disabled: false, textContent: "", innerHTML: "", href: null, style: {}, listeners: {},
       addEventListener(name, fn) { const prior = this.listeners[name]; this.listeners[name] = prior ? (...args) => { prior(...args); return fn(...args); } : fn; },
       removeAttribute(name) { delete this[name]; } };
@@ -942,4 +942,17 @@ test('history pages advance across unreadable cases without duplicates or skippi
   assert.throws(()=>listCasePage({outputRoot,limit:51}),/limit/);
   assert.throws(()=>listCasePage({outputRoot,before:'../x'}),/cursor/);
   assert.throws(()=>parseCasePageArgs(['--limit','2','--limit','3']),/Usage/);
+});
+
+test('GUI loads older history pages while retaining selected comparison cases',async()=>{
+  const document=stubDocument();const urls=[];
+  const fetch=async url=>{urls.push(url);return {json:async()=>urls.length===1?{cases:[{run_id:'case-c'}],next_cursor:'case-b',unavailable:['case-b']}:{cases:[{run_id:'case-a'}],next_cursor:null,unavailable:[]}};};
+  new Function('document','fetch','crypto',pageScript())(document,fetch,globalThis.crypto);
+  await document.elements['load-history'].listeners.click();document.elements['left-case'].value='case-c';
+  assert.equal(document.elements['older-history'].disabled,false);
+  await document.elements['older-history'].listeners.click();
+  assert.equal(urls[1],'/api/history?before=case-b');
+  assert.equal(document.elements['left-case'].value,'case-c');
+  assert.match(document.elements['left-case'].innerHTML,/case-a/);
+  assert.equal(document.elements['older-history'].disabled,true);
 });

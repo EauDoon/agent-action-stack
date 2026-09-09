@@ -260,3 +260,5 @@ Saved cases now retain the exact requested response, fault, domain, proof mode, 
 Saved exports fail closed when the directory, manifest, or report identities disagree, the schema is unsupported, or persisted JSON exceeds the one-megabyte import budget. Linked case directories/files are rejected. These structural checks do not replace receipt verification.
 
 History is now cursor-paged: `aas cases --limit 25 --before <run-id> --json` and `GET /api/history?limit=25&before=<run-id>` return `next_cursor`, scanned count, and unavailable case identities. A damaged entry does not prevent reaching older cases. At most 50 candidate cases are opened per page; GUI history work runs outside the HTTP event loop.
+
+In the workbench, **Load older cases** appends the next page while keeping existing search and comparison selections. Each page reports unreadable entries and whether more remain. Up to 250 summaries can be loaded at once; refresh starts again from the newest page. Only one history worker runs per server at a time.
