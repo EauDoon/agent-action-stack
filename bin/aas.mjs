@@ -1053,7 +1053,7 @@ export function readRunBundle(outputRoot, runId) {
     if (stage.artifact) stages[name] = readBoundedCaseJson(safeBundleFile(bundleDir, stage.artifact, "stage artifact path"));
   }
   const bundle = { manifest, report, stages };
-  if (Buffer.byteLength(JSON.stringify(bundle)) > CHILD_JSON_LIMIT) throw new Error("Exported case exceeds the replay byte limit.");
+  if (Buffer.byteLength(JSON.stringify(bundle, null, 2) + "\n") > CHILD_JSON_LIMIT) throw new Error("Exported case exceeds the replay byte limit.");
   return bundle;
 }
 

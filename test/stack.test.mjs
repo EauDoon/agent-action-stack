@@ -1597,3 +1597,9 @@ test('case exports reject mismatched identities and oversized persisted reports'
   writeFileSync(reportPath,JSON.stringify({...report,pad:'x'.repeat(CHILD_JSON_LIMIT)}));
   assert.throws(()=>exportRunBundle('bounded-export',{outputRoot}),/limit|large/i);
 });
+
+test('export byte budget includes the actual formatted download representation',async()=>{
+  const outputRoot=tempRoot();
+  await runDemo([],{paths:{outputRoot},runId:'formatted-budget',componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false,rows:Array(30000).fill({x:0})},status:0})});
+  assert.throws(()=>exportRunBundle('formatted-budget',{outputRoot}),/byte limit/);
+});

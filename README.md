@@ -274,3 +274,5 @@ Saved inspection includes expandable decide, act, and prove artifacts with persi
 For offline handoffs, `aas inspect <run-id> --root <output-directory> --markdown` prints the same readable case review; `--json` emits its versioned machine-readable model. The default root is this checkout’s `.out` and the default format is Markdown. This command only reads saved files, needs no component bootstrap, and returns exit 2 for invalid arguments or exit 1 for unreadable cases.
 
 After comparing two cases, **Download comparison review** exports the selected metadata differences and unavailable-evidence notices as Markdown. Selection changes invalidate the download link. The report explicitly states that matching metadata is not evidence equivalence and differences do not establish causation.
+
+The export budget counts the formatted JSON bytes actually downloaded, including indentation and the trailing newline, so a permitted export fits the replay upload limit.
