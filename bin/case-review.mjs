@@ -95,3 +95,12 @@ export function parseInspectArgs(args) {
   if(runId===null) throw new UsageError('inspect requires a saved run ID.');
   return {runId,outputRoot,format:format??'markdown'};
 }
+
+export function renderComparisonMarkdown(result) {
+  const lines=['# Saved case comparison','','- Classification: '+markdownText(result.classification),'- Left case: '+markdownText(result.left?.run_id),'- Right case: '+markdownText(result.right?.run_id),'','## Compared differences',''];
+  if(!result.differences?.length) lines.push(result.classification==='not-comparable'?'Comparison unavailable.':'No compared field differs.');
+  for(const difference of result.differences??[]) lines.push('- '+markdownText(difference.field)+': '+markdownText(JSON.stringify(difference.left))+' vs '+markdownText(JSON.stringify(difference.right)));
+  if(result.errors?.length){lines.push('','## Unavailable evidence','');for(const error of result.errors) lines.push('- '+markdownText(error));}
+  lines.push('','## Limits','','- Differences do not establish causation.','- Matching metadata does not prove matching evidence.','- No receipt verification, action execution, or remediation was performed.');
+  return lines.join('\n')+'\n';
+}

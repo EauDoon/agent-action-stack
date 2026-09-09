@@ -1,4 +1,4 @@
-import { parseInspectArgs, inspectCase, renderCaseMarkdown, listCasePage, parseCasePageArgs } from "../bin/case-review.mjs";
+import { renderComparisonMarkdown, parseInspectArgs, inspectCase, renderCaseMarkdown, listCasePage, parseCasePageArgs } from "../bin/case-review.mjs";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
@@ -300,7 +300,7 @@ function pageScript() {
 
 function stubDocument() {
   const elements = {};
-  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count", "inspect-case", "saved-download", "saved-status", "saved-summary", "saved-bindings", "scenario", "apply-scenario", "scenario-note", "restore-settings", "older-history", "history-page-status", "saved-case-id", "lookup-case", "saved-link", "replay-saved", "saved-review-status", "saved-review-result", "saved-artifacts", "saved-report"]) {
+  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count", "inspect-case", "saved-download", "saved-status", "saved-summary", "saved-bindings", "scenario", "apply-scenario", "scenario-note", "restore-settings", "older-history", "history-page-status", "saved-case-id", "lookup-case", "saved-link", "replay-saved", "saved-review-status", "saved-review-result", "saved-artifacts", "saved-report", "comparison-download"]) {
     elements[id] = { value: "pass", checked: false, disabled: false, textContent: "", innerHTML: "", href: null, style: {}, listeners: {},
       addEventListener(name, fn) { const prior = this.listeners[name]; this.listeners[name] = prior ? (...args) => { prior(...args); return fn(...args); } : fn; },
       removeAttribute(name) { delete this[name]; } };
@@ -1009,4 +1009,13 @@ test('standalone inspect CLI produces the same review model and rejects ambiguou
   assert.throws(()=>parseInspectArgs(['../escape']),/Usage/);
   const markdown=execFileSync(process.execPath,[fileURLToPath(cli),'inspect','cli-review','--root',outputRoot],{encoding:'utf8'});
   assert.match(markdown,/# Saved case review/);assert.match(markdown,/no receipt verification/);
+});
+
+test('comparison Markdown preserves uncertainty and escapes hostile difference fields',async()=>{
+  const markdown=renderComparisonMarkdown({classification:'not-comparable',errors:['<script>bad</script>'],differences:[{field:'[link]',left:'<img>',right:'safe'}]});
+  assert.ok(markdown.includes("not")&&markdown.includes("comparable"));assert.match(markdown,/Differences do not establish causation/);assert.equal(markdown.includes('<script>'),false);assert.equal(markdown.includes('[link]'),false);
+  const outputRoot=mkdtempSync(join(tmpdir(),'aas-comparison-report-'));writeCase(outputRoot,'compare-one');writeCase(outputRoot,'compare-two');
+  const server=createGuiServer({outputRoot});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {const res=await requestServer(server,'/api/compare?a=compare-one&b=compare-two&format=markdown');assert.equal(res.status,200);assert.match(res.body,/# Saved case comparison/);assert.match(res.headers['content-type'],/markdown/);assert.equal((await requestServer(server,'/api/compare?a=x&b=y&format=html')).status,400);}
+  finally {await new Promise(resolve=>server.close(resolve));}
 });

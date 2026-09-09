@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /** Lightweight local GUI for the Agent Action Stack orchestrator. */
-import { inspectCase, renderCaseMarkdown } from "./case-review.mjs";
+import { inspectCase, renderCaseMarkdown, renderComparisonMarkdown } from "./case-review.mjs";
 import { createServer } from "node:http";
 import { runGuiTask } from "./aas-gui-worker.mjs";
 import { pathToFileURL } from "node:url";
@@ -329,6 +329,7 @@ export function renderPage() {
 <label>Left <select id="left-case"><option value="">(select a case)</option></select></label>
 <label>Right <select id="right-case"><option value="">(select a case)</option></select></label>
 <button id="compare">Compare selected cases</button>
+<a id="comparison-download" class="download" download>Download comparison review</a>
 <button id="inspect-case">Inspect left case</button>
 <label>Saved run ID <input id="saved-case-id" type="text" maxlength="200" placeholder="Enter an exact saved run ID"></label><button id="lookup-case">Inspect by ID</button>
 <a id="saved-link" class="download">Bookmark this local case</a>
@@ -366,6 +367,7 @@ const loadHistoryButton=document.getElementById('load-history');
 const compareButton=document.getElementById('compare');
 const compareStatus=document.getElementById('compare-status');
 const compareResult=document.getElementById('compare-result');
+const comparisonDownload=document.getElementById("comparison-download");
 let savedToken=0;
 let savedBundle=null;
 const savedIdInput=document.getElementById("saved-case-id");
@@ -443,7 +445,7 @@ function drawHistory(){
 }
 document.getElementById("history-search").addEventListener("input",drawHistory);
 document.getElementById("history-outcome").addEventListener("change",drawHistory);
-function clearComparison(){ compareToken++; compareResult.innerHTML=""; compareStatus.textContent=""; compareButton.disabled=false; }
+function clearComparison(){ compareToken++; comparisonDownload.removeAttribute("href"); comparisonDownload.style.display="none"; compareResult.innerHTML=""; compareStatus.textContent=""; compareButton.disabled=false; }
 leftCase.addEventListener("change",clearComparison);
 rightCase.addEventListener("change",clearComparison);
 function clearImported(){ importToken++; importResult.innerHTML=''; importStatus.textContent=''; replayButton.disabled=false; }
@@ -536,6 +538,7 @@ loadHistoryButton.addEventListener('click',function(){ return refreshHistory(++h
 olderHistoryButton.addEventListener('click',function(){ return refreshHistory(++historyToken,true); });
 compareButton.addEventListener('click',async()=>{
   const token=++compareToken;
+  comparisonDownload.removeAttribute("href"); comparisonDownload.style.display="none";
   compareButton.disabled=true;
   compareResult.innerHTML='';
   if(!leftCase.value||!rightCase.value){ compareStatus.textContent='Select two cases to compare.'; compareButton.disabled=false; return; }
@@ -548,6 +551,7 @@ compareButton.addEventListener('click',async()=>{
   } catch(error){ if(token!==compareToken) return; compareStatus.textContent='Comparison failed: '+error.message; compareButton.disabled=false; return; }
   if(token!==compareToken) return;
   compareResult.innerHTML=compareModel(body);
+  comparisonDownload.href='/api/compare?a='+encodeURIComponent(leftCase.value)+'&b='+encodeURIComponent(rightCase.value)+'&format=markdown';comparisonDownload.style.display='inline-block';
   compareStatus.textContent='';
   compareButton.disabled=false;
 });
@@ -760,11 +764,15 @@ export function createGuiServer({
         const left = url.searchParams.get("a");
         const right = url.searchParams.get("b");
         const valid = (value) => isValidRunId(value);
-        if (!hasOnlySingleOptions(url.searchParams, new Set(["a", "b"])) || !valid(left) || !valid(right)) {
+        if (!hasOnlySingleOptions(url.searchParams, new Set(["a", "b", "format"])) || (url.searchParams.has("format") && url.searchParams.get("format") !== "markdown") || !valid(left) || !valid(right)) {
           sendJson(response, 400, { error: "Compare requires two valid run ids." });
           return;
         }
         const comparison = compareRuns(left, right, { outputRoot });
+        if (url.searchParams.get("format") === "markdown") {
+          response.writeHead(200, { "content-type": "text/markdown; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff", "content-disposition": 'attachment; filename="case-comparison.md"' });
+          response.end(renderComparisonMarkdown(comparison)); return;
+        }
         sendJson(response, 200, { ok: true, ...comparison });
         return;
       }
