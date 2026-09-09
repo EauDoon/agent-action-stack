@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { filterHistory, bindingsModel, compareModel, createGuiServer, historyModel, renderPage, replayHttpStatus, replayResultModel, summaryModel } from "../bin/aas-gui.mjs";
+import { scenarioPreset, filterHistory, bindingsModel, compareModel, createGuiServer, historyModel, renderPage, replayHttpStatus, replayResultModel, summaryModel } from "../bin/aas-gui.mjs";
 import { exportRunBundle, runDemo, selectPython } from "../bin/aas.mjs";
 
 const provenance = [
@@ -293,7 +293,7 @@ function pageScript() {
 
 function stubDocument() {
   const elements = {};
-  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count", "inspect-case", "saved-download", "saved-status", "saved-summary", "saved-bindings"]) {
+  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count", "inspect-case", "saved-download", "saved-status", "saved-summary", "saved-bindings", "scenario", "apply-scenario", "scenario-note"]) {
     elements[id] = { value: "pass", checked: false, disabled: false, textContent: "", innerHTML: "", href: null, style: {}, listeners: {},
       addEventListener(name, fn) { const prior = this.listeners[name]; this.listeners[name] = prior ? (...args) => { prior(...args); return fn(...args); } : fn; },
       removeAttribute(name) { delete this[name]; } };
@@ -759,4 +759,18 @@ test("saved case inspection binds its download and keeps live output separate", 
   assert.equal(document.elements.summary.innerHTML, 'live result');
   document.elements['left-case'].listeners.change();
   assert.equal(document.elements['saved-download'].href, undefined);
+});
+
+test("scenario presets prepare explicit synthetic workflows without calling execution", () => {
+  const document=stubDocument(); let calls=0;
+  document.elements.domain.value='inventory';
+  new Function('document','fetch','crypto',pageScript())(document,()=>{calls++;},globalThis.crypto);
+  document.elements.scenario.value='compensated'; document.elements['apply-scenario'].listeners.click();
+  assert.equal(document.elements.fault.value,'duplicate');
+  assert.equal(document.elements.prove.value,'rail');
+  assert.equal(document.elements.domain.value,'inventory');
+  assert.equal(calls,0);
+  assert.equal(scenarioPreset('__proto__'),null);
+  assert.equal(scenarioPreset('refusal').response,'fail');
+  assert.equal(scenarioPreset('review').dispute,true);
 });

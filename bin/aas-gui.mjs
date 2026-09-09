@@ -259,15 +259,27 @@ export function validateRunBundle(bundle, runId) {
   return bundle;
 }
 
+export function scenarioPreset(name) {
+  const presets = {
+    settled: { response: "pass", fault: "none", prove: "simulate", dispute: false, note: "Expected: decide passes, synthetic action settles, prove is skipped." },
+    refusal: { response: "fail", fault: "none", prove: "rail", dispute: false, note: "Expected: policy refusal stops before act and prove." },
+    compensated: { response: "pass", fault: "duplicate", prove: "rail", dispute: false, note: "Expected: duplicate synthetic action is compensated and same-case review records the handoff." },
+    review: { response: "pass", fault: "none", prove: "rail", dispute: true, note: "Expected: settled synthetic action receives a requested same-case review." },
+  };
+  return Object.hasOwn(presets, name) ? presets[name] : null;
+}
+
 export function renderPage() {
-  const embedded = [filterHistory, validateRunBundle, escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, compareModel, historyModel, renderCaseOptions, sha256HexText]
+  const embedded = [scenarioPreset, filterHistory, validateRunBundle, escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, compareModel, historyModel, renderCaseOptions, sha256HexText]
     .map((fn) => fn.toString()).join("\n");
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Agent Action Stack</title>
 <style>body{font:16px system-ui,sans-serif;max-width:800px;margin:40px auto;padding:0 20px;color:#17202a}button{padding:10px 14px;margin:4px 0;cursor:pointer}button:disabled{cursor:wait;opacity:.6}select{padding:9px;margin:4px}pre{background:#f3f5f7;padding:16px;overflow:auto;border-radius:6px}.state{margin:16px 0}.download{display:none}.panel{margin:16px 0}.error{color:#7a1f1f}</style></head>
 <body><h1>Agent Action Stack</h1><p>Run the local decide, act, and prove flow using the reviewed component lock.</p>
-<div class="state"><label>Response <select id="response"><option value="pass">pass</option><option value="fail">fail</option></select></label>
+<div class="state"><label>Scenario <select id="scenario"><option value="settled">Clean settlement</option><option value="refusal">Policy refusal</option><option value="compensated">Duplicate compensation and review</option><option value="review">Settled action review</option></select></label> <button id="apply-scenario">Apply scenario</button>
+<p id="scenario-note">Choose a scenario or configure the options below. Applying a scenario only changes controls.</p>
+<label>Response <select id="response"><option value="pass">pass</option><option value="fail">fail</option></select></label>
 <label>Fault <select id="fault"><option value="none">none</option><option value="duplicate">duplicate</option></select></label>
 <label>Domain <select id="domain"><option value="refund">refund</option><option value="inventory">inventory allocation</option></select></label>
 <label><input id="dispute" type="checkbox"> force dispute proof</label>
@@ -299,6 +311,14 @@ export function renderPage() {
 <div id="compare-result"></div></div>
 <script>
 ${embedded}
+document.getElementById('apply-scenario').addEventListener('click',()=>{
+  const preset=scenarioPreset(document.getElementById('scenario').value);
+  if(!preset) return;
+  for(const name of ['response','fault','prove']) document.getElementById(name).value=preset[name];
+  document.getElementById('dispute').checked=preset.dispute;
+  document.getElementById('scenario-note').textContent=preset.note+' Domain stays selected. Press Run stack to start the synthetic demo.';
+});
+for(const name of ['response','fault','prove','dispute']) document.getElementById(name).addEventListener('change',()=>{ document.getElementById('scenario-note').textContent='Custom options selected. Review the controls before running.'; });
 const output=document.getElementById('output');
 const summary=document.getElementById('summary');
 const bindings=document.getElementById('bindings');
