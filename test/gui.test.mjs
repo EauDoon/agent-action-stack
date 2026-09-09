@@ -319,7 +319,7 @@ test("page script ties every result and export to the latest run id", async () =
       const id = calls === 1 ? "run-first" : "run-second";
       return new Promise((resolve) => pending.push(() => resolve({ json: async () => ({ run_id: id, report: { flow: id, stages: {} } }) })));
     }
-    return Promise.resolve({ json: async () => ({ report: { run_id: "late-bundle", stages: {} }, manifest: {}, stages: {} }) });
+    return Promise.resolve({ json: async () => ({ report: { run_id: url.split("/").at(-1), stages: {} }, manifest: { run_id: url.split("/").at(-1) }, stages: {} }) });
   };
   const ui = run(document, fetch, globalThis.crypto);
   const first = ui.click();
@@ -694,4 +694,16 @@ test("GUI bounds concurrent synthetic work and releases the lease after failure"
     assert.equal((await first).status, 500);
     assert.equal((await requestServer(server, "/api/run?domain=bad", { method: "POST", headers })).status, 400);
   } finally { release(); await new Promise((resolve) => server.close(resolve)); }
+});
+
+test("page reports actionable API failures and refuses mismatched bundle exports", async () => {
+  const run = new Function("document", "fetch", "crypto", pageScript() + "; return () => document.getElementById('run').listeners.click();");
+  for (const mismatch of [false, true]) {
+    const document = stubDocument();
+    const fetch = async (url) => ({ json: async () => url.startsWith("/api/run") ? (mismatch ? { run_id: "selected", report: {} } : { error: "Another run is active" }) : { report: { run_id: "wrong" }, manifest: { run_id: "wrong" }, stages: {} } });
+    await run(document, fetch, globalThis.crypto)();
+    assert.equal(document.elements.download.href, undefined);
+    assert.equal(document.elements.run.disabled, false);
+    assert.match(mismatch ? document.elements.bindings.textContent : document.elements.output.textContent, mismatch ? /identity does not match/ : /Another run is active/);
+  }
 });

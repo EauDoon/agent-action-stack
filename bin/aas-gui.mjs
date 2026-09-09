@@ -245,8 +245,16 @@ export function historyModel(cases) {
   return `<ul>${list.map((entry) => `<li>${escapeHtml(entry.run_id)} — outcome ${escapeHtml(entry.outcome ?? "none")}, policy ${escapeHtml(entry.policy_id ?? "none")}, review ${escapeHtml(entry.review_verdict ?? "none")}</li>`).join("")}</ul>`;
 }
 
+export function validateRunBundle(bundle, runId) {
+  if (!bundle || bundle.report?.run_id !== runId || bundle.manifest?.run_id !== runId
+    || !bundle.stages || typeof bundle.stages !== "object" || Array.isArray(bundle.stages)) {
+    throw new Error("Bundle identity does not match the selected run.");
+  }
+  return bundle;
+}
+
 export function renderPage() {
-  const embedded = [escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, compareModel, historyModel, renderCaseOptions, sha256HexText]
+  const embedded = [validateRunBundle, escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, compareModel, historyModel, renderCaseOptions, sha256HexText]
     .map((fn) => fn.toString()).join("\n");
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -316,7 +324,7 @@ runButton.addEventListener('click',async()=>{
     runBody=await response.json();
   } catch(error) { if(token!==latestToken) return; output.textContent='Request failed: '+error.message; runButton.disabled=false; return; }
   if(token!==latestToken) return;
-  if(!runBody || typeof runBody.run_id!=='string') { output.textContent='Request failed.'; runButton.disabled=false; return; }
+  if(!runBody || typeof runBody.run_id!=='string') { output.textContent='Request failed: '+(runBody?.error ?? 'No run identity returned.'); runButton.disabled=false; return; }
   const runId=runBody.run_id;
   output.textContent=JSON.stringify(runBody.report ?? runBody,null,2);
   try { summary.innerHTML=summaryModel(runBody.report ?? {}); } catch(error) { summary.innerHTML='<p class="error">Summary unavailable.</p>'; }
@@ -324,9 +332,12 @@ runButton.addEventListener('click',async()=>{
   try {
     const bundleResponse=await fetch('/api/bundle/'+encodeURIComponent(runId));
     bundle=await bundleResponse.json();
-  } catch(error) { if(token!==latestToken) return; bindings.innerHTML='<p class="error">Bundle unavailable.</p>'; runButton.disabled=false; return; }
+    if(bundleResponse.ok===false) throw new Error(bundle?.error ?? 'Bundle request failed.');
+    validateRunBundle(bundle,runId);
+  } catch(error) { if(token!==latestToken) return; bindings.textContent='Bundle unavailable: '+error.message; runButton.disabled=false; return; }
   if(token!==latestToken) return;
   try { bindings.innerHTML=await bindingsModel(bundle); } catch(error) { bindings.innerHTML='<p class="error">Bindings unavailable.</p>'; }
+  if(token!==latestToken) return;
   download.href='/api/bundle/'+encodeURIComponent(runId);
   download.style.display='inline-block';
   runButton.disabled=false;
