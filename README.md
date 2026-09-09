@@ -254,3 +254,5 @@ Ambiguous duplicate run or comparison options are rejected. File changes clear
 stale replay results, and oversized imports are rejected before browser file reads
 as well as at the server boundary. No preset, inspection, or history workflow
 performs real account operations.
+
+Saved cases now retain the exact requested response, fault, domain, proof mode, and dispute flag, including refused runs. After inspection, **Use saved settings** prepares those controls without starting work. Older cases without complete valid settings cannot be restored.

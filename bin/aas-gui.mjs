@@ -259,6 +259,14 @@ export function validateRunBundle(bundle, runId) {
   return bundle;
 }
 
+export function validatedRunSettings(report) {
+  const value = report?.requested_options;
+  if (!value || !["refund", "inventory"].includes(value.domain)
+    || !["pass", "fail"].includes(value.response) || !["none", "duplicate"].includes(value.fault)
+    || !["simulate", "rail"].includes(value.prove) || typeof value.dispute !== "boolean") return null;
+  return { domain: value.domain, response: value.response, fault: value.fault, prove: value.prove, dispute: value.dispute };
+}
+
 export function scenarioPreset(name) {
   const presets = {
     settled: { response: "pass", fault: "none", prove: "simulate", dispute: false, note: "Expected: decide passes, synthetic action settles, prove is skipped." },
@@ -270,7 +278,7 @@ export function scenarioPreset(name) {
 }
 
 export function renderPage() {
-  const embedded = [scenarioPreset, filterHistory, validateRunBundle, escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, compareModel, historyModel, renderCaseOptions, sha256HexText]
+  const embedded = [validatedRunSettings, scenarioPreset, filterHistory, validateRunBundle, escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, compareModel, historyModel, renderCaseOptions, sha256HexText]
     .map((fn) => fn.toString()).join("\n");
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -306,6 +314,7 @@ export function renderPage() {
 <label>Right <select id="right-case"><option value="">(select a case)</option></select></label>
 <button id="compare">Compare selected cases</button>
 <button id="inspect-case">Inspect left case</button>
+<button id="restore-settings" disabled>Use saved settings</button>
 <a id="saved-download" class="download" download>Download selected saved case</a>
 <div id="saved-status" role="status" aria-live="polite"></div><div id="saved-summary"></div><div id="saved-bindings"></div>
 <div id="history-list"></div>
@@ -338,10 +347,19 @@ const compareButton=document.getElementById('compare');
 const compareStatus=document.getElementById('compare-status');
 const compareResult=document.getElementById('compare-result');
 let savedToken=0;
+let savedBundle=null;
+const restoreButton=document.getElementById("restore-settings");
+restoreButton.addEventListener("click",()=>{
+  const settings=validatedRunSettings(savedBundle?.report);
+  if(!settings) return;
+  for(const key of ["domain","response","fault","prove"]) document.getElementById(key).value=settings[key];
+  document.getElementById("dispute").checked=settings.dispute;
+  document.getElementById("scenario-note").textContent="Saved settings loaded. Review them and press Run stack to start a new synthetic run.";
+});
 const inspectButton=document.getElementById('inspect-case');
 const savedDownload=document.getElementById('saved-download');
 const savedStatus=document.getElementById('saved-status');
-function clearSaved(){ savedToken++; inspectButton.disabled=false; savedDownload.style.display='none'; savedDownload.removeAttribute('href'); document.getElementById('saved-summary').innerHTML=''; document.getElementById('saved-bindings').innerHTML=''; savedStatus.textContent=''; }
+function clearSaved(){ savedToken++; savedBundle=null; restoreButton.disabled=true; inspectButton.disabled=false; savedDownload.style.display='none'; savedDownload.removeAttribute('href'); document.getElementById('saved-summary').innerHTML=''; document.getElementById('saved-bindings').innerHTML=''; savedStatus.textContent=''; }
 leftCase.addEventListener('change',clearSaved);
 inspectButton.addEventListener('click',async()=>{
   clearSaved();
@@ -357,6 +375,7 @@ inspectButton.addEventListener('click',async()=>{
     validateRunBundle(bundle,runId);
     const html=await bindingsModel(bundle);
     if(token!==savedToken) return;
+    savedBundle=bundle; restoreButton.disabled=validatedRunSettings(bundle.report)===null;
     document.getElementById('saved-summary').innerHTML=summaryModel(bundle.report);
     document.getElementById('saved-bindings').innerHTML=html;
     savedDownload.href='/api/bundle/'+encodeURIComponent(runId);

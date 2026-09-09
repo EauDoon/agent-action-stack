@@ -9,7 +9,7 @@ import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { scenarioPreset, filterHistory, bindingsModel, compareModel, createGuiServer, historyModel, renderPage, replayHttpStatus, replayResultModel, summaryModel } from "../bin/aas-gui.mjs";
+import { validatedRunSettings, scenarioPreset, filterHistory, bindingsModel, compareModel, createGuiServer, historyModel, renderPage, replayHttpStatus, replayResultModel, summaryModel } from "../bin/aas-gui.mjs";
 import { compareRuns, exportRunBundle, runDemo, selectPython } from "../bin/aas.mjs";
 
 const provenance = [
@@ -297,7 +297,7 @@ function pageScript() {
 
 function stubDocument() {
   const elements = {};
-  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count", "inspect-case", "saved-download", "saved-status", "saved-summary", "saved-bindings", "scenario", "apply-scenario", "scenario-note"]) {
+  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count", "inspect-case", "saved-download", "saved-status", "saved-summary", "saved-bindings", "scenario", "apply-scenario", "scenario-note", "restore-settings"]) {
     elements[id] = { value: "pass", checked: false, disabled: false, textContent: "", innerHTML: "", href: null, style: {}, listeners: {},
       addEventListener(name, fn) { const prior = this.listeners[name]; this.listeners[name] = prior ? (...args) => { prior(...args); return fn(...args); } : fn; },
       removeAttribute(name) { delete this[name]; } };
@@ -919,4 +919,14 @@ test('marked GUI tasks retain normal replay and unsupported-operation handling',
   const result=await runGuiTask({operation:'replay',bundle:{report:{run_id:'marked'},stages:{}}});
   assert.equal(result.runId,'marked');assert.match(result.reason,/unavailable/);
   await assert.rejects(runGuiTask({operation:'unrecognized'}),/Unsupported GUI worker operation/);
+});
+
+test('saved run settings preserve refused request options and reject ambiguous restores', async()=>{
+  const result=await runDemo(['--domain','inventory','--response','fail','--fault','duplicate','--prove','rail','--dispute'],{
+    paths:{outputRoot:mkdtempSync(join(tmpdir(),'aas-settings-'))},componentResolver:()=>[],
+    runDecideFn:async()=>({ok:false,raw:{passed:false},status:0})
+  });
+  assert.deepEqual(validatedRunSettings(result.report),{domain:'inventory',response:'fail',fault:'duplicate',prove:'rail',dispute:true});
+  assert.equal(validatedRunSettings({}),null);
+  assert.equal(validatedRunSettings({requested_options:{...result.report.requested_options,dispute:'true'}}),null);
 });

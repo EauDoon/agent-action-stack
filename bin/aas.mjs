@@ -1492,6 +1492,7 @@ export async function runDemo(args = [], options = {}) {
   const report = {
     stack: "agent-action-stack",
     response: responseName,
+    requested_options: { response: responseName, domain, fault, prove: proveMode, dispute: forceDispute },
     domain,
     flow: "decide",
     run_id: runId,
