@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { bindingsModel, compareModel, createGuiServer, historyModel, renderPage, replayHttpStatus, replayResultModel, summaryModel } from "../bin/aas-gui.mjs";
+import { filterHistory, bindingsModel, compareModel, createGuiServer, historyModel, renderPage, replayHttpStatus, replayResultModel, summaryModel } from "../bin/aas-gui.mjs";
 import { exportRunBundle, runDemo, selectPython } from "../bin/aas.mjs";
 
 const provenance = [
@@ -293,7 +293,7 @@ function pageScript() {
 
 function stubDocument() {
   const elements = {};
-  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain"]) {
+  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count"]) {
     elements[id] = { value: "pass", checked: false, disabled: false, textContent: "", innerHTML: "", href: null, style: {}, listeners: {},
       addEventListener(name, fn) { this.listeners[name] = fn; },
       removeAttribute(name) { delete this[name]; } };
@@ -738,4 +738,12 @@ test("history refresh does not strand comparisons and selection changes invalida
   assert.match(document.elements['compare-result'].innerHTML, /identical/);
   document.elements['left-case'].listeners.change();
   assert.equal(document.elements['compare-result'].innerHTML, '');
+});
+
+test("history search matches case metadata without broadening outcome filters", () => {
+  const cases = [{run_id: 'A', policy_id: 'Inventory-Gate', domain: 'inventory', outcome: 'settled'}, {run_id: 'B', review_verdict: 'recorded', outcome: 'compensated'}];
+  assert.deepEqual(filterHistory(cases, ' INVENTORY ', 'settled'), [cases[0]]);
+  assert.deepEqual(filterHistory(cases, 'inventory', 'compensated'), []);
+  assert.deepEqual(filterHistory(cases, 'recorded'), [cases[1]]);
+  assert.deepEqual(filterHistory(cases), cases);
 });

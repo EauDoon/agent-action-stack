@@ -239,6 +239,12 @@ function renderCaseOptions(cases) {
 /**
  * Render the bounded history list. Summary-only: no raw evidence.
  */
+export function filterHistory(cases, query = "", outcome = "") {
+  const needle = String(query).trim().toLowerCase();
+  return (Array.isArray(cases) ? cases : []).filter((entry) => (!outcome || entry.outcome === outcome)
+    && [entry.run_id, entry.policy_id, entry.domain, entry.review_verdict].some((value) => String(value ?? "").toLowerCase().includes(needle)));
+}
+
 export function historyModel(cases) {
   const list = Array.isArray(cases) ? cases : [];
   if (list.length === 0) return "<p>No cases yet.</p>";
@@ -254,7 +260,7 @@ export function validateRunBundle(bundle, runId) {
 }
 
 export function renderPage() {
-  const embedded = [validateRunBundle, escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, compareModel, historyModel, renderCaseOptions, sha256HexText]
+  const embedded = [filterHistory, validateRunBundle, escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, compareModel, historyModel, renderCaseOptions, sha256HexText]
     .map((fn) => fn.toString()).join("\n");
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -279,6 +285,9 @@ export function renderPage() {
 <div class="panel"><h2>Case history and comparison</h2>
 <p>Compare two persisted cases by identity, policy reference, component revisions, outcome, evidence digest, and review result. This view loads summaries only, never raw evidence, and never modifies or deletes a case.</p>
 <button id="load-history">Load history</button>
+<label>Search loaded cases <input id="history-search" type="search" placeholder="Run, policy, domain, review"></label>
+<label>Outcome <select id="history-outcome"><option value="">all</option><option value="settled">settled</option><option value="compensated">compensated</option></select></label>
+<p id="history-count">Load recent cases to search. The bounded history may omit older or unreadable cases.</p>
 <label>Left <select id="left-case"><option value="">(select a case)</option></select></label>
 <label>Right <select id="right-case"><option value="">(select a case)</option></select></label>
 <button id="compare">Compare selected cases</button>
@@ -307,6 +316,14 @@ let latestToken=0;
 let importToken=0;
 let compareToken=0;
 let historyToken=0;
+let loadedCases=[];
+function drawHistory(){
+  const cases=filterHistory(loadedCases,document.getElementById("history-search").value,document.getElementById("history-outcome").value);
+  historyList.innerHTML=historyModel(cases);
+  document.getElementById("history-count").textContent=cases.length+" of "+loadedCases.length+" loaded cases shown. Search filters the list; comparison selectors retain all loaded cases.";
+}
+document.getElementById("history-search").addEventListener("input",drawHistory);
+document.getElementById("history-outcome").addEventListener("change",drawHistory);
 function clearComparison(){ compareToken++; compareResult.innerHTML=""; compareStatus.textContent=""; compareButton.disabled=false; }
 leftCase.addEventListener("change",clearComparison);
 rightCase.addEventListener("change",clearComparison);
@@ -376,7 +393,7 @@ async function refreshHistory(token){
   catch(error){ if(token!==historyToken) return; historyList.textContent='History unavailable: '+error.message; return; }
   if(token!==historyToken) return;
   const cases=(body&&Array.isArray(body.cases))?body.cases:[];
-  historyList.innerHTML=historyModel(cases);
+  loadedCases=cases; drawHistory();
   const options=renderCaseOptions(cases);
   const leftValue=leftCase.value;
   const rightValue=rightCase.value;
