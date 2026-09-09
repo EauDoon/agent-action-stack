@@ -635,7 +635,7 @@ test("GUI run accepts a domain and rejects an unknown one", async () => {
     outputRoot,
     runDemoFn: async (args, options) => {
       seen.push(args);
-      return runDemo(args, { ...options, runId: "domain-run", componentResolver: () => [] });
+      return runDemo(args, { ...options, runId: "domain-run", componentResolver: () => [], runDecideFn: async () => ({ ok: true, raw: { passed: true }, status: 0 }), runActFn: async () => ({ ok: true, raw: { outcome: "settled", state: "CLOSED" }, status: 0 }) });
     },
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -648,6 +648,7 @@ test("GUI run accepts a domain and rejects an unknown one", async () => {
     });
     assert.equal(posted.status, 200);
     assert.deepEqual(seen[0].slice(-2), ["--domain", "inventory"]);
+    assert.equal(JSON.parse(posted.body).report.domain, "inventory");
     const bogus = await requestServer(server, "/api/run?response=pass&fault=none&domain=payments", {
       method: "POST",
       headers: { origin },

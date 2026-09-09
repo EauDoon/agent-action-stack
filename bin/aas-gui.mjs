@@ -113,7 +113,7 @@ export function summaryModel(report) {
     return `<li>${escapeHtml(stageHeadline(name, stage) + detail)}</li>`;
   });
   const flow = typeof report?.flow === "string" ? report.flow : "unknown";
-  return `<p>flow: ${escapeHtml(flow)}</p><ul>${rows.join("")}</ul>`;
+  return `<p>domain: ${escapeHtml(report?.domain ?? "unknown (older case)")}</p><p>flow: ${escapeHtml(flow)}</p><ul>${rows.join("")}</ul>`;
 }
 
 async function sha256HexText(text) {
