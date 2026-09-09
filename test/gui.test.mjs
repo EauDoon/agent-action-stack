@@ -103,8 +103,9 @@ test("GUI rejects rebinding requests, cross-origin runs, unsafe options, and uns
     mkdirSync(bundleDir, { recursive: true });
     writeFileSync(join(bundleDir, "manifest.json"), `${JSON.stringify({ report: "../outside.json", stages: {} })}\n`);
     const unsafeBundle = await requestServer(server, "/api/bundle/unsafe-run");
-    assert.equal(unsafeBundle.status, 500);
-    assert.deepEqual(JSON.parse(unsafeBundle.body), { error: "Request failed" });
+    assert.equal(unsafeBundle.status, 422);
+    assert.deepEqual(JSON.parse(unsafeBundle.body), { error: "Saved case is unreadable or structurally invalid." });
+    assert.equal((await requestServer(server, "/api/bundle/missing")).status, 404);
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
@@ -298,7 +299,7 @@ function pageScript() {
 
 function stubDocument() {
   const elements = {};
-  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count", "inspect-case", "saved-download", "saved-status", "saved-summary", "saved-bindings", "scenario", "apply-scenario", "scenario-note", "restore-settings", "older-history", "history-page-status"]) {
+  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count", "inspect-case", "saved-download", "saved-status", "saved-summary", "saved-bindings", "scenario", "apply-scenario", "scenario-note", "restore-settings", "older-history", "history-page-status", "saved-case-id", "lookup-case", "saved-link"]) {
     elements[id] = { value: "pass", checked: false, disabled: false, textContent: "", innerHTML: "", href: null, style: {}, listeners: {},
       addEventListener(name, fn) { const prior = this.listeners[name]; this.listeners[name] = prior ? (...args) => { prior(...args); return fn(...args); } : fn; },
       removeAttribute(name) { delete this[name]; } };
@@ -955,4 +956,13 @@ test('GUI loads older history pages while retaining selected comparison cases',a
   assert.equal(document.elements['left-case'].value,'case-c');
   assert.match(document.elements['left-case'].innerHTML,/case-a/);
   assert.equal(document.elements['older-history'].disabled,true);
+});
+
+test('direct saved lookup validates identity and creates a local-only bookmark',async()=>{
+  const document=stubDocument();const urls=[];
+  const fetch=async url=>{urls.push(url);return {json:async()=>({manifest:{run_id:'older-case'},report:{run_id:'older-case'},stages:{}})};};
+  new Function('document','fetch','crypto',pageScript())(document,fetch,globalThis.crypto);
+  document.elements['saved-case-id'].value='../bad';await document.elements['lookup-case'].listeners.click();assert.equal(urls.length,0);
+  document.elements['saved-case-id'].value='older-case';await document.elements['lookup-case'].listeners.click();
+  assert.deepEqual(urls,['/api/bundle/older-case']);assert.equal(document.elements['saved-link'].href,'#case=older-case');
 });

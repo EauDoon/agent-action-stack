@@ -262,3 +262,5 @@ Saved exports fail closed when the directory, manifest, or report identities dis
 History is now cursor-paged: `aas cases --limit 25 --before <run-id> --json` and `GET /api/history?limit=25&before=<run-id>` return `next_cursor`, scanned count, and unavailable case identities. A damaged entry does not prevent reaching older cases. At most 50 candidate cases are opened per page; GUI history work runs outside the HTTP event loop.
 
 In the workbench, **Load older cases** appends the next page while keeping existing search and comparison selections. Each page reports unreadable entries and whether more remain. Up to 250 summaries can be loaded at once; refresh starts again from the newest page. Only one history worker runs per server at a time.
+
+**Inspect by ID** reaches a saved case outside loaded history. A successful inspection provides a local fragment bookmark. Opening that bookmark pre-fills the ID only; it does not execute a run or verification. Missing and structurally invalid cases produce distinct HTTP 404 and 422 responses.

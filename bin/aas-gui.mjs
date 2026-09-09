@@ -259,6 +259,8 @@ export function validateRunBundle(bundle, runId) {
   return bundle;
 }
 
+export function isReviewRunId(value) { return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(value); }
+
 export function validatedRunSettings(report) {
   const value = report?.requested_options;
   if (!value || !["refund", "inventory"].includes(value.domain)
@@ -278,7 +280,7 @@ export function scenarioPreset(name) {
 }
 
 export function renderPage() {
-  const embedded = [validatedRunSettings, scenarioPreset, filterHistory, validateRunBundle, escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, compareModel, historyModel, renderCaseOptions, sha256HexText]
+  const embedded = [isReviewRunId, validatedRunSettings, scenarioPreset, filterHistory, validateRunBundle, escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, compareModel, historyModel, renderCaseOptions, sha256HexText]
     .map((fn) => fn.toString()).join("\n");
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -315,6 +317,8 @@ export function renderPage() {
 <label>Right <select id="right-case"><option value="">(select a case)</option></select></label>
 <button id="compare">Compare selected cases</button>
 <button id="inspect-case">Inspect left case</button>
+<label>Saved run ID <input id="saved-case-id" type="text" maxlength="200" placeholder="Enter an exact saved run ID"></label><button id="lookup-case">Inspect by ID</button>
+<a id="saved-link" class="download">Bookmark this local case</a>
 <button id="restore-settings" disabled>Use saved settings</button>
 <a id="saved-download" class="download" download>Download selected saved case</a>
 <div id="saved-status" role="status" aria-live="polite"></div><div id="saved-summary"></div><div id="saved-bindings"></div>
@@ -349,6 +353,10 @@ const compareStatus=document.getElementById('compare-status');
 const compareResult=document.getElementById('compare-result');
 let savedToken=0;
 let savedBundle=null;
+const savedIdInput=document.getElementById("saved-case-id");
+const savedLink=document.getElementById("saved-link");
+const bookmarkId=new URLSearchParams(globalThis.location?.hash?.slice(1)??"").get("case");
+if(isReviewRunId(bookmarkId)) savedIdInput.value=bookmarkId;
 const restoreButton=document.getElementById("restore-settings");
 restoreButton.addEventListener("click",()=>{
   const settings=validatedRunSettings(savedBundle?.report);
@@ -360,13 +368,12 @@ restoreButton.addEventListener("click",()=>{
 const inspectButton=document.getElementById('inspect-case');
 const savedDownload=document.getElementById('saved-download');
 const savedStatus=document.getElementById('saved-status');
-function clearSaved(){ savedToken++; savedBundle=null; restoreButton.disabled=true; inspectButton.disabled=false; savedDownload.style.display='none'; savedDownload.removeAttribute('href'); document.getElementById('saved-summary').innerHTML=''; document.getElementById('saved-bindings').innerHTML=''; savedStatus.textContent=''; }
+function clearSaved(){ savedToken++; savedBundle=null; restoreButton.disabled=true; savedLink.style.display="none"; savedLink.removeAttribute("href"); inspectButton.disabled=false; savedDownload.style.display='none'; savedDownload.removeAttribute('href'); document.getElementById('saved-summary').innerHTML=''; document.getElementById('saved-bindings').innerHTML=''; savedStatus.textContent=''; }
 leftCase.addEventListener('change',clearSaved);
-inspectButton.addEventListener('click',async()=>{
+async function inspectSaved(runId){
   clearSaved();
   const token=savedToken;
-  const runId=leftCase.value;
-  if(!runId){ savedStatus.textContent='Select a saved case on the left first.'; return; }
+  if(!isReviewRunId(runId)){ savedStatus.textContent='Enter or select a valid saved run ID first.'; return; }
   inspectButton.disabled=true;
   savedStatus.textContent='Loading saved case '+runId+'...';
   try {
@@ -377,6 +384,7 @@ inspectButton.addEventListener('click',async()=>{
     const html=await bindingsModel(bundle);
     if(token!==savedToken) return;
     savedBundle=bundle; restoreButton.disabled=validatedRunSettings(bundle.report)===null;
+    savedIdInput.value=runId; savedLink.href='#case='+encodeURIComponent(runId); savedLink.style.display='inline-block';
     document.getElementById('saved-summary').innerHTML=summaryModel(bundle.report);
     document.getElementById('saved-bindings').innerHTML=html;
     savedDownload.href='/api/bundle/'+encodeURIComponent(runId);
@@ -384,7 +392,9 @@ inspectButton.addEventListener('click',async()=>{
     savedStatus.textContent='Saved case '+runId+'. Inspection only; use imported replay for verification.';
   } catch(error){ if(token!==savedToken) return; savedStatus.textContent='Saved case unavailable: '+error.message; }
   if(token===savedToken) inspectButton.disabled=false;
-});
+}
+inspectButton.addEventListener('click',()=>inspectSaved(leftCase.value));
+document.getElementById('lookup-case').addEventListener('click',()=>inspectSaved(savedIdInput.value.trim()));
 let latestToken=0;
 let importToken=0;
 let compareToken=0;
@@ -718,7 +728,10 @@ export function createGuiServer({
       }
       if (request.method === "GET" && url.pathname.startsWith("/api/bundle/")) {
         const runId = decodeURIComponent(url.pathname.slice("/api/bundle/".length));
-        const bundle = exportRunBundle(runId, { outputRoot });
+        if (!isReviewRunId(runId)) { sendJson(response, 400, { error: "Invalid saved run ID." }); return; }
+        let bundle;
+        try { bundle = exportRunBundle(runId, { outputRoot }); }
+        catch (error) { sendJson(response, error.code === "ENOENT" ? 404 : 422, { error: error.code === "ENOENT" ? "Saved case not found." : "Saved case is unreadable or structurally invalid." }); return; }
         sendJson(response, 200, bundle, {
           "content-disposition": `attachment; filename="agent-action-stack-${runId}.json"`,
         });
