@@ -726,3 +726,16 @@ test("import file changes release stale requests and reject oversized files befo
   assert.match(document.elements['import-status'].textContent, /too large/);
   assert.equal(document.elements.replay.disabled, false);
 });
+
+test("history refresh does not strand comparisons and selection changes invalidate results", async () => {
+  const document = stubDocument(); let complete;
+  const fetch = async (url) => url.startsWith('/api/compare') ? new Promise((resolve) => { complete = resolve; }) : { json: async () => ({ cases: [] }) };
+  new Function('document', 'fetch', 'crypto', pageScript())(document, fetch, globalThis.crypto);
+  const pending = document.elements.compare.listeners.click();
+  await document.elements['load-history'].listeners.click();
+  complete({ json: async () => ({ classification: 'identical' }) }); await pending;
+  assert.equal(document.elements.compare.disabled, false);
+  assert.match(document.elements['compare-result'].innerHTML, /identical/);
+  document.elements['left-case'].listeners.change();
+  assert.equal(document.elements['compare-result'].innerHTML, '');
+});

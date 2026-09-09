@@ -306,6 +306,10 @@ const compareResult=document.getElementById('compare-result');
 let latestToken=0;
 let importToken=0;
 let compareToken=0;
+let historyToken=0;
+function clearComparison(){ compareToken++; compareResult.innerHTML=""; compareStatus.textContent=""; compareButton.disabled=false; }
+leftCase.addEventListener("change",clearComparison);
+rightCase.addEventListener("change",clearComparison);
 function clearImported(){ importToken++; importResult.innerHTML=''; importStatus.textContent=''; replayButton.disabled=false; }
 caseFile.addEventListener('change',clearImported);
 runButton.addEventListener('click',async()=>{
@@ -368,9 +372,9 @@ replayButton.addEventListener('click',async()=>{
 async function refreshHistory(token){
   historyList.textContent='Loading history...';
   let body;
-  try { const response=await fetch('/api/history'); body=await response.json(); }
-  catch(error){ if(token!==compareToken) return; historyList.textContent='History unavailable.'; return; }
-  if(token!==compareToken) return;
+  try { const response=await fetch('/api/history'); body=await response.json(); if(response.ok===false || !Array.isArray(body?.cases)) throw new Error(body?.error ?? 'Invalid history response'); }
+  catch(error){ if(token!==historyToken) return; historyList.textContent='History unavailable: '+error.message; return; }
+  if(token!==historyToken) return;
   const cases=(body&&Array.isArray(body.cases))?body.cases:[];
   historyList.innerHTML=historyModel(cases);
   const options=renderCaseOptions(cases);
@@ -381,7 +385,7 @@ async function refreshHistory(token){
   if(cases.some(function(entry){return entry.run_id===leftValue;})) leftCase.value=leftValue;
   if(cases.some(function(entry){return entry.run_id===rightValue;})) rightCase.value=rightValue;
 }
-loadHistoryButton.addEventListener('click',function(){ refreshHistory(++compareToken); });
+loadHistoryButton.addEventListener('click',function(){ refreshHistory(++historyToken); });
 compareButton.addEventListener('click',async()=>{
   const token=++compareToken;
   compareButton.disabled=true;
@@ -392,7 +396,8 @@ compareButton.addEventListener('click',async()=>{
   try {
     const response=await fetch('/api/compare?a='+encodeURIComponent(leftCase.value)+'&b='+encodeURIComponent(rightCase.value));
     body=await response.json();
-  } catch(error){ if(token!==compareToken) return; compareStatus.textContent='Comparison failed.'; compareButton.disabled=false; return; }
+    if(response.ok===false || !body?.classification) throw new Error(body?.error ?? 'Invalid comparison response');
+  } catch(error){ if(token!==compareToken) return; compareStatus.textContent='Comparison failed: '+error.message; compareButton.disabled=false; return; }
   if(token!==compareToken) return;
   compareResult.innerHTML=compareModel(body);
   compareStatus.textContent='';
