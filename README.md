@@ -278,3 +278,5 @@ After comparing two cases, **Download comparison review** exports the selected m
 The export budget counts the formatted JSON bytes actually downloaded, including indentation and the trailing newline, so a permitted export fits the replay upload limit.
 
 Saved-file reads use nonblocking descriptors and validate regular-file type and size before reading, so a named pipe cannot hold the reader open. Invalid UTF-8 is rejected rather than silently replacing evidence bytes.
+
+History summaries and run listings use the same bounded saved-file reader, including when a malformed entry is skipped as unavailable.

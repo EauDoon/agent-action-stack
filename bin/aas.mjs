@@ -1097,7 +1097,7 @@ export function listRuns({ outputRoot = DEFAULT_PATHS.outputRoot, limit = Number
   for (const name of candidates) {
     let manifest;
     try {
-      manifest = JSON.parse(readFileSync(join(dir, name, "manifest.json"), "utf8"));
+      manifest = readBoundedCaseJson(join(dir, name, "manifest.json"));
     } catch {
       continue;
     }
@@ -1150,13 +1150,8 @@ const HISTORY_LIMIT = 50;
 const COMPARABLE_SCHEMA = "agent-action-stack.run/v1";
 
 function readJsonFile(path, label) {
-  let text;
-  try {
-    text = readFileSync(path, "utf8");
-  } catch {
-    throw new Error(`Cannot read ${label}.`);
-  }
-  return JSON.parse(text);
+  try { return readBoundedCaseJson(path); }
+  catch { throw new Error(`Cannot read ${label}.`); }
 }
 
 function readRunManifest(dir, runId) {

@@ -1616,7 +1616,8 @@ test('saved case FIFO cannot block the shared reader', {skip:process.platform===
   const outputRoot=tempRoot(),dir=join(outputRoot,'runs','fifo-case');mkdirSync(dir,{recursive:true});
   execFileSync('mkfifo',[join(dir,'manifest.json')]);
   const url=new URL('../bin/aas.mjs',import.meta.url).href;
-  const script='import {exportRunBundle} from '+JSON.stringify(url)+';try{exportRunBundle("fifo-case",{outputRoot:'+JSON.stringify(outputRoot)+'});process.exitCode=1;}catch(error){if(!/regular file/.test(error.message))throw error;process.stdout.write("rejected");}';
+  const reviewUrl=new URL('../bin/case-review.mjs',import.meta.url).href;
+  const script='import {listCasePage} from '+JSON.stringify(reviewUrl)+';import {exportRunBundle} from '+JSON.stringify(url)+';try{exportRunBundle("fifo-case",{outputRoot:'+JSON.stringify(outputRoot)+'});process.exitCode=1;}catch(error){if(!/regular file/.test(error.message))throw error;process.stdout.write("rejected");}if(listCasePage({outputRoot:'+JSON.stringify(outputRoot)+'}).unavailable[0]!=="fifo-case")throw new Error("FIFO history entry must be unavailable");';
   const child=spawnSync(process.execPath,['--input-type=module','-e',script],{encoding:'utf8',timeout:2000});
   assert.equal(child.error,undefined,'reader must not block until child timeout');assert.equal(child.status,0,child.stderr);assert.equal(child.stdout,'rejected');
 });
