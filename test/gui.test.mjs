@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { Worker } from "node:worker_threads";
+import { runGuiTask } from "../bin/aas-gui-worker.mjs";
 import { execFileSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { createHash } from "node:crypto";
@@ -887,4 +889,34 @@ test('production GUI replay worker rejects overlapping work while its verifier b
     assert.equal((await pending).status,422);
     assert.equal((await replayPost(server,JSON.stringify({stages:{}}))).status,422);
   } finally {writeFileSync(release,'release');if(pending) await pending;await new Promise(resolve=>server.close(resolve));}
+});
+
+test('importing the GUI from an unrelated worker preserves its data and parent channel', {timeout:10000}, async()=>{
+  const guiUrl=new URL('../bin/aas-gui.mjs',import.meta.url).href;
+  const worker=new Worker(
+    "const {parentPort,workerData}=require('node:worker_threads');"+
+    "import("+JSON.stringify(guiUrl)+").then(()=>{"+
+    "parentPort.on('message',message=>{parentPort.postMessage({echo:message,data:workerData});parentPort.close();});"+
+    "parentPort.postMessage({ready:true});"+
+    "});",
+    {eval:true,workerData:{operation:'run',owner:'unrelated-worker'}}
+  );
+  try {
+    const messages=[];
+    await new Promise((resolve,reject)=>{
+      worker.on('error',reject);
+      worker.on('message',message=>{
+        messages.push(message);
+        if(message.ready===true) worker.postMessage('still connected');
+      });
+      worker.on('exit',code=>code===0?resolve():reject(new Error('Worker exit '+code)));
+    });
+    assert.deepEqual(messages,[{ready:true},{echo:'still connected',data:{operation:'run',owner:'unrelated-worker'}}]);
+  } finally {await worker.terminate();}
+});
+
+test('marked GUI tasks retain normal replay and unsupported-operation handling', async()=>{
+  const result=await runGuiTask({operation:'replay',bundle:{report:{run_id:'marked'},stages:{}}});
+  assert.equal(result.runId,'marked');assert.match(result.reason,/unavailable/);
+  await assert.rejects(runGuiTask({operation:'unrecognized'}),/Unsupported GUI worker operation/);
 });
