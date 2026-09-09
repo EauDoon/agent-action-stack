@@ -1177,6 +1177,7 @@ export function summarizeRun(runId, { outputRoot = DEFAULT_PATHS.outputRoot } = 
     run_id: runId,
     created_at: typeof manifest.created_at === "string" ? manifest.created_at : null,
     schema_version: manifest.schema_version,
+    domain: typeof report.domain === "string" ? report.domain : null,
     exit_code: manifest.exit_code ?? null,
     flow: typeof report.flow === "string" ? report.flow : null,
     stages,
@@ -1221,6 +1222,7 @@ const COMPARISON_NOTES = [
 ];
 
 const COMPARED_FIELDS = [
+  "domain",
   "flow",
   "stages",
   "policy_id",
@@ -1490,6 +1492,7 @@ export async function runDemo(args = [], options = {}) {
   const report = {
     stack: "agent-action-stack",
     response: responseName,
+    domain,
     flow: "decide",
     run_id: runId,
     component_provenance: componentProvenance,

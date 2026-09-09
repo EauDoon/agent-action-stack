@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** Lightweight local GUI for the Agent Action Stack orchestrator. */
 import { createServer } from "node:http";
+import { runGuiTask } from "./aas-gui-worker.mjs";
 import { pathToFileURL } from "node:url";
 import {
   CHILD_JSON_LIMIT,
@@ -14,7 +15,6 @@ import {
   replayBundle,
   resolveGuiPort,
   runCapture,
-  runDemo,
   selectPython,
 } from "./aas.mjs";
 import { assertFullStackNodeVersion } from "../scripts/bootstrap.mjs";
@@ -113,7 +113,7 @@ export function summaryModel(report) {
     return `<li>${escapeHtml(stageHeadline(name, stage) + detail)}</li>`;
   });
   const flow = typeof report?.flow === "string" ? report.flow : "unknown";
-  return `<p>flow: ${escapeHtml(flow)}</p><ul>${rows.join("")}</ul>`;
+  return `<p>domain: ${escapeHtml(report?.domain ?? "unknown (older case)")}</p><p>flow: ${escapeHtml(flow)}</p><ul>${rows.join("")}</ul>`;
 }
 
 async function sha256HexText(text) {
@@ -239,45 +239,88 @@ function renderCaseOptions(cases) {
 /**
  * Render the bounded history list. Summary-only: no raw evidence.
  */
+export function filterHistory(cases, query = "", outcome = "") {
+  const needle = String(query).trim().toLowerCase();
+  return (Array.isArray(cases) ? cases : []).filter((entry) => (!outcome || entry.outcome === outcome)
+    && [entry.run_id, entry.policy_id, entry.domain, entry.review_verdict].some((value) => String(value ?? "").toLowerCase().includes(needle)));
+}
+
 export function historyModel(cases) {
   const list = Array.isArray(cases) ? cases : [];
   if (list.length === 0) return "<p>No cases yet.</p>";
   return `<ul>${list.map((entry) => `<li>${escapeHtml(entry.run_id)} — outcome ${escapeHtml(entry.outcome ?? "none")}, policy ${escapeHtml(entry.policy_id ?? "none")}, review ${escapeHtml(entry.review_verdict ?? "none")}</li>`).join("")}</ul>`;
 }
 
+export function validateRunBundle(bundle, runId) {
+  if (!bundle || bundle.report?.run_id !== runId || bundle.manifest?.run_id !== runId
+    || !bundle.stages || typeof bundle.stages !== "object" || Array.isArray(bundle.stages)) {
+    throw new Error("Bundle identity does not match the selected run.");
+  }
+  return bundle;
+}
+
+export function scenarioPreset(name) {
+  const presets = {
+    settled: { response: "pass", fault: "none", prove: "simulate", dispute: false, note: "Expected: decide passes, synthetic action settles, prove is skipped." },
+    refusal: { response: "fail", fault: "none", prove: "rail", dispute: false, note: "Expected: policy refusal stops before act and prove." },
+    compensated: { response: "pass", fault: "duplicate", prove: "rail", dispute: false, note: "Expected: duplicate synthetic action is compensated and same-case review records the handoff." },
+    review: { response: "pass", fault: "none", prove: "rail", dispute: true, note: "Expected: settled synthetic action receives a requested same-case review." },
+  };
+  return Object.hasOwn(presets, name) ? presets[name] : null;
+}
+
 export function renderPage() {
-  const embedded = [escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, compareModel, historyModel, renderCaseOptions, sha256HexText]
+  const embedded = [scenarioPreset, filterHistory, validateRunBundle, escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, compareModel, historyModel, renderCaseOptions, sha256HexText]
     .map((fn) => fn.toString()).join("\n");
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Agent Action Stack</title>
-<style>body{font:16px system-ui,sans-serif;max-width:800px;margin:40px auto;padding:0 20px;color:#17202a}button{padding:10px 14px;margin:4px 0;cursor:pointer}button:disabled{cursor:wait;opacity:.6}select{padding:9px;margin:4px}pre{background:#f3f5f7;padding:16px;overflow:auto;border-radius:6px}.state{margin:16px 0}.download{display:none}.panel{margin:16px 0}.error{color:#7a1f1f}</style></head>
-<body><h1>Agent Action Stack</h1><p>Run the local decide, act, and prove flow using the reviewed component lock.</p>
-<div class="state"><label>Response <select id="response"><option value="pass">pass</option><option value="fail">fail</option></select></label>
+<style>html{color-scheme:light}body{font:16px/1.55 system-ui,sans-serif;max-width:1000px;margin:32px auto;padding:0 20px;color:#17202a;background:#f7f9fc}h1{font-size:2.2rem;line-height:1.2}h2{font-size:1.35rem}.state,.panel{background:white;border:1px solid #d7e0ea;border-radius:12px;padding:20px}label{display:inline-block;margin:6px 12px 6px 0}input[type=search]{padding:9px;max-width:100%;box-sizing:border-box}button{background:#183f71;color:white;border:1px solid #183f71;border-radius:6px}a{color:#164d8e}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #b46b00;outline-offset:3px}.boundary{border-left:4px solid #183f71;padding:12px 16px;background:#eaf1fa}select,input[type=file]{max-width:100%;box-sizing:border-box}.panel,.boundary{overflow-wrap:anywhere}@media(max-width:600px){body{margin:16px auto;padding:0 12px}.state,.panel{padding:14px}label{display:block}button{min-height:44px}pre{font-size:13px}}button{padding:10px 14px;margin:4px 0;cursor:pointer}button:disabled{cursor:wait;opacity:.6}select{padding:9px;margin:4px}pre{background:#f3f5f7;padding:16px;overflow:auto;border-radius:6px}.state{margin:16px 0}.download{display:none}.panel{margin:16px 0}.error{color:#7a1f1f}</style></head>
+<body><main><h1>Agent Action Stack</h1><p>Run the local decide, act, and prove flow using the reviewed component lock.</p>
+<p class="boundary">Synthetic local demo only. No real account operations. Policy evaluation, rail receipt verification, and MandateBound recording remain separate authorities. Source truth is unknown; legal effect is not determined.</p>
+<div class="state"><label>Scenario <select id="scenario"><option value="settled">Clean settlement</option><option value="refusal">Policy refusal</option><option value="compensated">Duplicate compensation and review</option><option value="review">Settled action review</option></select></label> <button id="apply-scenario">Apply scenario</button>
+<p id="scenario-note">Choose a scenario or configure the options below. Applying a scenario only changes controls.</p>
+<label>Response <select id="response"><option value="pass">pass</option><option value="fail">fail</option></select></label>
 <label>Fault <select id="fault"><option value="none">none</option><option value="duplicate">duplicate</option></select></label>
+<label>Domain <select id="domain"><option value="refund">refund</option><option value="inventory">inventory allocation</option></select></label>
 <label><input id="dispute" type="checkbox"> force dispute proof</label>
 <label>Prove <select id="prove"><option value="simulate">simulation</option><option value="rail">same-case rail review</option></select></label>
 <br><button id="run">Run stack</button>
 <a id="download" class="download" download="agent-action-stack-run.json">Download run bundle</a></div>
-<div class="panel" id="summary"></div>
+<div class="panel" id="summary" aria-live="polite"></div>
 <div class="panel" id="bindings"></div>
-<pre id="output">Ready.</pre>
+<details><summary>Raw current run report</summary><pre id="output">Ready.</pre></details>
 <div class="panel"><h2>Replay an imported case</h2>
 <p>Import an exported case to inspect and re-verify it. Verification only: no action runs and no remedy is attempted. The imported case is reported separately from any live run above.</p>
+<label for="case-file">Exported case JSON</label>
 <input id="case-file" type="file" accept="application/json,.json"> <button id="replay">Replay imported case</button>
-<div id="import-status"></div>
+<div id="import-status" role="status" aria-live="polite"></div>
 <div id="import-result"></div></div>
 <div class="panel"><h2>Case history and comparison</h2>
 <p>Compare two persisted cases by identity, policy reference, component revisions, outcome, evidence digest, and review result. This view loads summaries only, never raw evidence, and never modifies or deletes a case.</p>
 <button id="load-history">Load history</button>
+<label>Search loaded cases <input id="history-search" type="search" placeholder="Run, policy, domain, review"></label>
+<label>Outcome <select id="history-outcome"><option value="">all</option><option value="settled">settled</option><option value="compensated">compensated</option></select></label>
+<p id="history-count" role="status" aria-live="polite">Load recent cases to search. The bounded history may omit older or unreadable cases.</p>
 <label>Left <select id="left-case"><option value="">(select a case)</option></select></label>
 <label>Right <select id="right-case"><option value="">(select a case)</option></select></label>
 <button id="compare">Compare selected cases</button>
+<button id="inspect-case">Inspect left case</button>
+<a id="saved-download" class="download" download>Download selected saved case</a>
+<div id="saved-status" role="status" aria-live="polite"></div><div id="saved-summary"></div><div id="saved-bindings"></div>
 <div id="history-list"></div>
-<div id="compare-status"></div>
+<div id="compare-status" role="status" aria-live="polite"></div>
 <div id="compare-result"></div></div>
-<script>
+</main><script>
 ${embedded}
+document.getElementById('apply-scenario').addEventListener('click',()=>{
+  const preset=scenarioPreset(document.getElementById('scenario').value);
+  if(!preset) return;
+  for(const name of ['response','fault','prove']) document.getElementById(name).value=preset[name];
+  document.getElementById('dispute').checked=preset.dispute;
+  document.getElementById('scenario-note').textContent=preset.note+' Domain stays selected. Press Run stack to start the synthetic demo.';
+});
+for(const name of ['response','fault','prove','dispute']) document.getElementById(name).addEventListener('change',()=>{ document.getElementById('scenario-note').textContent='Custom options selected. Review the controls before running.'; });
 const output=document.getElementById('output');
 const summary=document.getElementById('summary');
 const bindings=document.getElementById('bindings');
@@ -294,10 +337,51 @@ const loadHistoryButton=document.getElementById('load-history');
 const compareButton=document.getElementById('compare');
 const compareStatus=document.getElementById('compare-status');
 const compareResult=document.getElementById('compare-result');
+let savedToken=0;
+const inspectButton=document.getElementById('inspect-case');
+const savedDownload=document.getElementById('saved-download');
+const savedStatus=document.getElementById('saved-status');
+function clearSaved(){ savedToken++; inspectButton.disabled=false; savedDownload.style.display='none'; savedDownload.removeAttribute('href'); document.getElementById('saved-summary').innerHTML=''; document.getElementById('saved-bindings').innerHTML=''; savedStatus.textContent=''; }
+leftCase.addEventListener('change',clearSaved);
+inspectButton.addEventListener('click',async()=>{
+  clearSaved();
+  const token=savedToken;
+  const runId=leftCase.value;
+  if(!runId){ savedStatus.textContent='Select a saved case on the left first.'; return; }
+  inspectButton.disabled=true;
+  savedStatus.textContent='Loading saved case '+runId+'...';
+  try {
+    const response=await fetch('/api/bundle/'+encodeURIComponent(runId));
+    const bundle=await response.json();
+    if(response.ok===false) throw new Error(bundle?.error ?? 'Case unavailable');
+    validateRunBundle(bundle,runId);
+    const html=await bindingsModel(bundle);
+    if(token!==savedToken) return;
+    document.getElementById('saved-summary').innerHTML=summaryModel(bundle.report);
+    document.getElementById('saved-bindings').innerHTML=html;
+    savedDownload.href='/api/bundle/'+encodeURIComponent(runId);
+    savedDownload.style.display='inline-block';
+    savedStatus.textContent='Saved case '+runId+'. Inspection only; use imported replay for verification.';
+  } catch(error){ if(token!==savedToken) return; savedStatus.textContent='Saved case unavailable: '+error.message; }
+  if(token===savedToken) inspectButton.disabled=false;
+});
 let latestToken=0;
 let importToken=0;
 let compareToken=0;
-function clearImported(){ importToken++; importResult.innerHTML=''; importStatus.textContent=''; }
+let historyToken=0;
+let loadedCases=[];
+function drawHistory(){
+  const cases=filterHistory(loadedCases,document.getElementById("history-search").value,document.getElementById("history-outcome").value);
+  historyList.innerHTML=historyModel(cases);
+  document.getElementById("history-count").textContent=cases.length+" of "+loadedCases.length+" loaded cases shown. Search filters the list; comparison selectors retain all loaded cases.";
+}
+document.getElementById("history-search").addEventListener("input",drawHistory);
+document.getElementById("history-outcome").addEventListener("change",drawHistory);
+function clearComparison(){ compareToken++; compareResult.innerHTML=""; compareStatus.textContent=""; compareButton.disabled=false; }
+leftCase.addEventListener("change",clearComparison);
+rightCase.addEventListener("change",clearComparison);
+function clearImported(){ importToken++; importResult.innerHTML=''; importStatus.textContent=''; replayButton.disabled=false; }
+caseFile.addEventListener('change',clearImported);
 runButton.addEventListener('click',async()=>{
   const token=++latestToken;
   runButton.disabled=true;
@@ -307,7 +391,7 @@ runButton.addEventListener('click',async()=>{
   bindings.innerHTML='';
   clearImported();
   output.textContent='Running...';
-  const query=new URLSearchParams({response:document.getElementById('response').value,fault:document.getElementById('fault').value,prove:document.getElementById('prove').value});
+  const query=new URLSearchParams({response:document.getElementById('response').value,fault:document.getElementById('fault').value,prove:document.getElementById('prove').value,domain:document.getElementById('domain').value});
   if(document.getElementById('dispute').checked) query.set('dispute','1');
   let runBody;
   try {
@@ -315,7 +399,7 @@ runButton.addEventListener('click',async()=>{
     runBody=await response.json();
   } catch(error) { if(token!==latestToken) return; output.textContent='Request failed: '+error.message; runButton.disabled=false; return; }
   if(token!==latestToken) return;
-  if(!runBody || typeof runBody.run_id!=='string') { output.textContent='Request failed.'; runButton.disabled=false; return; }
+  if(!runBody || typeof runBody.run_id!=='string') { output.textContent='Request failed: '+(runBody?.error ?? 'No run identity returned.'); runButton.disabled=false; return; }
   const runId=runBody.run_id;
   output.textContent=JSON.stringify(runBody.report ?? runBody,null,2);
   try { summary.innerHTML=summaryModel(runBody.report ?? {}); } catch(error) { summary.innerHTML='<p class="error">Summary unavailable.</p>'; }
@@ -323,9 +407,15 @@ runButton.addEventListener('click',async()=>{
   try {
     const bundleResponse=await fetch('/api/bundle/'+encodeURIComponent(runId));
     bundle=await bundleResponse.json();
-  } catch(error) { if(token!==latestToken) return; bindings.innerHTML='<p class="error">Bundle unavailable.</p>'; runButton.disabled=false; return; }
+    if(bundleResponse.ok===false) throw new Error(bundle?.error ?? 'Bundle request failed.');
+    validateRunBundle(bundle,runId);
+  } catch(error) { if(token!==latestToken) return; bindings.textContent='Bundle unavailable: '+error.message; runButton.disabled=false; return; }
   if(token!==latestToken) return;
-  try { bindings.innerHTML=await bindingsModel(bundle); } catch(error) { bindings.innerHTML='<p class="error">Bindings unavailable.</p>'; }
+  let bindingHtml;
+  try { bindingHtml=await bindingsModel(bundle); } catch(error) { bindingHtml='<p class="error">Bindings unavailable.</p>'; }
+  if(token!==latestToken) return;
+  bindings.innerHTML=bindingHtml;
+  if(token!==latestToken) return;
   download.href='/api/bundle/'+encodeURIComponent(runId);
   download.style.display='inline-block';
   runButton.disabled=false;
@@ -336,9 +426,10 @@ replayButton.addEventListener('click',async()=>{
   importResult.innerHTML='';
   const file=caseFile.files&&caseFile.files[0];
   if(!file){ importStatus.textContent='Choose an exported case file first.'; replayButton.disabled=false; return; }
+  if(file.size>${CHILD_JSON_LIMIT}) { importStatus.textContent='Imported case is too large (maximum ${CHILD_JSON_LIMIT} bytes).'; replayButton.disabled=false; return; }
   let text;
   try { text=await file.text(); }
-  catch(error){ importStatus.textContent='Cannot read that file.'; replayButton.disabled=false; return; }
+  catch(error){ if(token!==importToken) return; importStatus.textContent='Cannot read that file.'; replayButton.disabled=false; return; }
   if(token!==importToken) return;
   importStatus.textContent='Replaying (verification only, no execution)...';
   let body;
@@ -354,20 +445,22 @@ replayButton.addEventListener('click',async()=>{
 async function refreshHistory(token){
   historyList.textContent='Loading history...';
   let body;
-  try { const response=await fetch('/api/history'); body=await response.json(); }
-  catch(error){ if(token!==compareToken) return; historyList.textContent='History unavailable.'; return; }
-  if(token!==compareToken) return;
+  try { const response=await fetch('/api/history'); body=await response.json(); if(response.ok===false || !Array.isArray(body?.cases)) throw new Error(body?.error ?? 'Invalid history response'); }
+  catch(error){ if(token!==historyToken) return; historyList.textContent='History unavailable: '+error.message; return; }
+  if(token!==historyToken) return;
   const cases=(body&&Array.isArray(body.cases))?body.cases:[];
-  historyList.innerHTML=historyModel(cases);
+  loadedCases=cases; drawHistory();
   const options=renderCaseOptions(cases);
   const leftValue=leftCase.value;
   const rightValue=rightCase.value;
   leftCase.innerHTML='<option value="">(select a case)</option>'+options;
   rightCase.innerHTML='<option value="">(select a case)</option>'+options;
   if(cases.some(function(entry){return entry.run_id===leftValue;})) leftCase.value=leftValue;
+  else { leftCase.value=""; clearSaved(); clearComparison(); }
   if(cases.some(function(entry){return entry.run_id===rightValue;})) rightCase.value=rightValue;
+  else { rightCase.value=""; clearComparison(); }
 }
-loadHistoryButton.addEventListener('click',function(){ refreshHistory(++compareToken); });
+loadHistoryButton.addEventListener('click',function(){ return refreshHistory(++historyToken); });
 compareButton.addEventListener('click',async()=>{
   const token=++compareToken;
   compareButton.disabled=true;
@@ -378,13 +471,18 @@ compareButton.addEventListener('click',async()=>{
   try {
     const response=await fetch('/api/compare?a='+encodeURIComponent(leftCase.value)+'&b='+encodeURIComponent(rightCase.value));
     body=await response.json();
-  } catch(error){ if(token!==compareToken) return; compareStatus.textContent='Comparison failed.'; compareButton.disabled=false; return; }
+    if(response.ok===false || !body?.classification) throw new Error(body?.error ?? 'Invalid comparison response');
+  } catch(error){ if(token!==compareToken) return; compareStatus.textContent='Comparison failed: '+error.message; compareButton.disabled=false; return; }
   if(token!==compareToken) return;
   compareResult.innerHTML=compareModel(body);
   compareStatus.textContent='';
   compareButton.disabled=false;
 });
 </script></body></html>`;
+}
+
+export function hasOnlySingleOptions(params, allowed) {
+  return [...params.keys()].every((key) => allowed.has(key) && params.getAll(key).length === 1);
 }
 
 function sendJson(response, status, body, headers = {}) {
@@ -423,17 +521,17 @@ function requestBoundaryFailure(request) {
 }
 
 export function createGuiServer({
-  runDemoFn = runDemo,
+  runDemoFn,
   outputRoot = DEFAULT_PATHS.outputRoot,
   runOptions = {},
   replayRunner,
   depsDir,
 } = {}) {
-  return createServer(async (request, response) => {
+  let activeWork = false;
+  return createServer({ requestTimeout: 30_000, headersTimeout: 10_000 }, async (request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    // Replay runs child verifiers synchronously; allow only one at a time so
-    // repeated clicks cannot queue unbounded blocking work.
-    let replaysInFlight = 0;
+
+    let ownsWork = false;
     try {
       const boundary = requestBoundaryFailure(request);
       if (boundary === "missing-origin") {
@@ -443,6 +541,15 @@ export function createGuiServer({
       if (boundary !== null) {
         sendJson(response, 403, { error: "Forbidden" });
         return;
+      }
+      if (request.method === "POST" && ["/api/run", "/api/replay"].includes(url.pathname)) {
+        if (activeWork) {
+          sendJson(response, 503, { error: "Another run or replay is already running; wait for it to finish." }, { "retry-after": "1" });
+          return;
+        }
+        activeWork = true;
+        ownsWork = true;
+        // Keep the lease until the handler finishes, even if the client disconnects.
       }
       if (request.method === "GET" && url.pathname === "/") {
         response.writeHead(200, {
@@ -460,23 +567,26 @@ export function createGuiServer({
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/run") {
-        const allowedKeys = new Set(["response", "fault", "dispute", "prove"]);
-        if ([...url.searchParams.keys()].some((key) => !allowedKeys.has(key))) {
+        const allowedKeys = new Set(["response", "fault", "dispute", "prove", "domain"]);
+        if (!hasOnlySingleOptions(url.searchParams, allowedKeys)) {
           sendJson(response, 400, { error: "Invalid options" });
           return;
         }
         const selectedResponse = url.searchParams.get("response") ?? "pass";
         const selectedFault = url.searchParams.get("fault") ?? "none";
         const selectedProve = url.searchParams.get("prove") ?? "simulate";
+        const selectedDomain = url.searchParams.get("domain") ?? "refund";
         if (!new Set(["pass", "fail"]).has(selectedResponse)
           || !new Set(["none", "duplicate"]).has(selectedFault)
           || !new Set([null, "1"]).has(url.searchParams.get("dispute"))
-          || !new Set(["simulate", "rail"]).has(selectedProve)) {
+          || !new Set(["simulate", "rail"]).has(selectedProve)
+          || !new Set(["refund", "inventory"]).has(selectedDomain)) {
           sendJson(response, 400, { error: "Invalid options" });
           return;
         }
         const args = ["--response", selectedResponse, "--fault", selectedFault, "--json"];
         if (url.searchParams.get("dispute") === "1") args.push("--dispute");
+        if (selectedDomain !== "refund") args.push("--domain", selectedDomain);
         if (selectedProve !== "simulate") args.push("--prove", selectedProve);
         try {
           assertFullStackNodeVersion(
@@ -486,20 +596,21 @@ export function createGuiServer({
           sendJson(response, 500, { error: error.message });
           return;
         }
-        let python = runOptions.python ?? null;
-        if (python === null) {
-          try {
-            python = selectPython();
-          } catch (error) {
-            sendJson(response, 500, { error: error.message });
-            return;
-          }
-        }
-        const result = await runDemoFn(args, {
+        const options = {
           ...runOptions,
-          ...(python ? { python } : {}),
           paths: { ...(runOptions.paths ?? {}), outputRoot },
-        });
+        };
+        // Function injection remains available for local unit tests. The default
+        // production path moves Python discovery and every component to a worker.
+        let result;
+        try {
+          result = runDemoFn
+            ? await runDemoFn(args, { ...options, python: options.python ?? selectPython() })
+            : await runGuiTask({ operation: "run", args, options });
+        } catch (error) {
+          sendJson(response, 500, { error: error.message });
+          return;
+        }
         sendJson(response, result.exitCode === 0 ? 200 : 500, {
           run_id: result.report.run_id,
           exit_code: result.exitCode,
@@ -531,22 +642,15 @@ export function createGuiServer({
           sendJson(response, 400, { error: "Imported case must be a JSON object." });
           return;
         }
-        if (replaysInFlight > 0) {
-          sendJson(response, 503, { error: "Another replay is already running; wait for it to finish." });
-          return;
-        }
         let result;
-        replaysInFlight += 1;
         try {
-          result = replayBundle(imported, {
-            ...(depsDir === undefined ? {} : { depsDir }),
-            ...(replayRunner === undefined ? {} : { runner: replayRunner }),
-          });
+          const options = { ...(depsDir === undefined ? {} : { depsDir }) };
+          result = replayRunner
+            ? replayBundle(imported, { ...options, runner: replayRunner })
+            : await runGuiTask({ operation: "replay", bundle: imported, options });
         } catch (error) {
           sendJson(response, 500, { error: error.message });
           return;
-        } finally {
-          replaysInFlight -= 1;
         }
         sendJson(response, replayHttpStatus(result), {
           ok: result.ok,
@@ -564,7 +668,7 @@ export function createGuiServer({
         const left = url.searchParams.get("a");
         const right = url.searchParams.get("b");
         const valid = (value) => isValidRunId(value);
-        if (!valid(left) || !valid(right)) {
+        if (!hasOnlySingleOptions(url.searchParams, new Set(["a", "b"])) || !valid(left) || !valid(right)) {
           sendJson(response, 400, { error: "Compare requires two valid run ids." });
           return;
         }
@@ -583,6 +687,8 @@ export function createGuiServer({
       sendJson(response, 404, { error: "Not found" });
     } catch {
       sendJson(response, 500, { error: "Request failed" });
+    } finally {
+      if (ownsWork) activeWork = false;
     }
   });
 }

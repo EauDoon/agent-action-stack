@@ -197,6 +197,28 @@ path were exercised live against real child processes. No browser
 harness exists in this repository; DOM event dispatch is covered through
 a stub-DOM test of the real page script.
 
+## Integration evidence, review-workspace and domain batch
+
+Component pins: testbench `16b2faa7` and mandatebound `e526c4c` unchanged;
+Consequence Rail at `6c61e9f` (inventory-allocation domain, PR #22). This
+batch covers the GUI review workspace (PR #26), portable replay (PR #27),
+the integrator example (PR #28), settled-review integration coverage
+(PR #30), case history and comparison (PR #35), the inventory domain in the
+stack (PR #36), the integrator extension guide and connector conformance
+example (PR #37), and the pending run-lifecycle and replay-stdin entries
+from PRs #32 and #33.
+
+Unit-test coverage: stack suite 107/107; consequence-rail 162/162;
+mandatebound 228/228; testbench 120/120. Full-stack coverage: `npm run
+integration` (pass, refusal, dispute, settled-review, rail-review, and
+inventory paths plus export/replay and history/compare), the integrator
+example and connector-conformance example, and 10 real browser workflow
+tests, on Ubuntu and Windows with Node.js 22.12.0 and 24 and Python 3.13.
+
+Browser tests are a distinct category from component and orchestrator unit
+tests: they drive real clicks, file selection, and asynchronous responses
+against the pinned components, and are the only evidence for UI behaviour.
+
 ## Publication boundary
 
 This document is a readiness checklist, not a publication approval. A separate

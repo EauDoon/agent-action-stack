@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
+import { Worker } from "node:worker_threads";
+import { runGuiTask } from "../bin/aas-gui-worker.mjs";
+import { execFileSync } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 import { createHash } from "node:crypto";
 import { request } from "node:http";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { bindingsModel, compareModel, createGuiServer, historyModel, renderPage, replayHttpStatus, replayResultModel, summaryModel } from "../bin/aas-gui.mjs";
-import { exportRunBundle, runDemo, selectPython } from "../bin/aas.mjs";
+import { scenarioPreset, filterHistory, bindingsModel, compareModel, createGuiServer, historyModel, renderPage, replayHttpStatus, replayResultModel, summaryModel } from "../bin/aas-gui.mjs";
+import { compareRuns, exportRunBundle, runDemo, selectPython } from "../bin/aas.mjs";
 
 const provenance = [
   { name: "constitutional-agent-testbench", repository: "https://github.com/EauDoon/constitutional-agent-testbench.git", commit: "a7a51907eaaab68a52b66edef28b3ee0fcb3ff97", detached: true, clean: true, entrypoints: [] },
@@ -293,9 +297,9 @@ function pageScript() {
 
 function stubDocument() {
   const elements = {};
-  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list"]) {
+  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count", "inspect-case", "saved-download", "saved-status", "saved-summary", "saved-bindings", "scenario", "apply-scenario", "scenario-note"]) {
     elements[id] = { value: "pass", checked: false, disabled: false, textContent: "", innerHTML: "", href: null, style: {}, listeners: {},
-      addEventListener(name, fn) { this.listeners[name] = fn; },
+      addEventListener(name, fn) { const prior = this.listeners[name]; this.listeners[name] = prior ? (...args) => { prior(...args); return fn(...args); } : fn; },
       removeAttribute(name) { delete this[name]; } };
   }
   elements.response.value = "pass";
@@ -319,7 +323,7 @@ test("page script ties every result and export to the latest run id", async () =
       const id = calls === 1 ? "run-first" : "run-second";
       return new Promise((resolve) => pending.push(() => resolve({ json: async () => ({ run_id: id, report: { flow: id, stages: {} } }) })));
     }
-    return Promise.resolve({ json: async () => ({ report: { run_id: "late-bundle", stages: {} }, manifest: {}, stages: {} }) });
+    return Promise.resolve({ json: async () => ({ report: { run_id: url.split("/").at(-1), stages: {} }, manifest: { run_id: url.split("/").at(-1) }, stages: {} }) });
   };
   const ui = run(document, fetch, globalThis.crypto);
   const first = ui.click();
@@ -617,4 +621,302 @@ test("GUI history and compare endpoints serve summaries and classifications", as
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
+});
+
+test("GUI exposes a domain selector defaulting to refund", () => {
+  const page = renderPage();
+  assert.match(page, /<select id="domain">/);
+  assert.match(page, /<option value="refund">refund<\/option>/);
+  assert.match(page, /<option value="inventory">inventory allocation<\/option>/);
+  const script = pageScript();
+  assert.match(script, /domain:document\.getElementById\('domain'\)\.value/);
+});
+
+test("GUI run accepts a domain and rejects an unknown one", async () => {
+  const outputRoot = mkdtempSync(join(tmpdir(), "aas-gui-domain-"));
+  const seen = [];
+  const server = createGuiServer({
+    outputRoot,
+    runDemoFn: async (args, options) => {
+      seen.push(args);
+      return runDemo(args, { ...options, runId: "domain-run", componentResolver: () => [], runDecideFn: async () => ({ ok: true, raw: { passed: true }, status: 0 }), runActFn: async () => ({ ok: true, raw: { outcome: "settled", state: "CLOSED" }, status: 0 }) });
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    const origin = `http://127.0.0.1:${address.port}`;
+    const posted = await requestServer(server, "/api/run?response=pass&fault=none&domain=inventory", {
+      method: "POST",
+      headers: { origin },
+    });
+    assert.equal(posted.status, 200);
+    assert.deepEqual(seen[0].slice(-2), ["--domain", "inventory"]);
+    assert.equal(JSON.parse(posted.body).report.domain, "inventory");
+    const bogus = await requestServer(server, "/api/run?response=pass&fault=none&domain=payments", {
+      method: "POST",
+      headers: { origin },
+    });
+    assert.equal(bogus.status, 400);
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("GUI rejects duplicate and unknown options before invoking a run", async () => {
+  let calls = 0;
+  const server = createGuiServer({ runDemoFn: () => { calls++; throw new Error("must not run"); } });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    for (const query of ["domain=refund&domain=inventory", "response=pass&response=fail", "fault=none&fault=none", "dispute=1&dispute=1", "prove=rail&prove=simulate", "account=live"]) {
+      const res = await requestServer(server, "/api/run?" + query, { method: "POST", headers: { origin: "http://127.0.0.1:" + server.address().port } });
+      assert.equal(res.status, 400, query);
+    }
+    assert.equal(calls, 0);
+    const compare = await requestServer(server, "/api/compare?a=x&a=y&b=z");
+    assert.equal(compare.status, 400);
+  } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+
+test("GUI bounds concurrent synthetic work and releases the lease after failure", async () => {
+  let release, started;
+  const entered = new Promise((resolve) => { started = resolve; });
+  const pending = new Promise((resolve) => { release = resolve; });
+  const server = createGuiServer({ runOptions: { python: "synthetic" }, runDemoFn: async () => { started(); await pending; throw new Error("fixture failure"); } });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const headers = { origin: "http://127.0.0.1:" + server.address().port };
+  try {
+    const first = requestServer(server, "/api/run", { method: "POST", headers });
+    await entered;
+    assert.equal((await requestServer(server, "/api/health")).status, 200);
+    for (const path of ["/api/run", "/api/replay"]) {
+      const blocked = await requestServer(server, path, { method: "POST", headers });
+      assert.equal(blocked.status, 503);
+      assert.equal(blocked.headers["retry-after"], "1");
+    }
+    release();
+    assert.equal((await first).status, 500);
+    assert.equal((await requestServer(server, "/api/run?domain=bad", { method: "POST", headers })).status, 400);
+  } finally { release(); await new Promise((resolve) => server.close(resolve)); }
+});
+
+test("page reports actionable API failures and refuses mismatched bundle exports", async () => {
+  const run = new Function("document", "fetch", "crypto", pageScript() + "; return () => document.getElementById('run').listeners.click();");
+  for (const mismatch of [false, true]) {
+    const document = stubDocument();
+    const fetch = async (url) => ({ json: async () => url.startsWith("/api/run") ? (mismatch ? { run_id: "selected", report: {} } : { error: "Another run is active" }) : { report: { run_id: "wrong" }, manifest: { run_id: "wrong" }, stages: {} } });
+    await run(document, fetch, globalThis.crypto)();
+    assert.equal(document.elements.download.href, undefined);
+    assert.equal(document.elements.run.disabled, false);
+    assert.match(mismatch ? document.elements.bindings.textContent : document.elements.output.textContent, mismatch ? /identity does not match/ : /Another run is active/);
+  }
+});
+
+test("import file changes release stale requests and reject oversized files before reading", async () => {
+  const document = stubDocument();
+  let resolveText, reads = 0, calls = 0;
+  const run = new Function("document", "fetch", "crypto", pageScript());
+  run(document, async () => { calls++; return { json: async () => ({}) }; }, globalThis.crypto);
+  document.elements['case-file'].files = [{ size: 10, text: () => new Promise((resolve) => { resolveText = resolve; }) }];
+  const pending = document.elements.replay.listeners.click();
+  assert.equal(document.elements.replay.disabled, true);
+  document.elements['case-file'].listeners.change();
+  assert.equal(document.elements.replay.disabled, false);
+  resolveText('{}'); await pending;
+  assert.equal(calls, 0);
+  document.elements['case-file'].files = [{ size: 2 * 1024 * 1024, text: () => { reads++; return '{}'; } }];
+  await document.elements.replay.listeners.click();
+  assert.equal(reads, 0);
+  assert.match(document.elements['import-status'].textContent, /too large/);
+  assert.equal(document.elements.replay.disabled, false);
+});
+
+test("history refresh does not strand comparisons and selection changes invalidate results", async () => {
+  const document = stubDocument(); let complete;
+  const fetch = async (url) => url.startsWith('/api/compare') ? new Promise((resolve) => { complete = resolve; }) : { json: async () => ({ cases: [{run_id:'pass'}] }) };
+  new Function('document', 'fetch', 'crypto', pageScript())(document, fetch, globalThis.crypto);
+  const pending = document.elements.compare.listeners.click();
+  await document.elements['load-history'].listeners.click();
+  complete({ json: async () => ({ classification: 'identical' }) }); await pending;
+  assert.equal(document.elements.compare.disabled, false);
+  assert.match(document.elements['compare-result'].innerHTML, /identical/);
+  document.elements['left-case'].listeners.change();
+  assert.equal(document.elements['compare-result'].innerHTML, '');
+});
+
+test("history search matches case metadata without broadening outcome filters", () => {
+  const cases = [{run_id: 'A', policy_id: 'Inventory-Gate', domain: 'inventory', outcome: 'settled'}, {run_id: 'B', review_verdict: 'recorded', outcome: 'compensated'}];
+  assert.deepEqual(filterHistory(cases, ' INVENTORY ', 'settled'), [cases[0]]);
+  assert.deepEqual(filterHistory(cases, 'inventory', 'compensated'), []);
+  assert.deepEqual(filterHistory(cases, 'recorded'), [cases[1]]);
+  assert.deepEqual(filterHistory(cases), cases);
+});
+
+test("saved case inspection binds its download and keeps live output separate", async () => {
+  const document = stubDocument(); document.elements['left-case'].value='saved-1';
+  document.elements.summary.innerHTML='live result';
+  const fetch = async () => ({ json: async () => ({ manifest: {run_id: 'saved-1'}, report: {run_id: 'saved-1', domain: 'inventory', stages: {}}, stages: {} }) });
+  new Function('document','fetch','crypto',pageScript())(document,fetch,globalThis.crypto);
+  await document.elements['inspect-case'].listeners.click();
+  assert.equal(document.elements['saved-download'].href, '/api/bundle/saved-1');
+  assert.match(document.elements['saved-summary'].innerHTML, /inventory/);
+  assert.equal(document.elements.summary.innerHTML, 'live result');
+  document.elements['left-case'].listeners.change();
+  assert.equal(document.elements['saved-download'].href, undefined);
+});
+
+test("scenario presets prepare explicit synthetic workflows without calling execution", () => {
+  const document=stubDocument(); let calls=0;
+  document.elements.domain.value='inventory';
+  new Function('document','fetch','crypto',pageScript())(document,()=>{calls++;},globalThis.crypto);
+  document.elements.scenario.value='compensated'; document.elements['apply-scenario'].listeners.click();
+  assert.equal(document.elements.fault.value,'duplicate');
+  assert.equal(document.elements.prove.value,'rail');
+  assert.equal(document.elements.domain.value,'inventory');
+  assert.equal(calls,0);
+  assert.equal(scenarioPreset('__proto__'),null);
+  assert.equal(scenarioPreset('refusal').response,'fail');
+  assert.equal(scenarioPreset('review').dispute,true);
+});
+
+test("comparison detects domain changes and refreshed missing selections clear saved exports", async () => {
+  const outputRoot=mkdtempSync(join(tmpdir(),'aas-domain-comparison-'));
+  const report={flow:'decide',stages:{},component_provenance:[]};
+  writeCase(outputRoot,'left',{report:{...report,domain:'refund'},prove:{}});
+  writeCase(outputRoot,'right',{report:{...report,domain:'inventory'},prove:{}});
+  assert.ok(compareRuns('left','right',{outputRoot}).differences.some((entry)=>entry.field==='domain'));
+  const document=stubDocument();
+  new Function('document','fetch','crypto',pageScript())(document,async()=>({json:async()=>({cases:[]})}),globalThis.crypto);
+  document.elements['saved-download'].href='/api/bundle/removed';
+  await document.elements['load-history'].listeners.click();
+  assert.equal(document.elements['left-case'].value,'');
+  assert.equal(document.elements['saved-download'].href,undefined);
+});
+
+// These cases use the default GUI worker and actual runCapture/spawnSync child
+// processes. Promise-only runDemoFn mocks cannot detect a blocked HTTP loop.
+function blockingChild(started, release, output) {
+  return "const fs=require('node:fs');fs.writeFileSync("+JSON.stringify(started)+",'started');"+
+    "const until=Date.now()+8000;while(!fs.existsSync("+JSON.stringify(release)+")&&Date.now()<until){Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,20);}"+
+    "process.stdout.write("+JSON.stringify(JSON.stringify(output))+");";
+}
+async function awaitStarted(path) {
+  for(let attempt=0;attempt<200&&!existsSync(path);attempt++) await delay(25);
+  assert.ok(existsSync(path), 'blocking component started');
+}
+async function assertResponsiveAndBusy(server) {
+  const headers={origin:'http://127.0.0.1:'+server.address().port};
+  const requests=await Promise.all([
+    requestServer(server,'/api/health'),
+    requestServer(server,'/api/run',{method:'POST',headers}),
+    requestServer(server,'/api/replay',{method:'POST',headers}),
+  ]);
+  assert.deepEqual(requests.map((entry)=>entry.status),[200,503,503]);
+}
+
+test('production GUI worker keeps HTTP responsive during a synchronous decide child', {timeout:20000}, async()=>{
+  const root=mkdtempSync(join(tmpdir(),'aas-worker-run-'));
+  const deps=join(root,'deps');
+  const components=JSON.parse(readFileSync(new URL('../stack-lock.json',import.meta.url),'utf8')).components;
+  for(const component of components){
+    const dir=join(deps,component.name); mkdirSync(dir,{recursive:true});
+    for(const file of [...component.expected_entrypoints,...(component.post_build_entrypoints??[])]){
+      const path=join(dir,file);mkdirSync(join(path,'..'),{recursive:true});writeFileSync(path,'fixture');
+    }
+    const git=(...args)=>execFileSync('git',['-c','user.name=Fixture','-c','user.email=fixture@example.invalid',...args],{cwd:dir,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
+    git('init','-q');git('remote','add','origin',component.repository);git('add','.');git('commit','-qm','Synthetic component fixture');
+    component.commit=git('rev-parse','HEAD');git('checkout','--detach','-q');
+  }
+  const lock=join(root,'lock.json');writeFileSync(lock,JSON.stringify({schema_version:'agent-action-stack.lock/v1',components}));
+  const started=join(root,'started');const release=join(root,'release');const child=join(root,'decide.cjs');
+  writeFileSync(child,blockingChild(started,release,{passed:false}));
+  const options={paths:{deps,lock},python:{bin:process.execPath,prefix:[child]},childTimeoutMs:10000};
+  const server=createGuiServer({outputRoot:join(root,'out'),runOptions:options});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const headers={origin:'http://127.0.0.1:'+server.address().port};
+  let pending;
+  try {
+    pending=requestServer(server,'/api/run',{method:'POST',headers});
+    await awaitStarted(started);await assertResponsiveAndBusy(server);
+    writeFileSync(release,'release');
+    const first=await pending;assert.equal(first.status,200);
+    assert.equal(JSON.parse(first.body).report.stages.decide.status,'failed');
+    // A real child timeout retains the existing diagnostic and releases admission.
+    writeFileSync(child,'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,5000)');
+    options.childTimeoutMs=100;
+    const failed=await requestServer(server,'/api/run',{method:'POST',headers});
+    assert.equal(failed.status,500);
+    assert.equal(JSON.parse(failed.body).report.stages.decide.code,'AAS_CHILD_TIMEOUT');
+    options.childTimeoutMs=10000;
+    writeFileSync(child,"process.stdout.write('x'.repeat(2*1024*1024))");
+    const oversized=await requestServer(server,'/api/run',{method:'POST',headers});
+    assert.equal(oversized.status,500);
+    assert.equal(JSON.parse(oversized.body).report.stages.decide.status,'error');
+    assert.ok(oversized.body.length<10000,'bounded diagnostic response');
+    const originalLock=options.paths.lock;options.paths.lock=join(root,'missing-lock');
+    const workerFailure=await requestServer(server,'/api/run',{method:'POST',headers});
+    assert.equal(workerFailure.status,500);assert.match(JSON.parse(workerFailure.body).error,/lock/i);
+    options.paths.lock=originalLock;
+    writeFileSync(child,'process.stdout.write(JSON.stringify({passed:false}))');
+    assert.equal((await requestServer(server,'/api/run',{method:'POST',headers})).status,200);
+    const disconnectedStarted=join(root,'disconnected-started'),disconnectedRelease=join(root,'disconnected-release');
+    writeFileSync(child,blockingChild(disconnectedStarted,disconnectedRelease,{passed:false}));
+    const disconnected=request({hostname:'127.0.0.1',port:server.address().port,path:'/api/run',method:'POST',headers});
+    disconnected.on('error',()=>{});disconnected.end();await awaitStarted(disconnectedStarted);disconnected.destroy();
+    try {await assertResponsiveAndBusy(server);} finally {writeFileSync(disconnectedRelease,'release');}
+    let available;
+    for(let attempt=0;attempt<100;attempt++){
+      available=await requestServer(server,'/api/run?domain=invalid',{method:'POST',headers});
+      if(available.status!==503) break;await delay(25);
+    }
+    assert.equal(available.status,400,'disconnected work releases only after completion');
+  } finally {writeFileSync(release,'release');if(pending) await pending;await new Promise(resolve=>server.close(resolve));}
+});
+
+test('production GUI replay worker rejects overlapping work while its verifier blocks', {timeout:15000}, async()=>{
+  const root=mkdtempSync(join(tmpdir(),'aas-worker-replay-'));
+  const started=join(root,'started'),release=join(root,'release');
+  mkdirSync(join(root,'consequence-rail','cmd'),{recursive:true});mkdirSync(join(root,'mandatebound','dist'),{recursive:true});
+  writeFileSync(join(root,'consequence-rail','cmd','crctl.js'),blockingChild(started,release,{valid:false}));
+  writeFileSync(join(root,'mandatebound','dist','cli.js'),'throw new Error("must not reach review")');
+  const rail={action:{action_id:'synthetic'}};
+  const bundle={report:{run_id:'synthetic'},stages:{act:{action_id:'synthetic',rail_bundle:rail},prove:{result:{verdict:'recorded',actionId:'synthetic',evidenceDigest:'sha256:'+createHash('sha256').update(JSON.stringify(rail)).digest('hex')}}}};
+  const server=createGuiServer({depsDir:root});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  let pending;
+  try {
+    pending=replayPost(server,JSON.stringify(bundle));await awaitStarted(started);
+    await assertResponsiveAndBusy(server);writeFileSync(release,'release');
+    assert.equal((await pending).status,422);
+    assert.equal((await replayPost(server,JSON.stringify({stages:{}}))).status,422);
+  } finally {writeFileSync(release,'release');if(pending) await pending;await new Promise(resolve=>server.close(resolve));}
+});
+
+test('importing the GUI from an unrelated worker preserves its data and parent channel', {timeout:10000}, async()=>{
+  const guiUrl=new URL('../bin/aas-gui.mjs',import.meta.url).href;
+  const worker=new Worker(
+    "const {parentPort,workerData}=require('node:worker_threads');"+
+    "import("+JSON.stringify(guiUrl)+").then(()=>{"+
+    "parentPort.on('message',message=>{parentPort.postMessage({echo:message,data:workerData});parentPort.close();});"+
+    "parentPort.postMessage({ready:true});"+
+    "});",
+    {eval:true,workerData:{operation:'run',owner:'unrelated-worker'}}
+  );
+  try {
+    const messages=[];
+    await new Promise((resolve,reject)=>{
+      worker.on('error',reject);
+      worker.on('message',message=>{
+        messages.push(message);
+        if(message.ready===true) worker.postMessage('still connected');
+      });
+      worker.on('exit',code=>code===0?resolve():reject(new Error('Worker exit '+code)));
+    });
+    assert.deepEqual(messages,[{ready:true},{echo:'still connected',data:{operation:'run',owner:'unrelated-worker'}}]);
+  } finally {await worker.terminate();}
+});
+
+test('marked GUI tasks retain normal replay and unsupported-operation handling', async()=>{
+  const result=await runGuiTask({operation:'replay',bundle:{report:{run_id:'marked'},stages:{}}});
+  assert.equal(result.runId,'marked');assert.match(result.reason,/unavailable/);
+  await assert.rejects(runGuiTask({operation:'unrecognized'}),/Unsupported GUI worker operation/);
 });
