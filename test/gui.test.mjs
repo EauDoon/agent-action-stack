@@ -785,8 +785,8 @@ test("scenario presets prepare explicit synthetic workflows without calling exec
 test("comparison detects domain changes and refreshed missing selections clear saved exports", async () => {
   const outputRoot=mkdtempSync(join(tmpdir(),'aas-domain-comparison-'));
   const report={flow:'decide',stages:{},component_provenance:[]};
-  writeCase(outputRoot,'left',{report:{...report,domain:'refund'},prove:{}});
-  writeCase(outputRoot,'right',{report:{...report,domain:'inventory'},prove:{}});
+  writeCase(outputRoot,'left',{report:{...report,run_id:'left',domain:'refund'},prove:{}});
+  writeCase(outputRoot,'right',{report:{...report,run_id:'right',domain:'inventory'},prove:{}});
   assert.ok(compareRuns('left','right',{outputRoot}).differences.some((entry)=>entry.field==='domain'));
   const document=stubDocument();
   new Function('document','fetch','crypto',pageScript())(document,async()=>({json:async()=>({cases:[]})}),globalThis.crypto);

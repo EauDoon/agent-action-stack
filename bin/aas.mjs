@@ -1033,7 +1033,9 @@ function readBoundedCaseJson(path) {
       size += read;
     }
     if (size > CHILD_JSON_LIMIT) throw new Error("Case file exceeds the byte limit.");
-    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, size)));
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, size));
+    try { return JSON.parse(decoded); }
+    catch { throw new Error("Case file contains invalid JSON."); }
   } finally { closeSync(fd); }
 }
 
@@ -1190,6 +1192,7 @@ export function summarizeRun(runId, { outputRoot = DEFAULT_PATHS.outputRoot } = 
     throw new Error(`Run ${runId} uses unsupported manifest schema ${String(manifest.schema_version)}.`);
   }
   const report = readRunReport(bundleDir, manifest);
+  if (manifest.run_id !== runId || report?.run_id !== runId) throw new Error("Case identity does not match its directory.");
   const prove = readStageArtifact(bundleDir, manifest, "prove");
   const artifacts_unreadable = prove.unreadable ? ["prove"] : [];
   const stages = {};

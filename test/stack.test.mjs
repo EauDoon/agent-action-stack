@@ -1612,6 +1612,35 @@ test('saved case readers reject invalid UTF-8 without replacing evidence bytes',
   assert.throws(()=>exportRunBundle('invalid-utf8',{outputRoot}),/encoded data|encoding/i);
 });
 
+test('history and comparison reject mismatched saved identities',async()=>{
+  const {listCasePage}=await import('../bin/case-review.mjs');
+  const outputRoot=tempRoot();
+  const result=await runDemo([],{paths:{outputRoot},runId:'identity-case',componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false},status:0})});
+  for(const name of ['manifest.json','report.json']) {
+    const path=join(result.bundleDir,name), original=readFileSync(path,'utf8');
+    writeFileSync(path,JSON.stringify({...JSON.parse(original),run_id:'different-case'}));
+    assert.deepEqual(listCasePage({outputRoot}).unavailable,['identity-case']);
+    assert.equal(listCasePage({outputRoot}).cases.length,0);
+    assert.equal(compareRuns('identity-case','identity-case',{outputRoot}).classification,'not-comparable');
+    writeFileSync(path,original);
+  }
+});
+
+test('inspect parsing diagnostics never include malformed saved evidence bytes',async()=>{
+  const outputRoot=tempRoot();
+  const result=await runDemo([],{paths:{outputRoot},runId:'private-json',componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false},status:0})});
+  const manifest=JSON.parse(readFileSync(join(result.bundleDir,'manifest.json'),'utf8'));
+  for(const name of ['manifest.json','report.json',manifest.stages.decide.artifact]) {
+    const path=join(result.bundleDir,name), original=readFileSync(path,'utf8');
+    writeFileSync(path,'{"PROBE123":INVALID}');
+    for(const format of ['--json','--markdown']) {
+      const child=spawnSync(process.execPath,[fileURLToPath(new URL('../bin/aas.mjs',import.meta.url)),'inspect','private-json','--root',outputRoot,format],{encoding:'utf8',timeout:5000});
+      assert.notEqual(child.status,0);assert.match(child.stderr,/invalid JSON/);assert.doesNotMatch(child.stderr,/PROBE123|INVALID/);
+    }
+    writeFileSync(path,original);
+  }
+});
+
 test('saved case FIFO cannot block the shared reader', {skip:process.platform==='win32'},()=>{
   const outputRoot=tempRoot(),dir=join(outputRoot,'runs','fifo-case');mkdirSync(dir,{recursive:true});
   execFileSync('mkfifo',[join(dir,'manifest.json')]);
