@@ -13,7 +13,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
-  openSync, closeSync, fstatSync, readSync, lstatSync,
+  constants, openSync, closeSync, fstatSync, readSync, lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -1021,7 +1021,7 @@ function safeBundleFile(bundleDir, value, label) {
  */
 function readBoundedCaseJson(path) {
   if (lstatSync(dirname(path)).isSymbolicLink() || lstatSync(path).isSymbolicLink()) throw new Error("Case files must not be symbolic links.");
-  const fd = openSync(path, "r");
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK | (constants.O_NOFOLLOW ?? 0));
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile() || stat.size > CHILD_JSON_LIMIT) throw new Error("Case file exceeds the byte limit or is not a regular file.");
@@ -1033,7 +1033,7 @@ function readBoundedCaseJson(path) {
       size += read;
     }
     if (size > CHILD_JSON_LIMIT) throw new Error("Case file exceeds the byte limit.");
-    return JSON.parse(buffer.subarray(0, size).toString("utf8"));
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, size)));
   } finally { closeSync(fd); }
 }
 

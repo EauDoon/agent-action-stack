@@ -1,3 +1,4 @@
+import { execFileSync, spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -1602,4 +1603,20 @@ test('export byte budget includes the actual formatted download representation',
   const outputRoot=tempRoot();
   await runDemo([],{paths:{outputRoot},runId:'formatted-budget',componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false,rows:Array(30000).fill({x:0})},status:0})});
   assert.throws(()=>exportRunBundle('formatted-budget',{outputRoot}),/byte limit/);
+});
+
+test('saved case readers reject invalid UTF-8 without replacing evidence bytes',async()=>{
+  const outputRoot=tempRoot();
+  const result=await runDemo([],{paths:{outputRoot},runId:'invalid-utf8',componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false},status:0})});
+  writeFileSync(join(result.bundleDir,'report.json'),Buffer.concat([Buffer.from('{"run_id":"invalid-utf8","field":"'),Buffer.from([0xc0]),Buffer.from('"}')]));
+  assert.throws(()=>exportRunBundle('invalid-utf8',{outputRoot}),/encoded data|encoding/i);
+});
+
+test('saved case FIFO cannot block the shared reader', {skip:process.platform==='win32'},()=>{
+  const outputRoot=tempRoot(),dir=join(outputRoot,'runs','fifo-case');mkdirSync(dir,{recursive:true});
+  execFileSync('mkfifo',[join(dir,'manifest.json')]);
+  const url=new URL('../bin/aas.mjs',import.meta.url).href;
+  const script='import {exportRunBundle} from '+JSON.stringify(url)+';try{exportRunBundle("fifo-case",{outputRoot:'+JSON.stringify(outputRoot)+'});process.exitCode=1;}catch(error){if(!/regular file/.test(error.message))throw error;process.stdout.write("rejected");}';
+  const child=spawnSync(process.execPath,['--input-type=module','-e',script],{encoding:'utf8',timeout:2000});
+  assert.equal(child.error,undefined,'reader must not block until child timeout');assert.equal(child.status,0,child.stderr);assert.equal(child.stdout,'rejected');
 });
