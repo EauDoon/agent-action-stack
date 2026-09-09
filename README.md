@@ -268,3 +268,5 @@ In the workbench, **Load older cases** appends the next page while keeping exist
 **Verify saved case** reopens the selected persisted case on the server and re-verifies its evidence in a worker. It uses the same origin and admission checks as other verification requests, never invokes action execution, and displays the saved-case result separately from imported evidence.
 
 Saved inspection includes expandable decide, act, and prove artifacts with persisted status, reason, diagnostic code, and captured stderr where available. Skipped or absent artifacts are labeled explicitly. JSON and diagnostics remain escaped text, and artifact inspection is separate from verification.
+
+**Download case review** creates a Markdown handoff with case identity, stage records, component revisions, recorded and recomputed evidence digests, and explicit verification limits. It summarizes persisted data and does not certify receipts, source truth, legal effect, or real-world execution.

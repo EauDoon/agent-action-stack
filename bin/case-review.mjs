@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_PATHS, isValidRunId, summarizeRun } from "./aas.mjs";
+import { DEFAULT_PATHS, exportRunBundle, isValidRunId, summarizeRun } from "./aas.mjs";
 
 export function listCasePage({ outputRoot = DEFAULT_PATHS.outputRoot, before = null, limit = 25 } = {}) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error("History limit must be an integer from 1 to 50.");
@@ -30,4 +31,49 @@ export function parseCasePageArgs(args) {
     result[key.slice(2)] = key === "--limit" ? Number(value) : value;
   }
   return result;
+}
+
+export function inspectCase(runId, options = {}) {
+  const bundle = exportRunBundle(runId, options);
+  const report = bundle.report;
+  const review = bundle.stages.prove?.result;
+  const rail = bundle.stages.act?.rail_bundle;
+  const computed = rail && typeof rail === 'object' ? 'sha256:' + createHash('sha256').update(JSON.stringify(rail)).digest('hex') : null;
+  return {
+    schema_version: 'agent-action-stack.case-review/v1', run_id: runId,
+    created_at: bundle.manifest.created_at ?? null, domain: report.domain ?? null,
+    requested_options: report.requested_options ?? null,
+    stages: ['decide','act','prove'].map(name => ({ name, status: bundle.manifest.stages[name]?.status ?? 'unknown', reason: bundle.manifest.stages[name]?.reason ?? null, code: bundle.manifest.stages[name]?.code ?? null, artifact_available: Object.hasOwn(bundle.stages,name) })),
+    policy_id: report.stages?.decide?.policy_id ?? null,
+    action_id: bundle.stages.act?.action_id ?? null, outcome: report.stages?.act?.outcome ?? null,
+    review_verdict: review?.verdict ?? null,
+    recorded_evidence_digest: review?.evidenceDigest ?? null, recomputed_evidence_digest: computed,
+    digest_matches: computed && typeof review?.evidenceDigest === 'string' ? computed === review.evidenceDigest : null,
+    component_provenance: (Array.isArray(report.component_provenance)?report.component_provenance:[]).map(entry=>({name:entry.name??null,commit:entry.commit??null})),
+    limits: ['Receipt verification was not performed by this report.', 'A matching digest binds bytes only; it does not prove source truth.', 'Synthetic demo keys only; legal effect is not determined.'],
+  };
+}
+
+export function markdownText(value) {
+  const punctuation = new Set(['\\', '`', '*', '_', '{', '}', '[', ']', '(', ')', '#', '+', '.', '!', '|', '-']);
+  return [...String(value ?? 'unavailable')].map(character => {
+    if (character === '&') return '&amp;';
+    if (character === '<') return '&lt;';
+    if (character === '>') return '&gt;';
+    if (character === '\r' || character === '\n') return ' ';
+    return punctuation.has(character) ? '\\' + character : character;
+  }).join('');
+}
+
+export function renderCaseMarkdown(review) {
+  const lines = ['# Saved case review', '', 'Read-only summary of persisted synthetic evidence. This export performs no receipt verification.', '',
+    '- Run ID: '+markdownText(review.run_id), '- Created: '+markdownText(review.created_at), '- Domain: '+markdownText(review.domain),
+    '- Policy: '+markdownText(review.policy_id), '- Action: '+markdownText(review.action_id), '- Outcome: '+markdownText(review.outcome),
+    '- Recorded review verdict: '+markdownText(review.review_verdict), '', '## Stage record', ''];
+  for(const stage of review.stages??[]) lines.push('- '+markdownText(stage.name)+': '+markdownText(stage.status)+'; artifact '+(stage.artifact_available?'present':'absent')+'; reason '+markdownText(stage.reason)+'; code '+markdownText(stage.code));
+  lines.push('', '## Evidence binding', '', '- Recorded digest: '+markdownText(review.recorded_evidence_digest), '- Recomputed digest: '+markdownText(review.recomputed_evidence_digest), '- Digests match: '+markdownText(review.digest_matches), '', '## Component revisions', '');
+  for(const entry of review.component_provenance??[]) lines.push('- '+markdownText(entry.name)+': '+markdownText(entry.commit));
+  lines.push('', '## Limits', '');
+  for(const limit of review.limits??[]) lines.push('- '+markdownText(limit));
+  return lines.join('\n')+'\n';
 }

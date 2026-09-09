@@ -1,4 +1,4 @@
-import { listCasePage, parseCasePageArgs } from "../bin/case-review.mjs";
+import { inspectCase, renderCaseMarkdown, listCasePage, parseCasePageArgs } from "../bin/case-review.mjs";
 import assert from "node:assert/strict";
 import { Worker } from "node:worker_threads";
 import { runGuiTask } from "../bin/aas-gui-worker.mjs";
@@ -299,7 +299,7 @@ function pageScript() {
 
 function stubDocument() {
   const elements = {};
-  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count", "inspect-case", "saved-download", "saved-status", "saved-summary", "saved-bindings", "scenario", "apply-scenario", "scenario-note", "restore-settings", "older-history", "history-page-status", "saved-case-id", "lookup-case", "saved-link", "replay-saved", "saved-review-status", "saved-review-result", "saved-artifacts"]) {
+  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count", "inspect-case", "saved-download", "saved-status", "saved-summary", "saved-bindings", "scenario", "apply-scenario", "scenario-note", "restore-settings", "older-history", "history-page-status", "saved-case-id", "lookup-case", "saved-link", "replay-saved", "saved-review-status", "saved-review-result", "saved-artifacts", "saved-report"]) {
     elements[id] = { value: "pass", checked: false, disabled: false, textContent: "", innerHTML: "", href: null, style: {}, listeners: {},
       addEventListener(name, fn) { const prior = this.listeners[name]; this.listeners[name] = prior ? (...args) => { prior(...args); return fn(...args); } : fn; },
       removeAttribute(name) { delete this[name]; } };
@@ -985,4 +985,15 @@ test('stage inspection exposes skipped artifacts and diagnostics without renderi
   const html=stageDetailsModel({manifest:{stages:{decide:{status:'error',code:'AAS_CHILD_TIMEOUT',stderr:'<script>bad</script>'},act:{status:'skipped'}}},stages:{decide:{message:'<img src=x>'}}});
   assert.match(html,/AAS_CHILD_TIMEOUT/);assert.match(html,/No persisted artifact/);assert.match(html,/act: skipped/);
   assert.doesNotMatch(html,/<script>|<img src=x>/);assert.match(html,/&lt;img/);assert.match(html,/not proof of source truth/);
+});
+
+test('case review downloads readable evidence limits and escapes injected Markdown',async()=>{
+  const outputRoot=mkdtempSync(join(tmpdir(),'aas-case-review-'));
+  await runDemo([],{paths:{outputRoot},runId:'review-case',componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false},status:0})});
+  const model=inspectCase('review-case',{outputRoot});assert.equal(model.digest_matches,null);
+  const markdown=renderCaseMarkdown({...model,domain:'<script>x</script> [go](https://example.invalid)'});
+  assert.equal(markdown.includes("<script>"),false);assert.equal(markdown.includes("[go](https:"),false);assert.match(markdown,/no receipt verification/);
+  const server=createGuiServer({outputRoot});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {const res=await requestServer(server,'/api/review/review-case');assert.equal(res.status,200);assert.match(res.headers['content-disposition'],/case-review-review-case.md/);assert.match(res.body,/decide: failed/);}
+  finally {await new Promise(resolve=>server.close(resolve));}
 });

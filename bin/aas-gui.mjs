@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 /** Lightweight local GUI for the Agent Action Stack orchestrator. */
+import { inspectCase, renderCaseMarkdown } from "./case-review.mjs";
 import { createServer } from "node:http";
 import { runGuiTask } from "./aas-gui-worker.mjs";
 import { pathToFileURL } from "node:url";
@@ -331,6 +332,7 @@ export function renderPage() {
 <button id="inspect-case">Inspect left case</button>
 <label>Saved run ID <input id="saved-case-id" type="text" maxlength="200" placeholder="Enter an exact saved run ID"></label><button id="lookup-case">Inspect by ID</button>
 <a id="saved-link" class="download">Bookmark this local case</a>
+<a id="saved-report" class="download" download>Download case review</a>
 <button id="restore-settings" disabled>Use saved settings</button>
 <button id="replay-saved" disabled>Verify saved case</button><div id="saved-review-status" role="status"></div><div id="saved-review-result"></div>
 <a id="saved-download" class="download" download>Download selected saved case</a>
@@ -368,6 +370,7 @@ let savedToken=0;
 let savedBundle=null;
 const savedIdInput=document.getElementById("saved-case-id");
 const savedLink=document.getElementById("saved-link");
+const savedReport=document.getElementById("saved-report");
 const bookmarkId=new URLSearchParams(globalThis.location?.hash?.slice(1)??"").get("case");
 if(isReviewRunId(bookmarkId)) savedIdInput.value=bookmarkId;
 const savedReplayButton=document.getElementById("replay-saved");
@@ -397,7 +400,7 @@ restoreButton.addEventListener("click",()=>{
 const inspectButton=document.getElementById('inspect-case');
 const savedDownload=document.getElementById('saved-download');
 const savedStatus=document.getElementById('saved-status');
-function clearSaved(){ savedToken++; savedBundle=null; restoreButton.disabled=true; savedReplayButton.disabled=true; savedReviewStatus.textContent=""; savedReviewResult.innerHTML=""; savedLink.style.display="none"; savedLink.removeAttribute("href"); inspectButton.disabled=false; savedDownload.style.display='none'; savedDownload.removeAttribute('href'); document.getElementById('saved-summary').innerHTML=''; document.getElementById('saved-bindings').innerHTML=''; document.getElementById('saved-artifacts').innerHTML=''; savedStatus.textContent=''; }
+function clearSaved(){ savedToken++; savedBundle=null; restoreButton.disabled=true; savedReplayButton.disabled=true; savedReviewStatus.textContent=""; savedReviewResult.innerHTML=""; savedLink.style.display="none"; savedLink.removeAttribute("href"); savedReport.removeAttribute("href"); savedReport.style.display="none"; inspectButton.disabled=false; savedDownload.style.display='none'; savedDownload.removeAttribute('href'); document.getElementById('saved-summary').innerHTML=''; document.getElementById('saved-bindings').innerHTML=''; document.getElementById('saved-artifacts').innerHTML=''; savedStatus.textContent=''; }
 leftCase.addEventListener('change',clearSaved);
 async function inspectSaved(runId){
   clearSaved();
@@ -413,7 +416,7 @@ async function inspectSaved(runId){
     const html=await bindingsModel(bundle);
     if(token!==savedToken) return;
     savedBundle=bundle; savedReplayButton.disabled=false; restoreButton.disabled=validatedRunSettings(bundle.report)===null;
-    savedIdInput.value=runId; savedLink.href='#case='+encodeURIComponent(runId); savedLink.style.display='inline-block';
+    savedIdInput.value=runId; savedLink.href='#case='+encodeURIComponent(runId); savedLink.style.display='inline-block'; savedReport.href='/api/review/'+encodeURIComponent(runId); savedReport.style.display='inline-block';
     document.getElementById('saved-summary').innerHTML=summaryModel(bundle.report);
     document.getElementById('saved-bindings').innerHTML=html;
     document.getElementById('saved-artifacts').innerHTML=stageDetailsModel(bundle);
@@ -764,6 +767,15 @@ export function createGuiServer({
         const comparison = compareRuns(left, right, { outputRoot });
         sendJson(response, 200, { ok: true, ...comparison });
         return;
+      }
+      if (request.method === "GET" && url.pathname.startsWith("/api/review/")) {
+        const runId = decodeURIComponent(url.pathname.slice("/api/review/".length));
+        if (!isReviewRunId(runId) || url.search) { sendJson(response, 400, { error: "Invalid case review request." }); return; }
+        let content;
+        try { content = renderCaseMarkdown(inspectCase(runId, { outputRoot })); }
+        catch (error) { sendJson(response, error.code === "ENOENT" ? 404 : 422, { error: "Case review unavailable." }); return; }
+        response.writeHead(200, { "content-type": "text/markdown; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff", "content-disposition": 'attachment; filename="case-review-' + runId + '.md"' });
+        response.end(content); return;
       }
       if (request.method === "GET" && url.pathname.startsWith("/api/bundle/")) {
         const runId = decodeURIComponent(url.pathname.slice("/api/bundle/".length));
