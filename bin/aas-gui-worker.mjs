@@ -1,4 +1,5 @@
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
+import { listCasePage } from "./case-review.mjs";
 import { runDemo, replayBundle, selectPython } from "./aas.mjs";
 
 const GUI_TASK_KIND = "agent-action-stack.gui-task/v1";
@@ -32,6 +33,8 @@ if (!isMainThread && workerData?.kind === GUI_TASK_KIND) {
       const options = task.options ?? {};
       const python = options.python ?? selectPython();
       value = await runDemo(task.args, { ...options, python });
+    } else if (task?.operation === "history") {
+      value = listCasePage(task.options);
     } else if (task?.operation === "replay") {
       value = replayBundle(task.bundle, task.options ?? {});
     } else {

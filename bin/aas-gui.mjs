@@ -680,7 +680,13 @@ export function createGuiServer({
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/history") {
-        sendJson(response, 200, { ok: true, cases: listRunSummaries({ outputRoot }) });
+        if (!hasOnlySingleOptions(url.searchParams, new Set(["before", "limit"]))
+          || (url.searchParams.has("before") && (!isValidRunId(url.searchParams.get("before")) || url.searchParams.get("before").length > 200))
+          || (url.searchParams.has("limit") && !/^(?:[1-9]|[1-4][0-9]|50)$/.test(url.searchParams.get("limit")))) {
+          sendJson(response, 400, { error: "Invalid history page options." }); return;
+        }
+        const page = await runGuiTask({ operation: "history", options: { outputRoot, before: url.searchParams.get("before"), limit: Number(url.searchParams.get("limit") ?? 25) } });
+        sendJson(response, 200, { ok: true, ...page });
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/compare") {

@@ -1,3 +1,4 @@
+import { listCasePage, parseCasePageArgs } from "../bin/case-review.mjs";
 import assert from "node:assert/strict";
 import { Worker } from "node:worker_threads";
 import { runGuiTask } from "../bin/aas-gui-worker.mjs";
@@ -929,4 +930,16 @@ test('saved run settings preserve refused request options and reject ambiguous r
   assert.deepEqual(validatedRunSettings(result.report),{domain:'inventory',response:'fail',fault:'duplicate',prove:'rail',dispute:true});
   assert.equal(validatedRunSettings({}),null);
   assert.equal(validatedRunSettings({requested_options:{...result.report.requested_options,dispute:'true'}}),null);
+});
+
+test('history pages advance across unreadable cases without duplicates or skipping older cases',()=>{
+  const outputRoot=mkdtempSync(join(tmpdir(),'aas-pages-'));
+  writeCase(outputRoot,'case-c');writeCase(outputRoot,'case-a');mkdirSync(join(outputRoot,'runs','case-b'),{recursive:true});
+  const first=listCasePage({outputRoot,limit:2});
+  assert.deepEqual(first.cases.map(x=>x.run_id),['case-c']);assert.deepEqual(first.unavailable,['case-b']);assert.equal(first.next_cursor,'case-b');
+  const second=listCasePage({outputRoot,limit:2,before:first.next_cursor});
+  assert.deepEqual(second.cases.map(x=>x.run_id),['case-a']);assert.equal(second.next_cursor,null);
+  assert.throws(()=>listCasePage({outputRoot,limit:51}),/limit/);
+  assert.throws(()=>listCasePage({outputRoot,before:'../x'}),/cursor/);
+  assert.throws(()=>parseCasePageArgs(['--limit','2','--limit','3']),/Usage/);
 });

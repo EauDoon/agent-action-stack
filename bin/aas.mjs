@@ -242,7 +242,7 @@ Usage:
   aas demo [--response pass|fail] [--fault none|duplicate] [--dispute] [--prove simulate|rail] [--domain refund|inventory] [--json]
   aas export <run-id> [--out <path>]
   aas replay <bundle-file|-> [--json]
-  aas cases [--json]
+  aas cases [--before run-id] [--limit 1..50] [--json]
   aas compare <run-id> <run-id> [--json]
   aas help
 
@@ -1722,13 +1722,15 @@ function runRunsCommand(args, { asJson } = {}) {
   process.exitCode = 0;
 }
 
-function runCasesCommand(args, { asJson } = {}) {
-  if (args.some((token) => token !== "--json")) {
-    throw new UsageError("Unsupported cases option (expected [--json])");
-  }
-  const cases = listRunSummaries({});
+async function runCasesCommand(args, { asJson } = {}) {
+  const { listCasePage, parseCasePageArgs } = await import("./case-review.mjs");
+  let pageOptions;
+  try { pageOptions = parseCasePageArgs(args); } catch (error) { throw new UsageError(error.message); }
+  if ((pageOptions.limit !== undefined && (pageOptions.limit < 1 || pageOptions.limit > 50)) || (pageOptions.before !== undefined && (!isValidRunId(pageOptions.before) || pageOptions.before.length > 200))) throw new UsageError("Invalid history page options.");
+  const page = listCasePage(pageOptions);
+  const cases = page.cases;
   if (asJson) {
-    process.stdout.write(`${JSON.stringify({ ok: true, cases }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ ok: true, ...page }, null, 2)}\n`);
   } else if (cases.length === 0) {
     process.stdout.write("no cases yet\n");
   } else {
@@ -1922,7 +1924,7 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   if (command === "runs" || command === "cases" || command === "compare" || command === "prune") {
     try {
       if (command === "runs") runRunsCommand(argv.slice(1), { asJson });
-      else if (command === "cases") runCasesCommand(argv.slice(1), { asJson });
+      else if (command === "cases") await runCasesCommand(argv.slice(1), { asJson });
       else if (command === "compare") runCompareCommand(argv.slice(1), { asJson });
       else runPruneCommand(argv.slice(1), { asJson });
     } catch (error) {
