@@ -275,8 +275,9 @@ export function renderPage() {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Agent Action Stack</title>
-<style>body{font:16px system-ui,sans-serif;max-width:800px;margin:40px auto;padding:0 20px;color:#17202a}button{padding:10px 14px;margin:4px 0;cursor:pointer}button:disabled{cursor:wait;opacity:.6}select{padding:9px;margin:4px}pre{background:#f3f5f7;padding:16px;overflow:auto;border-radius:6px}.state{margin:16px 0}.download{display:none}.panel{margin:16px 0}.error{color:#7a1f1f}</style></head>
-<body><h1>Agent Action Stack</h1><p>Run the local decide, act, and prove flow using the reviewed component lock.</p>
+<style>html{color-scheme:light}body{font:16px/1.55 system-ui,sans-serif;max-width:1000px;margin:32px auto;padding:0 20px;color:#17202a;background:#f7f9fc}h1{font-size:2.2rem;line-height:1.2}h2{font-size:1.35rem}.state,.panel{background:white;border:1px solid #d7e0ea;border-radius:12px;padding:20px}label{display:inline-block;margin:6px 12px 6px 0}input[type=search]{padding:9px;max-width:100%;box-sizing:border-box}button{background:#183f71;color:white;border:1px solid #183f71;border-radius:6px}a{color:#164d8e}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #b46b00;outline-offset:3px}.boundary{border-left:4px solid #183f71;padding:12px 16px;background:#eaf1fa}select{max-width:100%}@media(max-width:600px){body{margin:16px auto;padding:0 12px}.state,.panel{padding:14px}label{display:block}button{min-height:44px}pre{font-size:13px}}button{padding:10px 14px;margin:4px 0;cursor:pointer}button:disabled{cursor:wait;opacity:.6}select{padding:9px;margin:4px}pre{background:#f3f5f7;padding:16px;overflow:auto;border-radius:6px}.state{margin:16px 0}.download{display:none}.panel{margin:16px 0}.error{color:#7a1f1f}</style></head>
+<body><main><h1>Agent Action Stack</h1><p>Run the local decide, act, and prove flow using the reviewed component lock.</p>
+<p class="boundary">Synthetic local demo only. No real account operations. Policy evaluation, rail receipt verification, and MandateBound recording remain separate authorities. Source truth is unknown; legal effect is not determined.</p>
 <div class="state"><label>Scenario <select id="scenario"><option value="settled">Clean settlement</option><option value="refusal">Policy refusal</option><option value="compensated">Duplicate compensation and review</option><option value="review">Settled action review</option></select></label> <button id="apply-scenario">Apply scenario</button>
 <p id="scenario-note">Choose a scenario or configure the options below. Applying a scenario only changes controls.</p>
 <label>Response <select id="response"><option value="pass">pass</option><option value="fail">fail</option></select></label>
@@ -286,30 +287,31 @@ export function renderPage() {
 <label>Prove <select id="prove"><option value="simulate">simulation</option><option value="rail">same-case rail review</option></select></label>
 <br><button id="run">Run stack</button>
 <a id="download" class="download" download="agent-action-stack-run.json">Download run bundle</a></div>
-<div class="panel" id="summary"></div>
+<div class="panel" id="summary" aria-live="polite"></div>
 <div class="panel" id="bindings"></div>
-<pre id="output">Ready.</pre>
+<details><summary>Raw current run report</summary><pre id="output">Ready.</pre></details>
 <div class="panel"><h2>Replay an imported case</h2>
 <p>Import an exported case to inspect and re-verify it. Verification only: no action runs and no remedy is attempted. The imported case is reported separately from any live run above.</p>
+<label for="case-file">Exported case JSON</label>
 <input id="case-file" type="file" accept="application/json,.json"> <button id="replay">Replay imported case</button>
-<div id="import-status"></div>
+<div id="import-status" role="status" aria-live="polite"></div>
 <div id="import-result"></div></div>
 <div class="panel"><h2>Case history and comparison</h2>
 <p>Compare two persisted cases by identity, policy reference, component revisions, outcome, evidence digest, and review result. This view loads summaries only, never raw evidence, and never modifies or deletes a case.</p>
 <button id="load-history">Load history</button>
 <label>Search loaded cases <input id="history-search" type="search" placeholder="Run, policy, domain, review"></label>
 <label>Outcome <select id="history-outcome"><option value="">all</option><option value="settled">settled</option><option value="compensated">compensated</option></select></label>
-<p id="history-count">Load recent cases to search. The bounded history may omit older or unreadable cases.</p>
+<p id="history-count" role="status" aria-live="polite">Load recent cases to search. The bounded history may omit older or unreadable cases.</p>
 <label>Left <select id="left-case"><option value="">(select a case)</option></select></label>
 <label>Right <select id="right-case"><option value="">(select a case)</option></select></label>
 <button id="compare">Compare selected cases</button>
 <button id="inspect-case">Inspect left case</button>
 <a id="saved-download" class="download" download>Download selected saved case</a>
-<div id="saved-status"></div><div id="saved-summary"></div><div id="saved-bindings"></div>
+<div id="saved-status" role="status" aria-live="polite"></div><div id="saved-summary"></div><div id="saved-bindings"></div>
 <div id="history-list"></div>
-<div id="compare-status"></div>
+<div id="compare-status" role="status" aria-live="polite"></div>
 <div id="compare-result"></div></div>
-<script>
+</main><script>
 ${embedded}
 document.getElementById('apply-scenario').addEventListener('click',()=>{
   const preset=scenarioPreset(document.getElementById('scenario').value);

@@ -166,3 +166,31 @@ test("tampered evidence is reported as conflicting, not verified", async ({ page
   await expect(page.locator("#import-result")).toContainText("conflicting");
   await expect(page.locator("#import-result")).toContainText("digest-binding: FAIL");
 });
+
+test("guided inventory cases can be searched inspected and downloaded on mobile", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page.selectOption('#domain','inventory');
+  await page.selectOption('#scenario','compensated');
+  await page.click('#apply-scenario');
+  await expect(page.locator('#scenario-note')).toContainText('compensated');
+  await expect(page.locator('#domain')).toHaveValue('inventory');
+  await page.click('#run');
+  await expect(page.locator('#run')).toBeEnabled({timeout:120000});
+  await expect(page.locator('#summary')).toContainText('domain: inventory');
+  await expect(page.locator('#bindings')).toContainText('recomputed match');
+  await page.click('#load-history');
+  await expect(page.locator('#left-case option')).not.toHaveCount(1);
+  const id=await page.locator('#left-case option').nth(1).getAttribute('value');
+  await page.fill('#history-search',id);
+  await expect(page.locator('#history-list li')).toHaveCount(1);
+  await page.selectOption('#left-case',id);
+  await page.click('#inspect-case');
+  await expect(page.locator('#saved-status')).toContainText('Inspection only');
+  await expect(page.locator('#saved-summary')).toContainText('inventory');
+  const downloading=page.waitForEvent('download');
+  await page.click('#saved-download');
+  const download=await downloading;
+  expect(download.suggestedFilename()).toContain(id);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+});

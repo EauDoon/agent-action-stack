@@ -228,3 +228,25 @@ is disguised as the other. The GUI exposes the same choice with a Domain
 selector. Everything remains synthetic: no warehouse,
 merchant, payment, or external provider integration is involved, and a
 recorded review proves the handoff rather than any real-world reversibility.
+
+## Guided case workbench
+
+The local GUI includes four explicit synthetic scenario presets: clean settlement,
+policy refusal, duplicate compensation with same-case review, and settled-action
+review. Apply a preset, select refund or inventory, then press **Run stack**.
+Applying a preset never starts work. Domain identity is persisted in new reports;
+older bundles display an unknown domain instead of guessing.
+
+Load recent case history to search run identity, policy, domain, or review metadata
+and filter settled or compensated outcomes. Filters affect the displayed list;
+comparison selectors retain all loaded cases. History is bounded and may omit older
+or unreadable cases. **Inspect left case** loads a saved report and its bindings in
+a separate panel and enables an identity-checked download. Inspection does not
+verify source truth. Use imported replay to re-verify synthetic evidence.
+
+Only one run or replay upload is admitted at a time per GUI server. Busy callers
+receive HTTP 503 with Retry-After; retry after the current operation finishes.
+Ambiguous duplicate run or comparison options are rejected. File changes clear
+stale replay results, and oversized imports are rejected before browser file reads
+as well as at the server boundary. No preset, inspection, or history workflow
+performs real account operations.
