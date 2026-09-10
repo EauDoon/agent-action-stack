@@ -13,6 +13,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
+  constants, openSync, closeSync, fstatSync, readSync, lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -241,7 +242,8 @@ Usage:
   aas demo [--response pass|fail] [--fault none|duplicate] [--dispute] [--prove simulate|rail] [--domain refund|inventory] [--json]
   aas export <run-id> [--out <path>]
   aas replay <bundle-file|-> [--json]
-  aas cases [--json]
+  aas inspect <run-id> [--root output-dir] [--json|--markdown]
+  aas cases [--before run-id] [--limit 1..50] [--json]
   aas compare <run-id> <run-id> [--json]
   aas help
 
@@ -1017,18 +1019,55 @@ function safeBundleFile(bundleDir, value, label) {
  * the manifest references. Shared by the GUI download and `aas export`, so
  * both produce the identical portable document.
  */
+function readBoundedCaseJson(path) {
+  if (lstatSync(dirname(path)).isSymbolicLink() || lstatSync(path).isSymbolicLink()) throw new Error("Case files must not be symbolic links.");
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > CHILD_JSON_LIMIT) throw new Error("Case file exceeds the byte limit or is not a regular file.");
+    const buffer = Buffer.alloc(CHILD_JSON_LIMIT + 1);
+    let size = 0;
+    while (size < buffer.length) {
+      const read = readSync(fd, buffer, size, buffer.length - size, null);
+      if (read === 0) break;
+      size += read;
+    }
+    if (size > CHILD_JSON_LIMIT) throw new Error("Case file exceeds the byte limit.");
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, size));
+    try { return JSON.parse(decoded); }
+    catch { throw new Error("Case file contains invalid JSON."); }
+  } finally { closeSync(fd); }
+}
+
+function validateSavedManifest(manifest, bundleDir) {
+  if (manifest?.schema_version !== COMPARABLE_SCHEMA) throw new Error("Case uses unsupported manifest schema.");
+  const stages = manifest.stages;
+  if (!stages || typeof stages !== "object" || Array.isArray(stages)
+    || Object.keys(stages).length !== STAGE_NAMES.length
+    || !STAGE_NAMES.every((name) => Object.hasOwn(stages, name))) throw new Error("Invalid case stages.");
+  for (const name of STAGE_NAMES) {
+    const stage = stages[name];
+    if (!stage || typeof stage !== "object" || Array.isArray(stage)) throw new Error("Invalid case stage entry.");
+    if (stage.artifact !== null) safeBundleFile(bundleDir, stage.artifact, "stage artifact path");
+  }
+}
+
 export function readRunBundle(outputRoot, runId) {
   if (!isValidRunId(runId)) throw new Error("Invalid run id.");
   const bundleDir = join(outputRoot, "runs", runId);
-  const manifest = JSON.parse(readFileSync(join(bundleDir, "manifest.json"), "utf8"));
-  const report = JSON.parse(readFileSync(safeBundleFile(bundleDir, manifest.report, "report path"), "utf8"));
+  const directory = lstatSync(bundleDir);
+  if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error("Case directory must be a regular directory.");
+  const manifest = readBoundedCaseJson(join(bundleDir, "manifest.json"));
+  validateSavedManifest(manifest, bundleDir);
+  const report = readBoundedCaseJson(safeBundleFile(bundleDir, manifest.report, "report path"));
+  if (manifest.run_id !== runId || report?.run_id !== runId) throw new Error("Case identity does not match its directory.");
   const stages = {};
-  for (const [name, stage] of Object.entries(manifest.stages ?? {})) {
-    if (stage.artifact) {
-      stages[name] = JSON.parse(readFileSync(safeBundleFile(bundleDir, stage.artifact, "stage artifact path"), "utf8"));
-    }
+  for (const [name, stage] of Object.entries(manifest.stages)) {
+    if (stage.artifact) stages[name] = readBoundedCaseJson(safeBundleFile(bundleDir, stage.artifact, "stage artifact path"));
   }
-  return { manifest, report, stages };
+  const bundle = { manifest, report, stages };
+  if (Buffer.byteLength(JSON.stringify(bundle, null, 2) + "\n") > CHILD_JSON_LIMIT) throw new Error("Exported case exceeds the replay byte limit.");
+  return bundle;
 }
 
 const RUN_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
@@ -1071,7 +1110,7 @@ export function listRuns({ outputRoot = DEFAULT_PATHS.outputRoot, limit = Number
   for (const name of candidates) {
     let manifest;
     try {
-      manifest = JSON.parse(readFileSync(join(dir, name, "manifest.json"), "utf8"));
+      manifest = readBoundedCaseJson(join(dir, name, "manifest.json"));
     } catch {
       continue;
     }
@@ -1124,13 +1163,8 @@ const HISTORY_LIMIT = 50;
 const COMPARABLE_SCHEMA = "agent-action-stack.run/v1";
 
 function readJsonFile(path, label) {
-  let text;
-  try {
-    text = readFileSync(path, "utf8");
-  } catch {
-    throw new Error(`Cannot read ${label}.`);
-  }
-  return JSON.parse(text);
+  try { return readBoundedCaseJson(path); }
+  catch { throw new Error(`Cannot read ${label}.`); }
 }
 
 function readRunManifest(dir, runId) {
@@ -1165,10 +1199,9 @@ function readStageArtifact(bundleDir, manifest, name) {
  */
 export function summarizeRun(runId, { outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
   const { bundleDir, manifest } = readRunManifest(runsDirectory(outputRoot), runId);
-  if (manifest.schema_version !== COMPARABLE_SCHEMA) {
-    throw new Error(`Run ${runId} uses unsupported manifest schema ${String(manifest.schema_version)}.`);
-  }
+  validateSavedManifest(manifest, bundleDir);
   const report = readRunReport(bundleDir, manifest);
+  if (manifest.run_id !== runId || report?.run_id !== runId) throw new Error("Case identity does not match its directory.");
   const prove = readStageArtifact(bundleDir, manifest, "prove");
   const artifacts_unreadable = prove.unreadable ? ["prove"] : [];
   const stages = {};
@@ -1492,6 +1525,7 @@ export async function runDemo(args = [], options = {}) {
   const report = {
     stack: "agent-action-stack",
     response: responseName,
+    requested_options: { response: responseName, domain, fault, prove: proveMode, dispute: forceDispute },
     domain,
     flow: "decide",
     run_id: runId,
@@ -1696,13 +1730,15 @@ function runRunsCommand(args, { asJson } = {}) {
   process.exitCode = 0;
 }
 
-function runCasesCommand(args, { asJson } = {}) {
-  if (args.some((token) => token !== "--json")) {
-    throw new UsageError("Unsupported cases option (expected [--json])");
-  }
-  const cases = listRunSummaries({});
+async function runCasesCommand(args, { asJson } = {}) {
+  const { listCasePage, parseCasePageArgs } = await import("./case-review.mjs");
+  let pageOptions;
+  try { pageOptions = parseCasePageArgs(args); } catch (error) { throw new UsageError(error.message); }
+  if ((pageOptions.limit !== undefined && (pageOptions.limit < 1 || pageOptions.limit > 50)) || (pageOptions.before !== undefined && (!isValidRunId(pageOptions.before) || pageOptions.before.length > 200))) throw new UsageError("Invalid history page options.");
+  const page = listCasePage(pageOptions);
+  const cases = page.cases;
   if (asJson) {
-    process.stdout.write(`${JSON.stringify({ ok: true, cases }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ ok: true, ...page }, null, 2)}\n`);
   } else if (cases.length === 0) {
     process.stdout.write("no cases yet\n");
   } else {
@@ -1893,10 +1929,23 @@ export async function main(argv = process.argv.slice(2), options = {}) {
     process.exitCode = 0;
     return;
   }
+  if (command === "inspect") {
+    try {
+      const { parseInspectArgs, inspectCase, renderCaseMarkdown } = await import("./case-review.mjs");
+      const { runId, outputRoot, format } = parseInspectArgs(argv.slice(1));
+      const review = inspectCase(runId, { outputRoot });
+      process.stdout.write(format === "json" ? JSON.stringify({ ok: true, ...review }, null, 2) + "\n" : renderCaseMarkdown(review));
+      process.exitCode = 0;
+    } catch (error) {
+      const usage = error instanceof UsageError;
+      writeCliError(error, { asJson, usage }); process.exitCode = usage ? 2 : 1;
+    }
+    return;
+  }
   if (command === "runs" || command === "cases" || command === "compare" || command === "prune") {
     try {
       if (command === "runs") runRunsCommand(argv.slice(1), { asJson });
-      else if (command === "cases") runCasesCommand(argv.slice(1), { asJson });
+      else if (command === "cases") await runCasesCommand(argv.slice(1), { asJson });
       else if (command === "compare") runCompareCommand(argv.slice(1), { asJson });
       else runPruneCommand(argv.slice(1), { asJson });
     } catch (error) {

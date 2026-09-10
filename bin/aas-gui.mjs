@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 /** Lightweight local GUI for the Agent Action Stack orchestrator. */
+import { inspectCase, renderCaseMarkdown, renderComparisonMarkdown } from "./case-review.mjs";
 import { createServer } from "node:http";
 import { runGuiTask } from "./aas-gui-worker.mjs";
 import { pathToFileURL } from "node:url";
@@ -185,7 +186,7 @@ export async function bindingsModel(bundle) {
  * always labelled separately from any live run, and every value is
  * escaped. Pure and browser-safe.
  */
-export function replayResultModel(result) {
+export function replayResultModel(result, { saved = false } = {}) {
   const body = result && typeof result === "object" ? result : {};
   const runId = typeof body.run_id === "string" ? body.run_id : null;
   const checks = Array.isArray(body.checks) ? body.checks : [];
@@ -196,11 +197,11 @@ export function replayResultModel(result) {
   const verdictLabel = body.ok === true
     ? "replay verified under synthetic demo keys"
     : "not verified";
-  return `<h3>Imported case ${escapeHtml(runId ?? "(unknown run id)")} — ${verdictLabel}</h3>`
+  return `<h3>${saved ? "Saved" : "Imported"} case ${escapeHtml(runId ?? "(unknown run id)")} — ${verdictLabel}</h3>`
     + `<ul>${rows.join("")}</ul>`
     + reason
     + `<ul><li>verification only: no action execution or remediation runs</li>`
-    + `<li>imported identity is untrusted text; this panel proves no provenance and no link to a local run</li>`
+    + `<li>${saved ? "saved identity checked against its persisted case; source truth is still unknown" : "imported identity is untrusted text; this panel proves no provenance and no link to a local run"}</li>`
     + `<li>synthetic keys, source truth unknown, legal effect not determined</li></ul>`;
 }
 
@@ -259,6 +260,28 @@ export function validateRunBundle(bundle, runId) {
   return bundle;
 }
 
+export function isReviewRunId(value) { return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(value); }
+
+export function stageDetailsModel(bundle) {
+  return '<h3>Persisted stage artifacts</h3>' + ["decide", "act", "prove"].map((name) => {
+    const stage = bundle?.manifest?.stages?.[name];
+    const artifact = bundle?.stages?.[name];
+    const diagnostics = [stage?.reason, stage?.code, stage?.stderr].filter((value) => typeof value === "string" && value.length > 0).join(" | ");
+    return '<details><summary>' + escapeHtml(name + ': ' + (stage?.status ?? "unknown")) + '</summary>'
+      + (diagnostics ? '<p>' + escapeHtml(diagnostics) + '</p>' : '')
+      + (artifact === undefined ? '<p>No persisted artifact for this stage.</p>' : '<pre>' + escapeHtml(JSON.stringify(artifact, null, 2)) + '</pre>')
+      + '</details>';
+  }).join('') + '<p>Persisted content is evidence to inspect, not proof of source truth. Use Verify saved case for receipt checks.</p>';
+}
+
+export function validatedRunSettings(report) {
+  const value = report?.requested_options;
+  if (!value || !["refund", "inventory"].includes(value.domain)
+    || !["pass", "fail"].includes(value.response) || !["none", "duplicate"].includes(value.fault)
+    || !["simulate", "rail"].includes(value.prove) || typeof value.dispute !== "boolean") return null;
+  return { domain: value.domain, response: value.response, fault: value.fault, prove: value.prove, dispute: value.dispute };
+}
+
 export function scenarioPreset(name) {
   const presets = {
     settled: { response: "pass", fault: "none", prove: "simulate", dispute: false, note: "Expected: decide passes, synthetic action settles, prove is skipped." },
@@ -270,7 +293,7 @@ export function scenarioPreset(name) {
 }
 
 export function renderPage() {
-  const embedded = [scenarioPreset, filterHistory, validateRunBundle, escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, compareModel, historyModel, renderCaseOptions, sha256HexText]
+  const embedded = [stageDetailsModel, isReviewRunId, validatedRunSettings, scenarioPreset, filterHistory, validateRunBundle, escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, compareModel, historyModel, renderCaseOptions, sha256HexText]
     .map((fn) => fn.toString()).join("\n");
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -299,15 +322,22 @@ export function renderPage() {
 <div class="panel"><h2>Case history and comparison</h2>
 <p>Compare two persisted cases by identity, policy reference, component revisions, outcome, evidence digest, and review result. This view loads summaries only, never raw evidence, and never modifies or deletes a case.</p>
 <button id="load-history">Load history</button>
+<button id="older-history" disabled>Load older cases</button><p id="history-page-status" role="status"></p>
 <label>Search loaded cases <input id="history-search" type="search" placeholder="Run, policy, domain, review"></label>
 <label>Outcome <select id="history-outcome"><option value="">all</option><option value="settled">settled</option><option value="compensated">compensated</option></select></label>
 <p id="history-count" role="status" aria-live="polite">Load recent cases to search. The bounded history may omit older or unreadable cases.</p>
 <label>Left <select id="left-case"><option value="">(select a case)</option></select></label>
 <label>Right <select id="right-case"><option value="">(select a case)</option></select></label>
 <button id="compare">Compare selected cases</button>
+<a id="comparison-download" class="download" download>Download comparison review</a>
 <button id="inspect-case">Inspect left case</button>
+<label>Saved run ID <input id="saved-case-id" type="text" maxlength="200" placeholder="Enter an exact saved run ID"></label><button id="lookup-case">Inspect by ID</button>
+<a id="saved-link" class="download">Bookmark this local case</a>
+<a id="saved-report" class="download" download>Download case review</a>
+<button id="restore-settings" disabled>Use saved settings</button>
+<button id="replay-saved" disabled>Verify saved case</button><div id="saved-review-status" role="status"></div><div id="saved-review-result"></div>
 <a id="saved-download" class="download" download>Download selected saved case</a>
-<div id="saved-status" role="status" aria-live="polite"></div><div id="saved-summary"></div><div id="saved-bindings"></div>
+<div id="saved-status" role="status" aria-live="polite"></div><div id="saved-summary"></div><div id="saved-bindings"></div><div id="saved-artifacts"></div>
 <div id="history-list"></div>
 <div id="compare-status" role="status" aria-live="polite"></div>
 <div id="compare-result"></div></div>
@@ -337,17 +367,47 @@ const loadHistoryButton=document.getElementById('load-history');
 const compareButton=document.getElementById('compare');
 const compareStatus=document.getElementById('compare-status');
 const compareResult=document.getElementById('compare-result');
+const comparisonDownload=document.getElementById("comparison-download");
 let savedToken=0;
+let savedBundle=null;
+const savedIdInput=document.getElementById("saved-case-id");
+const savedLink=document.getElementById("saved-link");
+const savedReport=document.getElementById("saved-report");
+const bookmarkId=new URLSearchParams(globalThis.location?.hash?.slice(1)??"").get("case");
+if(isReviewRunId(bookmarkId)) savedIdInput.value=bookmarkId;
+const savedReplayButton=document.getElementById("replay-saved");
+const savedReviewStatus=document.getElementById("saved-review-status");
+const savedReviewResult=document.getElementById("saved-review-result");
+savedReplayButton.addEventListener("click",async()=>{
+  if(!savedBundle) return;
+  const token=savedToken; const runId=savedBundle.report.run_id;
+  savedReplayButton.disabled=true; savedReviewResult.innerHTML=""; savedReviewStatus.textContent="Verifying saved evidence only...";
+  try {
+    const response=await fetch("/api/replay-saved/"+encodeURIComponent(runId),{method:"POST"});
+    const result=await response.json();
+    if(token!==savedToken) return;
+    if(!Array.isArray(result.checks)||result.run_id!==runId) throw new Error(result.error??"Saved verification identity unavailable.");
+    savedReviewResult.innerHTML=replayResultModel(result,{saved:true});savedReviewStatus.textContent="";
+  } catch(error){if(token!==savedToken) return;savedReviewStatus.textContent="Saved verification failed: "+error.message;}
+  if(token===savedToken) savedReplayButton.disabled=false;
+});
+const restoreButton=document.getElementById("restore-settings");
+restoreButton.addEventListener("click",()=>{
+  const settings=validatedRunSettings(savedBundle?.report);
+  if(!settings) return;
+  for(const key of ["domain","response","fault","prove"]) document.getElementById(key).value=settings[key];
+  document.getElementById("dispute").checked=settings.dispute;
+  document.getElementById("scenario-note").textContent="Saved settings loaded. Review them and press Run stack to start a new synthetic run.";
+});
 const inspectButton=document.getElementById('inspect-case');
 const savedDownload=document.getElementById('saved-download');
 const savedStatus=document.getElementById('saved-status');
-function clearSaved(){ savedToken++; inspectButton.disabled=false; savedDownload.style.display='none'; savedDownload.removeAttribute('href'); document.getElementById('saved-summary').innerHTML=''; document.getElementById('saved-bindings').innerHTML=''; savedStatus.textContent=''; }
+function clearSaved(){ savedToken++; savedBundle=null; restoreButton.disabled=true; savedReplayButton.disabled=true; savedReviewStatus.textContent=""; savedReviewResult.innerHTML=""; savedLink.style.display="none"; savedLink.removeAttribute("href"); savedReport.removeAttribute("href"); savedReport.style.display="none"; inspectButton.disabled=false; savedDownload.style.display='none'; savedDownload.removeAttribute('href'); document.getElementById('saved-summary').innerHTML=''; document.getElementById('saved-bindings').innerHTML=''; document.getElementById('saved-artifacts').innerHTML=''; savedStatus.textContent=''; }
 leftCase.addEventListener('change',clearSaved);
-inspectButton.addEventListener('click',async()=>{
+async function inspectSaved(runId){
   clearSaved();
   const token=savedToken;
-  const runId=leftCase.value;
-  if(!runId){ savedStatus.textContent='Select a saved case on the left first.'; return; }
+  if(!isReviewRunId(runId)){ savedStatus.textContent='Enter or select a valid saved run ID first.'; return; }
   inspectButton.disabled=true;
   savedStatus.textContent='Loading saved case '+runId+'...';
   try {
@@ -357,18 +417,26 @@ inspectButton.addEventListener('click',async()=>{
     validateRunBundle(bundle,runId);
     const html=await bindingsModel(bundle);
     if(token!==savedToken) return;
+    savedBundle=bundle; savedReplayButton.disabled=false; restoreButton.disabled=validatedRunSettings(bundle.report)===null;
+    savedIdInput.value=runId; savedLink.href='#case='+encodeURIComponent(runId); savedLink.style.display='inline-block'; savedReport.href='/api/review/'+encodeURIComponent(runId); savedReport.style.display='inline-block';
     document.getElementById('saved-summary').innerHTML=summaryModel(bundle.report);
     document.getElementById('saved-bindings').innerHTML=html;
+    document.getElementById('saved-artifacts').innerHTML=stageDetailsModel(bundle);
     savedDownload.href='/api/bundle/'+encodeURIComponent(runId);
     savedDownload.style.display='inline-block';
     savedStatus.textContent='Saved case '+runId+'. Inspection only; use imported replay for verification.';
   } catch(error){ if(token!==savedToken) return; savedStatus.textContent='Saved case unavailable: '+error.message; }
   if(token===savedToken) inspectButton.disabled=false;
-});
+}
+inspectButton.addEventListener('click',()=>inspectSaved(leftCase.value));
+document.getElementById('lookup-case').addEventListener('click',()=>inspectSaved(savedIdInput.value.trim()));
 let latestToken=0;
 let importToken=0;
 let compareToken=0;
 let historyToken=0;
+let nextHistoryCursor=null;
+const olderHistoryButton=document.getElementById("older-history");
+const historyPageStatus=document.getElementById("history-page-status");
 let loadedCases=[];
 function drawHistory(){
   const cases=filterHistory(loadedCases,document.getElementById("history-search").value,document.getElementById("history-outcome").value);
@@ -377,7 +445,7 @@ function drawHistory(){
 }
 document.getElementById("history-search").addEventListener("input",drawHistory);
 document.getElementById("history-outcome").addEventListener("change",drawHistory);
-function clearComparison(){ compareToken++; compareResult.innerHTML=""; compareStatus.textContent=""; compareButton.disabled=false; }
+function clearComparison(){ compareToken++; comparisonDownload.removeAttribute("href"); comparisonDownload.style.display="none"; compareResult.innerHTML=""; compareStatus.textContent=""; compareButton.disabled=false; }
 leftCase.addEventListener("change",clearComparison);
 rightCase.addEventListener("change",clearComparison);
 function clearImported(){ importToken++; importResult.innerHTML=''; importStatus.textContent=''; replayButton.disabled=false; }
@@ -442,14 +510,20 @@ replayButton.addEventListener('click',async()=>{
   else { importStatus.textContent='Replay rejected: '+(body&&body.error?body.error:'unknown error'); }
   replayButton.disabled=false;
 });
-async function refreshHistory(token){
-  historyList.textContent='Loading history...';
+async function refreshHistory(token,append=false){
+  if(append&&!nextHistoryCursor) return;
+  loadHistoryButton.disabled=true; olderHistoryButton.disabled=true;
+  historyPageStatus.textContent="Loading case page...";
   let body;
-  try { const response=await fetch('/api/history'); body=await response.json(); if(response.ok===false || !Array.isArray(body?.cases)) throw new Error(body?.error ?? 'Invalid history response'); }
-  catch(error){ if(token!==historyToken) return; historyList.textContent='History unavailable: '+error.message; return; }
+  try { const response=await fetch('/api/history'+(append?'?before='+encodeURIComponent(nextHistoryCursor):'')); body=await response.json(); if(response.ok===false || !Array.isArray(body?.cases)) throw new Error(body?.error ?? 'Invalid history response'); }
+  catch(error){ if(token!==historyToken) return; historyPageStatus.textContent='History unavailable: '+error.message; loadHistoryButton.disabled=false; olderHistoryButton.disabled=!nextHistoryCursor; return; }
   if(token!==historyToken) return;
-  const cases=(body&&Array.isArray(body.cases))?body.cases:[];
+  const cases=[...new Map([...(append?loadedCases:[]),...body.cases].map(entry=>[entry.run_id,entry])).values()].slice(0,250);
+  nextHistoryCursor=typeof body.next_cursor==="string"?body.next_cursor:null;
   loadedCases=cases; drawHistory();
+  historyPageStatus.textContent=(body.unavailable?.length??0)+" unavailable entries in this page. "+(nextHistoryCursor?"Older cases remain.":"End of history.");
+  loadHistoryButton.disabled=false; olderHistoryButton.disabled=!nextHistoryCursor||cases.length>=250;
+  if(cases.length>=250) historyPageStatus.textContent+=" Loaded-case limit reached. Use direct lookup for another case.";
   const options=renderCaseOptions(cases);
   const leftValue=leftCase.value;
   const rightValue=rightCase.value;
@@ -461,8 +535,10 @@ async function refreshHistory(token){
   else { rightCase.value=""; clearComparison(); }
 }
 loadHistoryButton.addEventListener('click',function(){ return refreshHistory(++historyToken); });
+olderHistoryButton.addEventListener('click',function(){ return refreshHistory(++historyToken,true); });
 compareButton.addEventListener('click',async()=>{
   const token=++compareToken;
+  comparisonDownload.removeAttribute("href"); comparisonDownload.style.display="none";
   compareButton.disabled=true;
   compareResult.innerHTML='';
   if(!leftCase.value||!rightCase.value){ compareStatus.textContent='Select two cases to compare.'; compareButton.disabled=false; return; }
@@ -475,6 +551,7 @@ compareButton.addEventListener('click',async()=>{
   } catch(error){ if(token!==compareToken) return; compareStatus.textContent='Comparison failed: '+error.message; compareButton.disabled=false; return; }
   if(token!==compareToken) return;
   compareResult.innerHTML=compareModel(body);
+  comparisonDownload.href='/api/compare?a='+encodeURIComponent(leftCase.value)+'&b='+encodeURIComponent(rightCase.value)+'&format=markdown';comparisonDownload.style.display='inline-block';
   compareStatus.textContent='';
   compareButton.disabled=false;
 });
@@ -528,6 +605,7 @@ export function createGuiServer({
   depsDir,
 } = {}) {
   let activeWork = false;
+  let historyInFlight = false;
   return createServer({ requestTimeout: 30_000, headersTimeout: 10_000 }, async (request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
 
@@ -542,7 +620,7 @@ export function createGuiServer({
         sendJson(response, 403, { error: "Forbidden" });
         return;
       }
-      if (request.method === "POST" && ["/api/run", "/api/replay"].includes(url.pathname)) {
+      if (request.method === "POST" && (["/api/run", "/api/replay"].includes(url.pathname) || url.pathname.startsWith("/api/replay-saved/"))) {
         if (activeWork) {
           sendJson(response, 503, { error: "Another run or replay is already running; wait for it to finish." }, { "retry-after": "1" });
           return;
@@ -619,6 +697,23 @@ export function createGuiServer({
         });
         return;
       }
+      if (request.method === "POST" && url.pathname.startsWith("/api/replay-saved/")) {
+        const runId = decodeURIComponent(url.pathname.slice("/api/replay-saved/".length));
+        if (!isReviewRunId(runId) || url.search) { sendJson(response, 400, { error: "Invalid saved verification request." }); return; }
+        try {
+          assertFullStackNodeVersion(
+            runOptions.nodeVersion === undefined ? {} : { version: runOptions.nodeVersion },
+          );
+        } catch (error) {
+          sendJson(response, 500, { error: error.message });
+          return;
+        }
+        try {
+          const result = await runGuiTask({ operation: "replay-saved", runId, options: { outputRoot, ...(depsDir === undefined ? {} : { depsDir }) } });
+          sendJson(response, replayHttpStatus(result), { ok: result.ok, run_id: result.runId, checks: result.checks, reason: result.reason ?? null });
+        } catch (error) { sendJson(response, error.code === "ENOENT" ? 404 : 500, { error: error.code === "ENOENT" ? "Saved case not found." : "Saved verification could not complete." }); }
+        return;
+      }
       if (request.method === "POST" && url.pathname === "/api/replay") {
         try {
           assertFullStackNodeVersion(
@@ -661,24 +756,49 @@ export function createGuiServer({
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/history") {
-        sendJson(response, 200, { ok: true, cases: listRunSummaries({ outputRoot }) });
+        if (!hasOnlySingleOptions(url.searchParams, new Set(["before", "limit"]))
+          || (url.searchParams.has("before") && (!isValidRunId(url.searchParams.get("before")) || url.searchParams.get("before").length > 200))
+          || (url.searchParams.has("limit") && !/^(?:[1-9]|[1-4][0-9]|50)$/.test(url.searchParams.get("limit")))) {
+          sendJson(response, 400, { error: "Invalid history page options." }); return;
+        }
+        if (historyInFlight) { sendJson(response, 503, { error: "A history page is already loading." }); return; }
+        historyInFlight = true;
+        let page;
+        try { page = await runGuiTask({ operation: "history", options: { outputRoot, before: url.searchParams.get("before"), limit: Number(url.searchParams.get("limit") ?? 25) } }); } finally { historyInFlight = false; }
+        sendJson(response, 200, { ok: true, ...page });
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/compare") {
         const left = url.searchParams.get("a");
         const right = url.searchParams.get("b");
         const valid = (value) => isValidRunId(value);
-        if (!hasOnlySingleOptions(url.searchParams, new Set(["a", "b"])) || !valid(left) || !valid(right)) {
+        if (!hasOnlySingleOptions(url.searchParams, new Set(["a", "b", "format"])) || (url.searchParams.has("format") && url.searchParams.get("format") !== "markdown") || !valid(left) || !valid(right)) {
           sendJson(response, 400, { error: "Compare requires two valid run ids." });
           return;
         }
         const comparison = compareRuns(left, right, { outputRoot });
+        if (url.searchParams.get("format") === "markdown") {
+          response.writeHead(200, { "content-type": "text/markdown; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff", "content-disposition": 'attachment; filename="case-comparison.md"' });
+          response.end(renderComparisonMarkdown(comparison)); return;
+        }
         sendJson(response, 200, { ok: true, ...comparison });
         return;
       }
+      if (request.method === "GET" && url.pathname.startsWith("/api/review/")) {
+        const runId = decodeURIComponent(url.pathname.slice("/api/review/".length));
+        if (!isReviewRunId(runId) || url.search) { sendJson(response, 400, { error: "Invalid case review request." }); return; }
+        let content;
+        try { content = renderCaseMarkdown(inspectCase(runId, { outputRoot })); }
+        catch (error) { sendJson(response, error.code === "ENOENT" ? 404 : 422, { error: "Case review unavailable." }); return; }
+        response.writeHead(200, { "content-type": "text/markdown; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff", "content-disposition": 'attachment; filename="case-review-' + runId + '.md"' });
+        response.end(content); return;
+      }
       if (request.method === "GET" && url.pathname.startsWith("/api/bundle/")) {
         const runId = decodeURIComponent(url.pathname.slice("/api/bundle/".length));
-        const bundle = exportRunBundle(runId, { outputRoot });
+        if (!isReviewRunId(runId)) { sendJson(response, 400, { error: "Invalid saved run ID." }); return; }
+        let bundle;
+        try { bundle = exportRunBundle(runId, { outputRoot }); }
+        catch (error) { sendJson(response, error.code === "ENOENT" ? 404 : 422, { error: error.code === "ENOENT" ? "Saved case not found." : "Saved case is unreadable or structurally invalid." }); return; }
         sendJson(response, 200, bundle, {
           "content-disposition": `attachment; filename="agent-action-stack-${runId}.json"`,
         });

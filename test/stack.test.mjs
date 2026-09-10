@@ -1,3 +1,4 @@
+import { execFileSync, spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -1585,4 +1586,90 @@ test("runDecide uses the domain policy fixture", () => {
     seen[0].some((arg) => String(arg).includes("inventory.policy.json")),
     `policy fixture missing: ${seen[0].join(" ")}`,
   );
+});
+
+test('case exports reject mismatched identities and oversized persisted reports', async()=>{
+  const outputRoot=tempRoot();
+  const result=await runDemo([], {paths:{outputRoot},runId:'bounded-export',componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false},status:0})});
+  const reportPath=join(result.bundleDir,'report.json');
+  const report=JSON.parse(readFileSync(reportPath,'utf8'));
+  writeFileSync(reportPath,JSON.stringify({...report,run_id:'other-run'}));
+  assert.throws(()=>exportRunBundle('bounded-export',{outputRoot}),/identity/i);
+  writeFileSync(reportPath,JSON.stringify({...report,pad:'x'.repeat(CHILD_JSON_LIMIT)}));
+  assert.throws(()=>exportRunBundle('bounded-export',{outputRoot}),/limit|large/i);
+});
+
+test('export byte budget includes the actual formatted download representation',async()=>{
+  const outputRoot=tempRoot();
+  await runDemo([],{paths:{outputRoot},runId:'formatted-budget',componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false,rows:Array(30000).fill({x:0})},status:0})});
+  assert.throws(()=>exportRunBundle('formatted-budget',{outputRoot}),/byte limit/);
+});
+
+test('saved case readers reject invalid UTF-8 without replacing evidence bytes',async()=>{
+  const outputRoot=tempRoot();
+  const result=await runDemo([],{paths:{outputRoot},runId:'invalid-utf8',componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false},status:0})});
+  writeFileSync(join(result.bundleDir,'report.json'),Buffer.concat([Buffer.from('{"run_id":"invalid-utf8","field":"'),Buffer.from([0xc0]),Buffer.from('"}')]));
+  assert.throws(()=>exportRunBundle('invalid-utf8',{outputRoot}),/encoded data|encoding/i);
+});
+
+test('history and comparison reject mismatched saved identities',async()=>{
+  const {listCasePage}=await import('../bin/case-review.mjs');
+  const outputRoot=tempRoot();
+  const result=await runDemo([],{paths:{outputRoot},runId:'identity-case',componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false},status:0})});
+  for(const name of ['manifest.json','report.json']) {
+    const path=join(result.bundleDir,name), original=readFileSync(path,'utf8');
+    writeFileSync(path,JSON.stringify({...JSON.parse(original),run_id:'different-case'}));
+    assert.deepEqual(listCasePage({outputRoot}).unavailable,['identity-case']);
+    assert.equal(listCasePage({outputRoot}).cases.length,0);
+    assert.equal(compareRuns('identity-case','identity-case',{outputRoot}).classification,'not-comparable');
+    writeFileSync(path,original);
+  }
+});
+
+test('inspect parsing diagnostics never include malformed saved evidence bytes',async()=>{
+  const outputRoot=tempRoot();
+  const result=await runDemo([],{paths:{outputRoot},runId:'private-json',componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false},status:0})});
+  const manifest=JSON.parse(readFileSync(join(result.bundleDir,'manifest.json'),'utf8'));
+  for(const name of ['manifest.json','report.json',manifest.stages.decide.artifact]) {
+    const path=join(result.bundleDir,name), original=readFileSync(path,'utf8');
+    writeFileSync(path,'{"PROBE123":INVALID}');
+    for(const format of ['--json','--markdown']) {
+      const child=spawnSync(process.execPath,[fileURLToPath(new URL('../bin/aas.mjs',import.meta.url)),'inspect','private-json','--root',outputRoot,format],{encoding:'utf8',timeout:5000});
+      assert.notEqual(child.status,0);assert.match(child.stderr,/invalid JSON/);assert.doesNotMatch(child.stderr,/PROBE123|INVALID/);
+    }
+    writeFileSync(path,original);
+  }
+});
+
+test('saved case FIFO cannot block the shared reader', {skip:process.platform==='win32'},()=>{
+  const outputRoot=tempRoot(),dir=join(outputRoot,'runs','fifo-case');mkdirSync(dir,{recursive:true});
+  execFileSync('mkfifo',[join(dir,'manifest.json')]);
+  const url=new URL('../bin/aas.mjs',import.meta.url).href;
+  const reviewUrl=new URL('../bin/case-review.mjs',import.meta.url).href;
+  const script='import {listCasePage} from '+JSON.stringify(reviewUrl)+';import {exportRunBundle} from '+JSON.stringify(url)+';try{exportRunBundle("fifo-case",{outputRoot:'+JSON.stringify(outputRoot)+'});process.exitCode=1;}catch(error){if(!/regular file/.test(error.message))throw error;process.stdout.write("rejected");}if(listCasePage({outputRoot:'+JSON.stringify(outputRoot)+'}).unavailable[0]!=="fifo-case")throw new Error("FIFO history entry must be unavailable");';
+  const child=spawnSync(process.execPath,['--input-type=module','-e',script],{encoding:'utf8',timeout:2000});
+  assert.equal(child.error,undefined,'reader must not block until child timeout');assert.equal(child.status,0,child.stderr);assert.equal(child.stdout,'rejected');
+});
+
+test('saved manifests reject missing records arrays and invalid artifact fields consistently',async()=>{
+  const {listCasePage,inspectCase}=await import('../bin/case-review.mjs');
+  const outputRoot=tempRoot(),runId='stage-shapes';
+  const {bundleDir,manifest}=persistRunBundle({outputRoot,runId,report:{run_id:runId,stages:{}},stages:{decide:{status:'failed',raw:{passed:false}}},componentProvenance:[],exitCode:1});
+  assert.deepEqual(Object.keys(manifest.stages),['decide','act','prove']);
+  assert.equal(manifest.stages.act.artifact,null);
+  assert.equal(exportRunBundle(runId,{outputRoot}).manifest.stages.prove.status,'skipped');
+  assert.equal(listCasePage({outputRoot}).cases.length,1);
+  const malformed=[{},[],{...manifest.stages,other:{}},...['decide','act','prove'].map(name=>{const stages=structuredClone(manifest.stages);delete stages[name];return stages;})];
+  for(const value of [[],null,false]) malformed.push({...manifest.stages,act:value});
+  for(const value of [undefined,false,0,{},[],'','../escape.json']) malformed.push({...manifest.stages,act:{...manifest.stages.act,artifact:value}});
+  for(const stages of malformed){
+    writeFileSync(join(bundleDir,'manifest.json'),JSON.stringify({...manifest,stages}));
+    assert.throws(()=>exportRunBundle(runId,{outputRoot}),/stage|artifact/i);
+    assert.throws(()=>inspectCase(runId,{outputRoot}),/stage|artifact/i);
+    assert.deepEqual(listCasePage({outputRoot}).unavailable,[runId]);
+    assert.equal(compareRuns(runId,runId,{outputRoot}).classification,'not-comparable');
+  }
+  const full=persistRunBundle({outputRoot,runId:'complete-stages',report:{run_id:'complete-stages',stages:{}},stages:Object.fromEntries(['decide','act','prove'].map(name=>[name,{status:'passed',raw:{ok:true}}])),componentProvenance:[],exitCode:0});
+  assert.equal(Object.keys(exportRunBundle('complete-stages',{outputRoot}).stages).length,3);
+  assert.equal(full.manifest.stages.prove.artifact,'stages/prove.json');
 });

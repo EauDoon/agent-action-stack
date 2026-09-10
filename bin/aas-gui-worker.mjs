@@ -1,5 +1,6 @@
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
-import { runDemo, replayBundle, selectPython } from "./aas.mjs";
+import { listCasePage } from "./case-review.mjs";
+import { exportRunBundle, runDemo, replayBundle, selectPython } from "./aas.mjs";
 
 const GUI_TASK_KIND = "agent-action-stack.gui-task/v1";
 
@@ -18,7 +19,7 @@ export function runGuiTask(task) {
       if (failure) reject(failure);
       else if (code !== 0) reject(new Error(`GUI worker exited with code ${code}.`));
       else if (result?.ok === true) resolve(result.value);
-      else reject(new Error(result?.error ?? "GUI worker exited without a result."));
+      else reject(Object.assign(new Error(result?.error ?? "GUI worker exited without a result."), { code: result?.code }));
     });
   });
 }
@@ -32,6 +33,11 @@ if (!isMainThread && workerData?.kind === GUI_TASK_KIND) {
       const options = task.options ?? {};
       const python = options.python ?? selectPython();
       value = await runDemo(task.args, { ...options, python });
+    } else if (task?.operation === "history") {
+      value = listCasePage(task.options);
+    } else if (task?.operation === "replay-saved") {
+      const bundle = exportRunBundle(task.runId, { outputRoot: task.options.outputRoot });
+      value = replayBundle(bundle, task.options);
     } else if (task?.operation === "replay") {
       value = replayBundle(task.bundle, task.options ?? {});
     } else {
@@ -39,7 +45,7 @@ if (!isMainThread && workerData?.kind === GUI_TASK_KIND) {
     }
     parentPort.postMessage({ ok: true, value });
   } catch (error) {
-    parentPort.postMessage({ ok: false, error: error.message });
+    parentPort.postMessage({ ok: false, error: error.message, code: error.code });
   } finally {
     parentPort.close();
   }

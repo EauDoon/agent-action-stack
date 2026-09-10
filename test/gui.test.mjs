@@ -1,4 +1,6 @@
+import { renderComparisonMarkdown, parseInspectArgs, inspectCase, renderCaseMarkdown, listCasePage, parseCasePageArgs } from "../bin/case-review.mjs";
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { runGuiTask } from "../bin/aas-gui-worker.mjs";
 import { execFileSync } from "node:child_process";
@@ -9,7 +11,7 @@ import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { scenarioPreset, filterHistory, bindingsModel, compareModel, createGuiServer, historyModel, renderPage, replayHttpStatus, replayResultModel, summaryModel } from "../bin/aas-gui.mjs";
+import { stageDetailsModel, validatedRunSettings, scenarioPreset, filterHistory, bindingsModel, compareModel, createGuiServer, historyModel, renderPage, replayHttpStatus, replayResultModel, summaryModel } from "../bin/aas-gui.mjs";
 import { compareRuns, exportRunBundle, runDemo, selectPython } from "../bin/aas.mjs";
 
 const provenance = [
@@ -102,8 +104,9 @@ test("GUI rejects rebinding requests, cross-origin runs, unsafe options, and uns
     mkdirSync(bundleDir, { recursive: true });
     writeFileSync(join(bundleDir, "manifest.json"), `${JSON.stringify({ report: "../outside.json", stages: {} })}\n`);
     const unsafeBundle = await requestServer(server, "/api/bundle/unsafe-run");
-    assert.equal(unsafeBundle.status, 500);
-    assert.deepEqual(JSON.parse(unsafeBundle.body), { error: "Request failed" });
+    assert.equal(unsafeBundle.status, 422);
+    assert.deepEqual(JSON.parse(unsafeBundle.body), { error: "Saved case is unreadable or structurally invalid." });
+    assert.equal((await requestServer(server, "/api/bundle/missing")).status, 404);
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
@@ -297,7 +300,7 @@ function pageScript() {
 
 function stubDocument() {
   const elements = {};
-  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count", "inspect-case", "saved-download", "saved-status", "saved-summary", "saved-bindings", "scenario", "apply-scenario", "scenario-note"]) {
+  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count", "inspect-case", "saved-download", "saved-status", "saved-summary", "saved-bindings", "scenario", "apply-scenario", "scenario-note", "restore-settings", "older-history", "history-page-status", "saved-case-id", "lookup-case", "saved-link", "replay-saved", "saved-review-status", "saved-review-result", "saved-artifacts", "saved-report", "comparison-download"]) {
     elements[id] = { value: "pass", checked: false, disabled: false, textContent: "", innerHTML: "", href: null, style: {}, listeners: {},
       addEventListener(name, fn) { const prior = this.listeners[name]; this.listeners[name] = prior ? (...args) => { prior(...args); return fn(...args); } : fn; },
       removeAttribute(name) { delete this[name]; } };
@@ -782,8 +785,8 @@ test("scenario presets prepare explicit synthetic workflows without calling exec
 test("comparison detects domain changes and refreshed missing selections clear saved exports", async () => {
   const outputRoot=mkdtempSync(join(tmpdir(),'aas-domain-comparison-'));
   const report={flow:'decide',stages:{},component_provenance:[]};
-  writeCase(outputRoot,'left',{report:{...report,domain:'refund'},prove:{}});
-  writeCase(outputRoot,'right',{report:{...report,domain:'inventory'},prove:{}});
+  writeCase(outputRoot,'left',{report:{...report,run_id:'left',domain:'refund'},prove:{}});
+  writeCase(outputRoot,'right',{report:{...report,run_id:'right',domain:'inventory'},prove:{}});
   assert.ok(compareRuns('left','right',{outputRoot}).differences.some((entry)=>entry.field==='domain'));
   const document=stubDocument();
   new Function('document','fetch','crypto',pageScript())(document,async()=>({json:async()=>({cases:[]})}),globalThis.crypto);
@@ -919,4 +922,132 @@ test('marked GUI tasks retain normal replay and unsupported-operation handling',
   const result=await runGuiTask({operation:'replay',bundle:{report:{run_id:'marked'},stages:{}}});
   assert.equal(result.runId,'marked');assert.match(result.reason,/unavailable/);
   await assert.rejects(runGuiTask({operation:'unrecognized'}),/Unsupported GUI worker operation/);
+});
+
+test('saved run settings preserve refused request options and reject ambiguous restores', async()=>{
+  const result=await runDemo(['--domain','inventory','--response','fail','--fault','duplicate','--prove','rail','--dispute'],{
+    paths:{outputRoot:mkdtempSync(join(tmpdir(),'aas-settings-'))},componentResolver:()=>[],
+    runDecideFn:async()=>({ok:false,raw:{passed:false},status:0})
+  });
+  assert.deepEqual(validatedRunSettings(result.report),{domain:'inventory',response:'fail',fault:'duplicate',prove:'rail',dispute:true});
+  assert.equal(validatedRunSettings({}),null);
+  assert.equal(validatedRunSettings({requested_options:{...result.report.requested_options,dispute:'true'}}),null);
+});
+
+test('history pages advance across unreadable cases without duplicates or skipping older cases',()=>{
+  const outputRoot=mkdtempSync(join(tmpdir(),'aas-pages-'));
+  writeCase(outputRoot,'case-c');writeCase(outputRoot,'case-a');mkdirSync(join(outputRoot,'runs','case-b'),{recursive:true});
+  const first=listCasePage({outputRoot,limit:2});
+  assert.deepEqual(first.cases.map(x=>x.run_id),['case-c']);assert.deepEqual(first.unavailable,['case-b']);assert.equal(first.next_cursor,'case-b');
+  const second=listCasePage({outputRoot,limit:2,before:first.next_cursor});
+  assert.deepEqual(second.cases.map(x=>x.run_id),['case-a']);assert.equal(second.next_cursor,null);
+  assert.throws(()=>listCasePage({outputRoot,limit:51}),/limit/);
+  assert.throws(()=>listCasePage({outputRoot,before:'../x'}),/cursor/);
+  assert.throws(()=>parseCasePageArgs(['--limit','2','--limit','3']),/Usage/);
+});
+
+test('GUI loads older history pages while retaining selected comparison cases',async()=>{
+  const document=stubDocument();const urls=[];
+  const fetch=async url=>{urls.push(url);return {json:async()=>urls.length===1?{cases:[{run_id:'case-c'}],next_cursor:'case-b',unavailable:['case-b']}:{cases:[{run_id:'case-a'}],next_cursor:null,unavailable:[]}};};
+  new Function('document','fetch','crypto',pageScript())(document,fetch,globalThis.crypto);
+  await document.elements['load-history'].listeners.click();document.elements['left-case'].value='case-c';
+  assert.equal(document.elements['older-history'].disabled,false);
+  await document.elements['older-history'].listeners.click();
+  assert.equal(urls[1],'/api/history?before=case-b');
+  assert.equal(document.elements['left-case'].value,'case-c');
+  assert.match(document.elements['left-case'].innerHTML,/case-a/);
+  assert.equal(document.elements['older-history'].disabled,true);
+});
+
+test('partial history pages never retain more than 250 unique summaries',async()=>{
+  const document=stubDocument();let pages=0;
+  document.elements['history-search'].value='';document.elements['history-outcome'].value='';
+  const fetch=async()=>({json:async()=>{const page=pages++;return {cases:Array.from({length:page===0?24:25},(_,index)=>({run_id:'case-'+page+'-'+index})),next_cursor:'cursor-'+page,unavailable:page===0?['unreadable']:[]};}});
+  new Function('document','fetch','crypto',pageScript())(document,fetch,globalThis.crypto);
+  await document.elements['load-history'].listeners.click();
+  document.elements['left-case'].value='case-0-0';
+  for(let index=0;index<10;index++) await document.elements['older-history'].listeners.click();
+  assert.match(document.elements['history-count'].textContent,/250 of 250 loaded/);
+  assert.equal((document.elements['left-case'].innerHTML.match(/<option /g)??[]).length,251);
+  assert.equal(document.elements['left-case'].value,'case-0-0');
+  assert.equal(document.elements['older-history'].disabled,true);
+});
+
+test('saved replay runtime rejection precedes its worker and releases admission',async()=>{
+  const outputRoot=mkdtempSync(join(tmpdir(),'aas-saved-runtime-'));
+  const runOptions={nodeVersion:'20.19.0'};
+  const server=createGuiServer({outputRoot,runOptions});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const headers={origin:'http://127.0.0.1:'+server.address().port};
+  try{
+    for(let index=0;index<2;index++){
+      const response=await requestServer(server,'/api/replay-saved/missing',{method:'POST',headers});
+      assert.equal(response.status,500);
+      assert.match(JSON.parse(response.body).error,/full-stack workflow requires Node\.js 22\.12\.0\+/);
+      assert.equal((await requestServer(server,'/api/health')).status,200);
+    }
+    runOptions.nodeVersion='22.12.0';
+    assert.equal((await requestServer(server,'/api/replay-saved/missing',{method:'POST',headers})).status,404);
+  }finally{await new Promise(resolve=>server.close(resolve));}
+});
+
+test('direct saved lookup validates identity and creates a local-only bookmark',async()=>{
+  const document=stubDocument();const urls=[];
+  const fetch=async url=>{urls.push(url);return {json:async()=>({manifest:{run_id:'older-case'},report:{run_id:'older-case'},stages:{}})};};
+  new Function('document','fetch','crypto',pageScript())(document,fetch,globalThis.crypto);
+  document.elements['saved-case-id'].value='../bad';await document.elements['lookup-case'].listeners.click();assert.equal(urls.length,0);
+  document.elements['saved-case-id'].value='older-case';await document.elements['lookup-case'].listeners.click();
+  assert.deepEqual(urls,['/api/bundle/older-case']);assert.equal(document.elements['saved-link'].href,'#case=older-case');
+});
+
+test('saved verification rereads the selected case through a worker without execution',async()=>{
+  const outputRoot=mkdtempSync(join(tmpdir(),'aas-saved-replay-'));
+  await runDemo([],{paths:{outputRoot},runId:'saved-refusal',componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false},status:0})});
+  let executions=0;const server=createGuiServer({outputRoot,runDemoFn:()=>{executions++;}});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const headers={origin:'http://127.0.0.1:'+server.address().port};
+  try {
+    const res=await requestServer(server,'/api/replay-saved/saved-refusal',{method:'POST',headers});
+    assert.equal(res.status,422);assert.equal(JSON.parse(res.body).run_id,'saved-refusal');assert.equal(executions,0);
+    assert.equal((await requestServer(server,'/api/replay-saved/missing',{method:'POST',headers})).status,404);
+    assert.equal((await requestServer(server,'/api/replay-saved/saved-refusal',{method:'POST'})).status,400);
+  } finally {await new Promise(resolve=>server.close(resolve));}
+});
+
+test('stage inspection exposes skipped artifacts and diagnostics without rendering untrusted markup',()=>{
+  const html=stageDetailsModel({manifest:{stages:{decide:{status:'error',code:'AAS_CHILD_TIMEOUT',stderr:'<script>bad</script>'},act:{status:'skipped'}}},stages:{decide:{message:'<img src=x>'}}});
+  assert.match(html,/AAS_CHILD_TIMEOUT/);assert.match(html,/No persisted artifact/);assert.match(html,/act: skipped/);
+  assert.doesNotMatch(html,/<script>|<img src=x>/);assert.match(html,/&lt;img/);assert.match(html,/not proof of source truth/);
+});
+
+test('case review downloads readable evidence limits and escapes injected Markdown',async()=>{
+  const outputRoot=mkdtempSync(join(tmpdir(),'aas-case-review-'));
+  await runDemo([],{paths:{outputRoot},runId:'review-case',componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false},status:0})});
+  const model=inspectCase('review-case',{outputRoot});assert.equal(model.digest_matches,null);
+  const markdown=renderCaseMarkdown({...model,domain:'<script>x</script> [go](https://example.invalid)'});
+  assert.equal(markdown.includes("<script>"),false);assert.equal(markdown.includes("[go](https:"),false);assert.match(markdown,/no receipt verification/);
+  const server=createGuiServer({outputRoot});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {const res=await requestServer(server,'/api/review/review-case');assert.equal(res.status,200);assert.match(res.headers['content-disposition'],/case-review-review-case.md/);assert.match(res.body,/decide: failed/);}
+  finally {await new Promise(resolve=>server.close(resolve));}
+});
+
+test('standalone inspect CLI produces the same review model and rejects ambiguous output formats',async()=>{
+  const outputRoot=mkdtempSync(join(tmpdir(),'aas-inspect-cli-'));
+  await runDemo([],{paths:{outputRoot},runId:'cli-review',componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false},status:0})});
+  const cli=new URL('../bin/aas.mjs',import.meta.url);
+  const actual=JSON.parse(execFileSync(process.execPath,[fileURLToPath(cli),'inspect','cli-review','--root',outputRoot,'--json'],{encoding:'utf8'}));
+  assert.equal(actual.schema_version,'agent-action-stack.case-review/v1');assert.equal(actual.run_id,'cli-review');assert.equal(actual.digest_matches,null);
+  assert.throws(()=>parseInspectArgs(['cli-review','--json','--markdown']),/one inspect/);
+  assert.throws(()=>parseInspectArgs(['../escape']),/Usage/);
+  const markdown=execFileSync(process.execPath,[fileURLToPath(cli),'inspect','cli-review','--root',outputRoot],{encoding:'utf8'});
+  assert.match(markdown,/# Saved case review/);assert.match(markdown,/no receipt verification/);
+});
+
+test('comparison Markdown preserves uncertainty and escapes hostile difference fields',async()=>{
+  const markdown=renderComparisonMarkdown({classification:'not-comparable',errors:['<script>bad</script>'],differences:[{field:'[link]',left:'<img>',right:'safe'}]});
+  assert.ok(markdown.includes("not")&&markdown.includes("comparable"));assert.match(markdown,/Differences do not establish causation/);assert.equal(markdown.includes('<script>'),false);assert.equal(markdown.includes('[link]'),false);
+  const outputRoot=mkdtempSync(join(tmpdir(),'aas-comparison-report-'));writeCase(outputRoot,'compare-one');writeCase(outputRoot,'compare-two');
+  const server=createGuiServer({outputRoot});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {const res=await requestServer(server,'/api/compare?a=compare-one&b=compare-two&format=markdown');assert.equal(res.status,200);assert.match(res.body,/# Saved case comparison/);assert.match(res.headers['content-type'],/markdown/);assert.equal((await requestServer(server,'/api/compare?a=x&b=y&format=html')).status,400);}
+  finally {await new Promise(resolve=>server.close(resolve));}
 });

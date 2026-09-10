@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -192,5 +192,33 @@ test("guided inventory cases can be searched inspected and downloaded on mobile"
   await page.click('#saved-download');
   const download=await downloading;
   expect(download.suggestedFilename()).toContain(id);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+});
+
+test('saved case review supports keyboard lookup verification handoff and local bookmarks', async ({page})=>{
+  await page.setViewportSize({width:390,height:844});await page.goto('/');
+  let executions=0;page.on('request',request=>{if(request.url().includes('/api/run?')) executions++;});
+  await runStack(page,{domain:'inventory',fault:'duplicate',prove:'rail'});
+  const runId=(await page.locator('#download').getAttribute('href')).split('/').at(-1);
+  await page.fill('#saved-case-id',runId);await page.locator('#lookup-case').focus();await page.keyboard.press('Enter');
+  await expect(page.locator('#saved-summary')).toContainText('inventory');
+  await page.locator('#saved-artifacts details').first().locator('summary').click();
+  await expect(page.locator('#saved-artifacts pre').first()).toBeVisible();
+  await page.selectOption('#domain','refund');await page.click('#restore-settings');await expect(page.locator('#domain')).toHaveValue('inventory');
+  expect(executions).toBe(1);
+  await page.click('#replay-saved');await expect(page.locator('#saved-review-result h3')).toContainText('Saved case');
+  await expect(page.locator('#saved-review-result h3')).toContainText('replay verified under synthetic demo keys');
+  expect(executions).toBe(1);
+  const downloading=page.waitForEvent('download');await page.click('#saved-report');
+  const report=await downloading;expect(readFileSync(await report.path(),'utf8')).toContain('This export performs no receipt verification.');
+  await page.click('#saved-link');await page.reload();await expect(page.locator('#saved-case-id')).toHaveValue(runId);expect(executions).toBe(1);
+  await page.fill('#saved-case-id','missing-case');await page.click('#lookup-case');await expect(page.locator('#saved-status')).toContainText('not found');await expect(page.locator('#saved-report')).toBeHidden();
+  await runStack(page,{response:'fail'});const second=(await page.locator('#download').getAttribute('href')).split('/').at(-1);
+  await page.click('#load-history');await expect(page.locator('#left-case option')).not.toHaveCount(1);
+  await page.selectOption('#left-case',runId);await page.selectOption('#right-case',second);await page.click('#compare');
+  await expect(page.locator('#comparison-download')).toBeVisible();
+  const comparing=page.waitForEvent('download');await page.click('#comparison-download');const comparison=await comparing;
+  expect(readFileSync(await comparison.path(),'utf8')).toContain('Differences do not establish causation.');
+  await page.selectOption('#right-case',runId);await expect(page.locator('#comparison-download')).toBeHidden();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
 });

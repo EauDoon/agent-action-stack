@@ -254,3 +254,29 @@ Ambiguous duplicate run or comparison options are rejected. File changes clear
 stale replay results, and oversized imports are rejected before browser file reads
 as well as at the server boundary. No preset, inspection, or history workflow
 performs real account operations.
+
+Saved cases now retain the exact requested response, fault, domain, proof mode, and dispute flag, including refused runs. After inspection, **Use saved settings** prepares those controls without starting work. Older cases without complete valid settings cannot be restored.
+
+Saved exports fail closed when the directory, manifest, or report identities disagree, the schema is unsupported, or persisted JSON exceeds the one-megabyte import budget. Linked case directories/files are rejected. These structural checks do not replace receipt verification.
+
+History is now cursor-paged: `aas cases --limit 25 --before <run-id> --json` and `GET /api/history?limit=25&before=<run-id>` return `next_cursor`, scanned count, and unavailable case identities. A damaged entry does not prevent reaching older cases. At most 50 candidate cases are opened per page; GUI history work runs outside the HTTP event loop.
+
+In the workbench, **Load older cases** appends the next page while keeping existing search and comparison selections. Each page reports unreadable entries and whether more remain. Up to 250 summaries can be loaded at once; refresh starts again from the newest page. Only one history worker runs per server at a time.
+
+**Inspect by ID** reaches a saved case outside loaded history. A successful inspection provides a local fragment bookmark. Opening that bookmark pre-fills the ID only; it does not execute a run or verification. Missing and structurally invalid cases produce distinct HTTP 404 and 422 responses.
+
+**Verify saved case** reopens the selected persisted case on the server and re-verifies its evidence in a worker. It uses the same origin and admission checks as other verification requests, never invokes action execution, and displays the saved-case result separately from imported evidence.
+
+Saved inspection includes expandable decide, act, and prove artifacts with persisted status, reason, diagnostic code, and captured stderr where available. Skipped or absent artifacts are labeled explicitly. JSON and diagnostics remain escaped text, and artifact inspection is separate from verification.
+
+**Download case review** creates a Markdown handoff with case identity, stage records, component revisions, recorded and recomputed evidence digests, and explicit verification limits. It summarizes persisted data and does not certify receipts, source truth, legal effect, or real-world execution.
+
+For offline handoffs, `aas inspect <run-id> --root <output-directory> --markdown` prints the same readable case review; `--json` emits its versioned machine-readable model. The default root is this checkout’s `.out` and the default format is Markdown. This command only reads saved files, needs no component bootstrap, and returns exit 2 for invalid arguments or exit 1 for unreadable cases.
+
+After comparing two cases, **Download comparison review** exports the selected metadata differences and unavailable-evidence notices as Markdown. Selection changes invalidate the download link. The report explicitly states that matching metadata is not evidence equivalence and differences do not establish causation.
+
+The export budget counts the formatted JSON bytes actually downloaded, including indentation and the trailing newline, so a permitted export fits the replay upload limit.
+
+Saved-file reads use nonblocking descriptors and validate regular-file type and size before reading, so a named pipe cannot hold the reader open. Invalid UTF-8 is rejected rather than silently replacing evidence bytes.
+
+History summaries and run listings use the same bounded saved-file reader, including when a malformed entry is skipped as unavailable.
