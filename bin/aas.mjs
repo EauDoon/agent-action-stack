@@ -263,6 +263,7 @@ Options:
   --prove simulate|rail    Prove path: canned operator simulation (default)
                            or review of the same-case rail bundle
   --domain refund|inventory  Synthetic action domain (default: refund)
+  --root output-dir        Select saved-case storage for inspect/runs/cases/compare/export/prune
   --json                   Print the run report as JSON
   -h, --help               Show this help
 
@@ -1728,11 +1729,11 @@ async function readReplayInput(source, { stdin = process.stdin } = {}) {
   catch { throw new Error("replay bundle contains invalid JSON"); }
 }
 
-function runRunsCommand(args, { asJson } = {}) {
+function runRunsCommand(args, { asJson, outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
   if (args.some((token) => token !== "--json")) {
     throw new UsageError(`Unsupported runs option (expected [--json])`);
   }
-  const runs = listRuns({});
+  const runs = listRuns({ outputRoot });
   if (asJson) {
     process.stdout.write(`${JSON.stringify({ ok: true, runs }, null, 2)}\n`);
   } else if (runs.length === 0) {
@@ -1747,12 +1748,12 @@ function runRunsCommand(args, { asJson } = {}) {
   process.exitCode = 0;
 }
 
-async function runCasesCommand(args, { asJson } = {}) {
+async function runCasesCommand(args, { asJson, outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
   const { listCasePage, parseCasePageArgs } = await import("./case-review.mjs");
   let pageOptions;
   try { pageOptions = parseCasePageArgs(args); } catch (error) { throw new UsageError(error.message); }
   if ((pageOptions.limit !== undefined && (pageOptions.limit < 1 || pageOptions.limit > 50)) || (pageOptions.before !== undefined && (!isValidRunId(pageOptions.before) || pageOptions.before.length > 200))) throw new UsageError("Invalid history page options.");
-  const page = listCasePage(pageOptions);
+  const page = listCasePage({ ...pageOptions, outputRoot });
   const cases = page.cases;
   if (asJson) {
     process.stdout.write(`${JSON.stringify({ ok: true, ...page }, null, 2)}\n`);
@@ -1791,17 +1792,17 @@ function printComparison(result, asJson) {
   process.exitCode = result.classification === "not-comparable" ? 1 : 0;
 }
 
-function runCompareCommand(args, { asJson } = {}) {
+function runCompareCommand(args, { asJson, outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
   const ids = args.filter((token) => token !== "--json");
   if (ids.some((token) => typeof token === "string" && token.startsWith("-"))) {
     throw new UsageError(`Unsupported compare option: ${args.find((token) => String(token).startsWith("-"))}`);
   }
   if (ids.length !== 2) throw new UsageError("Usage: aas compare <run-id> <run-id> [--json]");
-  const result = compareRuns(ids[0], ids[1], {});
+  const result = compareRuns(ids[0], ids[1], { outputRoot });
   printComparison(result, asJson);
 }
 
-function runPruneCommand(args, { asJson } = {}) {
+function runPruneCommand(args, { asJson, outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
   let keep = null;
   let dryRun = false;
   for (let index = 0; index < args.length; index += 1) {
@@ -1820,7 +1821,7 @@ function runPruneCommand(args, { asJson } = {}) {
     }
   }
   if (keep === null) throw new UsageError("Usage: aas prune --keep <positive integer> [--dry-run] [--json]");
-  const result = pruneRuns({ keep, dryRun });
+  const result = pruneRuns({ keep, dryRun, outputRoot });
   if (asJson) {
     process.stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`);
   } else if (dryRun) {
@@ -1853,7 +1854,7 @@ function printReplayReport(result, asJson) {
   process.stdout.write(`${lines.join("\n")}\n`);
 }
 
-function runExportCommand(args, { asJson } = {}) {
+function runExportCommand(args, { asJson, outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
   let runId = null;
   let out = null;
   let overwrite = false;
@@ -1884,7 +1885,7 @@ function runExportCommand(args, { asJson } = {}) {
   if (overwrite && out === null) throw new UsageError("--overwrite requires --out");
   let bundle;
   try {
-    bundle = exportRunBundle(runId, {});
+    bundle = exportRunBundle(runId, { outputRoot });
   } catch (error) {
     writeCliError(error, { asJson, usage: false });
     process.exitCode = 1;
@@ -1945,6 +1946,18 @@ async function runReplayCommand(args, { asJson, nodeVersion, stdin } = {}) {
   process.exitCode = result.ok ? 0 : 1;
 }
 
+function parseRootArgs(args) {
+  const remaining = [];
+  let outputRoot = DEFAULT_PATHS.outputRoot, seen = false;
+  for (let index = 0; index < args.length; index++) {
+    if (args[index] !== "--root") { remaining.push(args[index]); continue; }
+    if (seen || !args[index + 1]?.trim() || args[index + 1].startsWith("--")) throw new UsageError("--root requires one output directory path");
+    seen = true;
+    outputRoot = args[++index];
+  }
+  return { args: remaining, outputRoot };
+}
+
 export async function main(argv = process.argv.slice(2), options = {}) {
   const command = argv[0] ?? "help";
   const asJson = has(argv, "--json");
@@ -1968,10 +1981,11 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   }
   if (command === "runs" || command === "cases" || command === "compare" || command === "prune") {
     try {
-      if (command === "runs") runRunsCommand(argv.slice(1), { asJson });
-      else if (command === "cases") await runCasesCommand(argv.slice(1), { asJson });
-      else if (command === "compare") runCompareCommand(argv.slice(1), { asJson });
-      else runPruneCommand(argv.slice(1), { asJson });
+      const { args, outputRoot } = parseRootArgs(argv.slice(1));
+      if (command === "runs") runRunsCommand(args, { asJson, outputRoot });
+      else if (command === "cases") await runCasesCommand(args, { asJson, outputRoot });
+      else if (command === "compare") runCompareCommand(args, { asJson, outputRoot });
+      else runPruneCommand(args, { asJson, outputRoot });
     } catch (error) {
       const usage = error instanceof UsageError;
       writeCliError(error, { asJson, usage });
@@ -1981,7 +1995,10 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   }
   if (command === "export" || command === "replay") {
     try {
-      if (command === "export") runExportCommand(argv.slice(1), { asJson });
+      if (command === "export") {
+        const { args, outputRoot } = parseRootArgs(argv.slice(1));
+        runExportCommand(args, { asJson, outputRoot });
+      }
       else {
         await runReplayCommand(argv.slice(1), {
           asJson,

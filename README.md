@@ -284,3 +284,5 @@ History summaries and run listings use the same bounded saved-file reader, inclu
 Replay checks actual UTF-8 bytes for both files and pipes, stops oversized streams as soon as the budget is crossed, and rejects nonregular files, invalid encoding, and malformed JSON without echoing document contents.
 
 Exporting with --out creates a new handoff atomically and refuses to replace an existing file. Pass --overwrite with --out to explicitly replace it. --json supports machine-readable export success and error output.
+
+All saved-case commands (runs, cases, compare, inspect, export, and prune) accept --root output-directory. Use a copied case store without moving it into the checkout or bootstrapping components; paths with spaces are supported when quoted. Prune still requires an explicit --keep and supports --dry-run.

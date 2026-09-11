@@ -1703,3 +1703,19 @@ test('handoff export preserves existing files unless replacement is explicit', (
   writeAtomicFile(target, 'replacement', {replace: true});
   assert.equal(readFileSync(target, 'utf8'), 'replacement');
 });
+
+test('saved-case commands use an explicit output root without component setup', async () => {
+  const outputRoot = tempRoot(); writeCase(outputRoot, 'root-a'); writeCase(outputRoot, 'root-b');
+  for (const command of [['runs'], ['cases'], ['compare', 'root-a', 'root-b'], ['export', 'root-a'], ['prune', '--keep', '1', '--dry-run']]) {
+    const result = await captureMain([...command, '--root', outputRoot, '--json']);
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.ok(JSON.parse(result.stdout));
+  }
+  const target = join(outputRoot, 'handoff.json');
+  assert.equal((await captureMain(['export','root-a','--root',outputRoot,'--out',target,'--json'])).exitCode, 0);
+  assert.equal((await captureMain(['export','root-b','--root',outputRoot,'--out',target,'--json'])).exitCode, 1);
+  assert.equal(JSON.parse(readFileSync(target,'utf8')).report.run_id, 'root-a');
+  for (const args of [['--root'], ['--root',''], ['--root',outputRoot,'--root',outputRoot]]) {
+    assert.equal((await captureMain(['cases',...args,'--json'])).exitCode, 2);
+  }
+});
