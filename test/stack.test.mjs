@@ -1791,3 +1791,16 @@ test('case reviews explain verification readiness without claiming receipt verif
     if(state==='ready') assert.match(md,/aas verify ready/);
   }
 });
+
+test('filtered case pages preserve scan bounds and continuation across nonmatches', async () => {
+  const {listCasePage}=await import('../bin/case-review.mjs');
+  const outputRoot=tempRoot();
+  for(const [runId,domain] of [['case-z','refund'],['case-a','inventory']]) await runDemo(['--domain',domain],{paths:{outputRoot},runId,componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false,policy_id:'bounded-policy'},status:0})});
+  const first=listCasePage({outputRoot,limit:1,domain:'inventory'});
+  assert.deepEqual(first.cases,[]);assert.equal(first.next_cursor,'case-z');assert.equal(first.scanned,1);
+  const next=listCasePage({outputRoot,limit:1,before:first.next_cursor,domain:'inventory',outcome:'none',search:'BOUNDED-POLICY'});
+  assert.equal(next.cases[0].run_id,'case-a');assert.equal(next.next_cursor,null);
+  const cli=await captureMain(['cases','--root',outputRoot,'--domain','inventory','--outcome','none','--search','bounded-policy','--json']);
+  assert.equal(cli.exitCode,0,cli.stderr);assert.equal(JSON.parse(cli.stdout).cases.length,1);
+  for(const args of [['--domain','real'],['--outcome','paid'],['--search',''],['--search','x'.repeat(201)],['--domain','refund','--domain','inventory']]) assert.equal((await captureMain(['cases',...args,'--json'])).exitCode,2);
+});

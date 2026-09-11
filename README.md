@@ -298,3 +298,5 @@ Use aas latest --root output-directory to print the ID named by the latest compl
 Case-review Markdown now carries all five requested settings and a policy-failure summary with rule identity, path, kind, and reason code. It includes at most 50 failed rules with bounded text fields and an explicit omitted count; raw response values remain in the original artifact only. Missing rule records never imply a policy pass.
 
 Case reviews classify verification readiness as unavailable, conflicting, or ready and explain the next read-only step. Ready means that recorded action identity and recomputed digest agree; it does not mean receipts are verified. Missing rail evidence, missing reviews, and conflicting bindings receive separate recovery guidance.
+
+Terminal case history supports --domain refund|inventory|unknown, --outcome settled|compensated|none, and --search text (case-insensitive, 1 to 200 characters). Filters combine and inspect summary metadata only. They apply within each bounded page: an empty filtered page can still have next_cursor, and callers must keep the same filters when continuing.

@@ -3,9 +3,12 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_PATHS, UsageError, exportRunBundle, isValidRunId, summarizeRun } from "./aas.mjs";
 
-export function listCasePage({ outputRoot = DEFAULT_PATHS.outputRoot, before = null, limit = 25 } = {}) {
+export function listCasePage({ outputRoot = DEFAULT_PATHS.outputRoot, before = null, limit = 25, domain = null, outcome = null, search = null } = {}) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error("History limit must be an integer from 1 to 50.");
   if (before !== null && (!isValidRunId(before) || before.length > 200)) throw new Error("Invalid history cursor.");
+  if (domain !== null && !['refund','inventory','unknown'].includes(domain)) throw new Error('Domain filter must be refund, inventory, or unknown.');
+  if (outcome !== null && !['settled','compensated','none'].includes(outcome)) throw new Error('Outcome filter must be settled, compensated, or none.');
+  if (search !== null && (typeof search !== 'string' || !search.trim() || search.length > 200)) throw new Error('Search must contain 1 to 200 characters.');
   let entries;
   try { entries = readdirSync(join(outputRoot, "runs"), { withFileTypes: true }); }
   catch (error) { if (error.code === "ENOENT") return { cases: [], next_cursor: null, scanned: 0, unavailable: [] }; throw error; }
@@ -14,7 +17,13 @@ export function listCasePage({ outputRoot = DEFAULT_PATHS.outputRoot, before = n
   const candidates = ids.slice(0, limit);
   const cases = [], unavailable = [];
   for (const runId of candidates) {
-    try { cases.push(summarizeRun(runId, { outputRoot })); }
+    try {
+      const summary = summarizeRun(runId, { outputRoot });
+      if (domain !== null && (summary.domain ?? 'unknown') !== domain) continue;
+      if (outcome !== null && (summary.outcome ?? 'none') !== outcome) continue;
+      if (search !== null && !['run_id','domain','policy_id','action_id','outcome','review_verdict','evidence_digest'].some(key => typeof summary[key] === 'string' && summary[key].toLowerCase().includes(search.trim().toLowerCase()))) continue;
+      cases.push(summary);
+    }
     catch { unavailable.push(runId); }
   }
   return { cases, next_cursor: ids.length > limit ? candidates.at(-1) : null, scanned: candidates.length, unavailable };
@@ -25,8 +34,11 @@ export function parseCasePageArgs(args) {
   for (let i = 0; i < args.length; i++) {
     const key = args[i];
     if (key === "--json") continue;
-    if (!["--before", "--limit"].includes(key) || i + 1 >= args.length || Object.hasOwn(result, key.slice(2))) throw new Error("Usage: aas cases [--before run-id] [--limit 1..50] [--json]");
+    if (!["--before", "--limit", "--domain", "--outcome", "--search"].includes(key) || i + 1 >= args.length || Object.hasOwn(result, key.slice(2))) throw new Error("Usage: aas cases [--before run-id] [--limit 1..50] [--json]");
     const value = args[++i];
+    if (key === '--domain' && !['refund','inventory','unknown'].includes(value)) throw new Error('Invalid domain filter.');
+    if (key === '--outcome' && !['settled','compensated','none'].includes(value)) throw new Error('Invalid outcome filter.');
+    if (key === '--search' && (!value.trim() || value.length > 200)) throw new Error('Search must contain 1 to 200 characters.');
     if (key === "--limit" && !/^[1-9][0-9]?$/.test(value)) throw new Error("Invalid history limit.");
     result[key.slice(2)] = key === "--limit" ? Number(value) : value;
   }

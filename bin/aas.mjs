@@ -245,7 +245,7 @@ Usage:
   aas latest [--root output-dir] [--json]
   aas verify <run-id> [--root output-dir] [--json]
   aas inspect <run-id> [--root output-dir] [--json|--markdown]
-  aas cases [--before run-id] [--limit 1..50] [--json]
+  aas cases [--root output-dir] [--before run-id] [--limit 1..50] [--domain refund|inventory|unknown] [--outcome settled|compensated|none] [--search text] [--json]
   aas compare <run-id> <run-id> [--root output-dir] [--json|--markdown]
   aas help
 
