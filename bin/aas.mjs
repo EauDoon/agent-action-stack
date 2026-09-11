@@ -18,7 +18,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
-  renameSync,
+  renameSync, linkSync,
   rmSync,
   unlinkSync,
   writeFileSync,
@@ -240,17 +240,21 @@ export function helpText() {
 
 Usage:
   aas demo [--response pass|fail] [--fault none|duplicate] [--dispute] [--prove simulate|rail] [--domain refund|inventory] [--json]
-  aas export <run-id> [--out <path>]
+  aas export <run-id> [--out <path>] [--overwrite] [--json]
   aas replay <bundle-file|-> [--json]
+  aas latest [--root output-dir] [--json]
+  aas verify <run-id> [--root output-dir] [--json]
   aas inspect <run-id> [--root output-dir] [--json|--markdown]
-  aas cases [--before run-id] [--limit 1..50] [--json]
-  aas compare <run-id> <run-id> [--json]
+  aas cases [--root output-dir] [--before run-id] [--limit 1..50] [--domain refund|inventory|unknown] [--outcome settled|compensated|none] [--search text] [--json]
+  aas compare <run-id> <run-id> [--root output-dir] [--json|--markdown]
   aas help
 
 Commands:
   demo    Run decide, act, and prove and persist one run bundle
   export  Print one run bundle as portable JSON (or write it with --out)
   replay  Re-verify an exported bundle offline without rerunning the action
+  verify  Re-verify one saved case without exporting or rerunning actions
+  latest  Print the latest complete saved run identity
   runs    List persisted runs newest-first
   cases   List bounded case summaries (outcome, policy, review, digest)
   compare Compare two cases and classify identical, different, or not comparable
@@ -263,6 +267,7 @@ Options:
   --prove simulate|rail    Prove path: canned operator simulation (default)
                            or review of the same-case rail bundle
   --domain refund|inventory  Synthetic action domain (default: refund)
+  --root output-dir        Select saved-case storage for inspect/runs/cases/compare/export/prune
   --json                   Print the run report as JSON
   -h, --help               Show this help
 
@@ -1129,9 +1134,11 @@ export function listRuns({ outputRoot = DEFAULT_PATHS.outputRoot, limit = Number
 
 function readLatestRunId(outputRoot) {
   try {
-    const pointer = JSON.parse(readFileSync(join(outputRoot, "latest.json"), "utf8"));
+    const pointer = readBoundedCaseJson(join(outputRoot, "latest.json"));
     const runId = pointer?.run_id;
-    return typeof runId === "string" && RUN_ID_PATTERN.test(runId) ? runId : null;
+    if (!isValidRunId(runId) || pointer.manifest !== `runs/${runId}/manifest.json`) return null;
+    if (pointer.schema_version !== undefined && pointer.schema_version !== "agent-action-stack.latest/v1") return null;
+    return runId;
   } catch {
     return null;
   }
@@ -1332,6 +1339,8 @@ export function writeAtomicFile(
   target,
   data,
   {
+    replace = true,
+    link = linkSync,
     writeFile = writeFileSync,
     rename = renameSync,
     unlink = unlinkSync,
@@ -1344,7 +1353,8 @@ export function writeAtomicFile(
   try {
     writeFile(temporary, data, { encoding: "utf8", flag: "wx" });
     written = true;
-    rename(temporary, target);
+    if (replace) rename(temporary, target);
+    else link(temporary, target);
   } catch (error) {
     throw error;
   } finally {
@@ -1685,37 +1695,51 @@ function writeCliError(error, { asJson = false, usage = false } = {}) {
 }
 
 async function readReplayInput(source, { stdin = process.stdin } = {}) {
+  let bytes;
   if (source === "-") {
     if (stdin.isTTY) throw new UsageError("replay reads stdin only from a pipe; pass a bundle file instead");
     const chunks = [];
+    let size = 0;
     for await (const chunk of stdin) {
-      chunks.push(typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk);
+      const buffer = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
+      size += buffer.length;
+      if (size > CHILD_JSON_LIMIT) throw new Error(`replay bundle exceeds the ${CHILD_JSON_LIMIT} byte limit`);
+      chunks.push(buffer);
     }
-    const text = Buffer.concat(chunks).toString("utf8");
-    if (text.length > CHILD_JSON_LIMIT) {
-      throw new Error(`replay bundle exceeds the ${CHILD_JSON_LIMIT} byte limit`);
-    }
-    if (text.trim() === "") throw new Error("replay received an empty bundle document");
-    return text;
+    bytes = Buffer.concat(chunks);
+  } else {
+    let fd;
+    try {
+      fd = openSync(source, constants.O_RDONLY | constants.O_NONBLOCK);
+      const stat = fstatSync(fd);
+      if (!stat.isFile() || stat.size > CHILD_JSON_LIMIT) throw new Error("replay file exceeds the byte limit or is not a regular file");
+      bytes = Buffer.alloc(CHILD_JSON_LIMIT + 1);
+      let size = 0;
+      while (size < bytes.length) {
+        const read = readSync(fd, bytes, size, bytes.length - size, null);
+        if (!read) break;
+        size += read;
+      }
+      if (size > CHILD_JSON_LIMIT) throw new Error("replay bundle exceeds the byte limit");
+      bytes = bytes.subarray(0, size);
+    } catch (error) {
+      if (error.code) throw new Error("replay cannot read bundle file");
+      throw error;
+    } finally { if (fd !== undefined) closeSync(fd); }
   }
   let text;
-  try {
-    text = readFileSync(source, "utf8");
-  } catch {
-    throw new Error(`replay cannot read bundle file: ${source}`);
-  }
-  if (text.length > CHILD_JSON_LIMIT) {
-    throw new Error(`replay bundle exceeds the ${CHILD_JSON_LIMIT} byte limit`);
-  }
-  if (text.trim() === "") throw new Error("replay received an empty bundle document");
-  return text;
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+  catch { throw new Error("replay requires valid UTF-8"); }
+  if (!text.trim()) throw new Error("replay received an empty bundle document");
+  try { return JSON.parse(text); }
+  catch { throw new Error("replay bundle contains invalid JSON"); }
 }
 
-function runRunsCommand(args, { asJson } = {}) {
+function runRunsCommand(args, { asJson, outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
   if (args.some((token) => token !== "--json")) {
     throw new UsageError(`Unsupported runs option (expected [--json])`);
   }
-  const runs = listRuns({});
+  const runs = listRuns({ outputRoot });
   if (asJson) {
     process.stdout.write(`${JSON.stringify({ ok: true, runs }, null, 2)}\n`);
   } else if (runs.length === 0) {
@@ -1730,17 +1754,17 @@ function runRunsCommand(args, { asJson } = {}) {
   process.exitCode = 0;
 }
 
-async function runCasesCommand(args, { asJson } = {}) {
+async function runCasesCommand(args, { asJson, outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
   const { listCasePage, parseCasePageArgs } = await import("./case-review.mjs");
   let pageOptions;
   try { pageOptions = parseCasePageArgs(args); } catch (error) { throw new UsageError(error.message); }
   if ((pageOptions.limit !== undefined && (pageOptions.limit < 1 || pageOptions.limit > 50)) || (pageOptions.before !== undefined && (!isValidRunId(pageOptions.before) || pageOptions.before.length > 200))) throw new UsageError("Invalid history page options.");
-  const page = listCasePage(pageOptions);
+  const page = listCasePage({ ...pageOptions, outputRoot });
   const cases = page.cases;
   if (asJson) {
     process.stdout.write(`${JSON.stringify({ ok: true, ...page }, null, 2)}\n`);
   } else if (cases.length === 0) {
-    process.stdout.write("no cases yet\n");
+    process.stdout.write(page.scanned ? "no readable cases in this page\n" : "no cases in this page\n");
   } else {
     for (const entry of cases) {
       process.stdout.write(
@@ -1749,12 +1773,19 @@ async function runCasesCommand(args, { asJson } = {}) {
       );
     }
   }
+  if (!asJson) {
+    process.stdout.write(`scanned: ${page.scanned}\n`);
+    for (const runId of page.unavailable) process.stdout.write(`unavailable: ${runId}\n`);
+    process.stdout.write(`next_cursor: ${page.next_cursor ?? "none"}\n`);
+    if (page.next_cursor) process.stdout.write(`Continue with --before ${page.next_cursor} and the same root and page options.\n`);
+  }
   process.exitCode = 0;
 }
 
 function printComparison(result, asJson) {
+  process.exitCode = result.classification === "not-comparable" ? 1 : 0;
   if (asJson) {
-    process.stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ ok: result.classification !== "not-comparable", ...result }, null, 2)}\n`);
     return;
   }
   process.stdout.write(`comparison: ${result.classification}\n`);
@@ -1774,17 +1805,23 @@ function printComparison(result, asJson) {
   process.exitCode = result.classification === "not-comparable" ? 1 : 0;
 }
 
-function runCompareCommand(args, { asJson } = {}) {
-  const ids = args.filter((token) => token !== "--json");
+async function runCompareCommand(args, { asJson, outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
+  const formats = args.filter(token => token === "--json" || token === "--markdown");
+  if (formats.length > 1) throw new UsageError("Choose one comparison output format");
+  const ids = args.filter((token) => token !== "--json" && token !== "--markdown");
   if (ids.some((token) => typeof token === "string" && token.startsWith("-"))) {
     throw new UsageError(`Unsupported compare option: ${args.find((token) => String(token).startsWith("-"))}`);
   }
-  if (ids.length !== 2) throw new UsageError("Usage: aas compare <run-id> <run-id> [--json]");
-  const result = compareRuns(ids[0], ids[1], {});
-  printComparison(result, asJson);
+  if (ids.length !== 2) throw new UsageError("Usage: aas compare <run-id> <run-id> [--root output-dir] [--json|--markdown]");
+  const result = compareRuns(ids[0], ids[1], { outputRoot });
+  if (formats[0] === "--markdown") {
+    const { renderComparisonMarkdown } = await import("./case-review.mjs");
+    process.stdout.write(renderComparisonMarkdown(result));
+    process.exitCode = result.classification === "not-comparable" ? 1 : 0;
+  } else printComparison(result, asJson);
 }
 
-function runPruneCommand(args, { asJson } = {}) {
+function runPruneCommand(args, { asJson, outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
   let keep = null;
   let dryRun = false;
   for (let index = 0; index < args.length; index += 1) {
@@ -1803,7 +1840,7 @@ function runPruneCommand(args, { asJson } = {}) {
     }
   }
   if (keep === null) throw new UsageError("Usage: aas prune --keep <positive integer> [--dry-run] [--json]");
-  const result = pruneRuns({ keep, dryRun });
+  const result = pruneRuns({ keep, dryRun, outputRoot });
   if (asJson) {
     process.stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`);
   } else if (dryRun) {
@@ -1836,12 +1873,18 @@ function printReplayReport(result, asJson) {
   process.stdout.write(`${lines.join("\n")}\n`);
 }
 
-function runExportCommand(args, { asJson } = {}) {
+function runExportCommand(args, { asJson, outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
   let runId = null;
   let out = null;
+  let overwrite = false;
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index];
-    if (token === "--out") {
+    if (token === "--overwrite") {
+      if (overwrite) throw new UsageError("Duplicate export option: --overwrite");
+      overwrite = true;
+    } else if (token === "--json") {
+      continue;
+    } else if (token === "--out") {
       const value = args[index + 1];
       if (value === undefined || value.startsWith("-")) throw new UsageError("Missing value for export option: --out");
       if (out !== null) throw new UsageError("Duplicate export option: --out");
@@ -1857,10 +1900,11 @@ function runExportCommand(args, { asJson } = {}) {
       runId = token;
     }
   }
-  if (runId === null) throw new UsageError("Usage: aas export <run-id> [--out <path>]");
+  if (runId === null) throw new UsageError("Usage: aas export <run-id> [--out <path>] [--overwrite] [--json]");
+  if (overwrite && out === null) throw new UsageError("--overwrite requires --out");
   let bundle;
   try {
-    bundle = exportRunBundle(runId, {});
+    bundle = exportRunBundle(runId, { outputRoot });
   } catch (error) {
     writeCliError(error, { asJson, usage: false });
     process.exitCode = 1;
@@ -1873,7 +1917,7 @@ function runExportCommand(args, { asJson } = {}) {
     return;
   }
   try {
-    writeAtomicFile(out, text, {});
+    writeAtomicFile(out, text, { replace: overwrite });
   } catch (error) {
     writeCliError(error, { asJson, usage: false });
     process.exitCode = 1;
@@ -1902,7 +1946,7 @@ async function runReplayCommand(args, { asJson, nodeVersion, stdin } = {}) {
   assertFullStackNodeVersion(nodeVersion === undefined ? {} : { version: nodeVersion });
   let bundleDoc;
   try {
-    bundleDoc = JSON.parse(await readReplayInput(source, { stdin }));
+    bundleDoc = await readReplayInput(source, { stdin });
   } catch (error) {
     if (error instanceof UsageError) throw error;
     writeCliError(error, { asJson: json || asJson, usage: false });
@@ -1921,12 +1965,54 @@ async function runReplayCommand(args, { asJson, nodeVersion, stdin } = {}) {
   process.exitCode = result.ok ? 0 : 1;
 }
 
+function parseRootArgs(args) {
+  const remaining = [];
+  let outputRoot = DEFAULT_PATHS.outputRoot, seen = false;
+  for (let index = 0; index < args.length; index++) {
+    if (args[index] !== "--root") { remaining.push(args[index]); continue; }
+    if (seen || !args[index + 1]?.trim() || args[index + 1].startsWith("--")) throw new UsageError("--root requires one output directory path");
+    seen = true;
+    outputRoot = args[++index];
+  }
+  return { args: remaining, outputRoot };
+}
+
 export async function main(argv = process.argv.slice(2), options = {}) {
   const command = argv[0] ?? "help";
   const asJson = has(argv, "--json");
   if (isHelpToken(command) || (command === "demo" && demoRequestsHelp(argv.slice(1)))) {
     printHelp();
     process.exitCode = 0;
+    return;
+  }
+  if (command === "latest") {
+    try {
+      const { args, outputRoot } = parseRootArgs(argv.slice(1));
+      if (args.length > 1 || args.some(token => token !== "--json")) throw new UsageError("Usage: aas latest [--root output-dir] [--json]");
+      const runId = readLatestRunId(outputRoot);
+      if (runId === null) throw new Error("Latest case pointer is missing or invalid");
+      exportRunBundle(runId, {outputRoot});
+      process.stdout.write(asJson ? JSON.stringify({ok:true,run_id:runId}) + "\n" : runId + "\n");
+      process.exitCode = 0;
+    } catch (error) {
+      const usage = error instanceof UsageError;
+      writeCliError(error, {asJson,usage}); process.exitCode = usage ? 2 : 1;
+    }
+    return;
+  }
+  if (command === "verify") {
+    try {
+      const { args, outputRoot } = parseRootArgs(argv.slice(1));
+      const ids = args.filter(token => token !== "--json");
+      if (ids.length !== 1 || !isValidRunId(ids[0]) || args.filter(token => token === "--json").length > 1) throw new UsageError("Usage: aas verify <run-id> [--root output-dir] [--json]");
+      assertFullStackNodeVersion(options.nodeVersion === undefined ? {} : {version:options.nodeVersion});
+      const result = replayBundle(exportRunBundle(ids[0], {outputRoot}));
+      printReplayReport(result, asJson);
+      process.exitCode = result.ok ? 0 : 1;
+    } catch (error) {
+      const usage = error instanceof UsageError;
+      writeCliError(error, {asJson, usage}); process.exitCode = usage ? 2 : 1;
+    }
     return;
   }
   if (command === "inspect") {
@@ -1944,10 +2030,11 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   }
   if (command === "runs" || command === "cases" || command === "compare" || command === "prune") {
     try {
-      if (command === "runs") runRunsCommand(argv.slice(1), { asJson });
-      else if (command === "cases") await runCasesCommand(argv.slice(1), { asJson });
-      else if (command === "compare") runCompareCommand(argv.slice(1), { asJson });
-      else runPruneCommand(argv.slice(1), { asJson });
+      const { args, outputRoot } = parseRootArgs(argv.slice(1));
+      if (command === "runs") runRunsCommand(args, { asJson, outputRoot });
+      else if (command === "cases") await runCasesCommand(args, { asJson, outputRoot });
+      else if (command === "compare") await runCompareCommand(args, { asJson, outputRoot });
+      else runPruneCommand(args, { asJson, outputRoot });
     } catch (error) {
       const usage = error instanceof UsageError;
       writeCliError(error, { asJson, usage });
@@ -1957,7 +2044,10 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   }
   if (command === "export" || command === "replay") {
     try {
-      if (command === "export") runExportCommand(argv.slice(1), { asJson });
+      if (command === "export") {
+        const { args, outputRoot } = parseRootArgs(argv.slice(1));
+        runExportCommand(args, { asJson, outputRoot });
+      }
       else {
         await runReplayCommand(argv.slice(1), {
           asJson,

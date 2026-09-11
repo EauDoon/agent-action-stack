@@ -280,3 +280,23 @@ The export budget counts the formatted JSON bytes actually downloaded, including
 Saved-file reads use nonblocking descriptors and validate regular-file type and size before reading, so a named pipe cannot hold the reader open. Invalid UTF-8 is rejected rather than silently replacing evidence bytes.
 
 History summaries and run listings use the same bounded saved-file reader, including when a malformed entry is skipped as unavailable.
+
+Replay checks actual UTF-8 bytes for both files and pipes, stops oversized streams as soon as the budget is crossed, and rejects nonregular files, invalid encoding, and malformed JSON without echoing document contents.
+
+Exporting with --out creates a new handoff atomically and refuses to replace an existing file. Pass --overwrite with --out to explicitly replace it. --json supports machine-readable export success and error output.
+
+All saved-case commands (runs, cases, compare, inspect, export, and prune) accept --root output-directory. Use a copied case store without moving it into the checkout or bootstrapping components; paths with spaces are supported when quoted. Prune still requires an explicit --keep and supports --dry-run.
+
+Human-readable cases output includes scanned count, each unavailable case ID, and next_cursor. An entirely damaged page still gives its continuation cursor, so older readable cases remain reachable. Continue with --before and the same root/page options.
+
+Use aas compare left-id right-id --root output-directory --markdown to print the GUI comparison handoff from the terminal. All formats return exit 1 when cases cannot be compared; JSON also sets ok to false. Comparable differences remain exit 0 and never establish causation.
+
+Use aas verify run-id --root output-directory --json to verify a saved case directly. It performs the same receipt and review checks as imported replay, with the same pinned component requirements, and never executes an action or modifies the case store. Refused or simulation-only cases without same-case evidence return unavailable and exit 1.
+
+Use aas latest --root output-directory to print the ID named by the latest complete-bundle pointer, or add --json for machine output. It validates the referenced saved bundle and fails closed for missing, inconsistent, or unreadable pointers/cases. It never guesses by sorting directory names.
+
+Case-review Markdown now carries all five requested settings and a policy-failure summary with rule identity, path, kind, and reason code. It includes at most 50 failed rules with bounded text fields and an explicit omitted count; raw response values remain in the original artifact only. Missing rule records never imply a policy pass.
+
+Case reviews classify verification readiness as unavailable, conflicting, or ready and explain the next read-only step. Ready means that recorded action identity and recomputed digest agree; it does not mean receipts are verified. Missing rail evidence, missing reviews, and conflicting bindings receive separate recovery guidance.
+
+Terminal case history supports --domain refund|inventory|unknown, --outcome settled|compensated|none, and --search text (case-insensitive, 1 to 200 characters). Filters combine and inspect summary metadata only. They apply within each bounded page: an empty filtered page can still have next_cursor, and callers must keep the same filters when continuing.

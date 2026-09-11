@@ -92,3 +92,5 @@ treats an observed effect as proof of external truth.
   explicitly; it never reports success for an unverified binding.
 - Legal effect is always `not-determined`. These examples make no claim of
   AP2/UCP compliance or of real-world reversibility.
+
+The review-handoff example uses the same bounded Python discovery as the CLI, including AAS_PYTHON and the Windows py launcher. An invalid explicit override fails before any component executes.

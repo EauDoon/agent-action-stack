@@ -1673,3 +1673,139 @@ test('saved manifests reject missing records arrays and invalid artifact fields 
   assert.equal(Object.keys(exportRunBundle('complete-stages',{outputRoot}).stages).length,3);
   assert.equal(full.manifest.stages.prove.artifact,'stages/prove.json');
 });
+
+test('replay bounds UTF-8 bytes and redacts malformed JSON for files and streams', async () => {
+  const root = tempRoot(), path = join(root, 'replay.json');
+  const sources = [Buffer.from(JSON.stringify({pad: 'é'.repeat(CHILD_JSON_LIMIT / 2)})), Buffer.from('{"SYNTHETIC_PARSE_MARKER":invalid}'), Buffer.from([0xff])];
+  for (const input of sources) {
+    writeFileSync(path, input);
+    for (const source of [path, '-']) {
+      const result = await captureMain(['replay', source, '--json'], {stdin: Readable.from([input])});
+      assert.equal(result.exitCode, 1);
+      assert.doesNotMatch(result.stderr, /SYNTHETIC_PARSE_MARKER/);
+      assert.match(result.stderr, input.length > CHILD_JSON_LIMIT ? /byte limit/ : /invalid JSON|UTF-8/);
+    }
+  }
+  let consumed = 0;
+  async function* oversized() { consumed++; yield Buffer.alloc(CHILD_JSON_LIMIT + 1); consumed++; yield Buffer.from('{}'); }
+  const bounded = await captureMain(['replay', '-', '--json'], {stdin: oversized()});
+  assert.equal(bounded.exitCode, 1); assert.equal(consumed, 1);
+});
+
+test('handoff export preserves existing files unless replacement is explicit', () => {
+  const root = tempRoot(), target = join(root, 'case.json');
+  writeAtomicFile(target, 'original');
+  assert.throws(() => writeAtomicFile(target, 'replacement', {replace: false}), /exist|EEXIST/);
+  assert.equal(readFileSync(target, 'utf8'), 'original');
+  assert.deepEqual(readdirSync(root), ['case.json']);
+  writeAtomicFile(join(root, 'new.json'), 'new', {replace: false});
+  assert.equal(readFileSync(join(root, 'new.json'), 'utf8'), 'new');
+  writeAtomicFile(target, 'replacement', {replace: true});
+  assert.equal(readFileSync(target, 'utf8'), 'replacement');
+});
+
+test('saved-case commands use an explicit output root without component setup', async () => {
+  const outputRoot = tempRoot();
+  for (const runId of ['root-a', 'root-b']) await runDemo([], {paths:{outputRoot},runId,componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false},status:0})});
+  for (const command of [['runs'], ['cases'], ['compare', 'root-a', 'root-b'], ['export', 'root-a'], ['prune', '--keep', '1', '--dry-run']]) {
+    const result = await captureMain([...command, '--root', outputRoot, '--json']);
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.ok(JSON.parse(result.stdout));
+  }
+  const target = join(outputRoot, 'handoff.json');
+  assert.equal((await captureMain(['export','root-a','--root',outputRoot,'--out',target,'--json'])).exitCode, 0);
+  assert.equal((await captureMain(['export','root-b','--root',outputRoot,'--out',target,'--json'])).exitCode, 1);
+  assert.equal(JSON.parse(readFileSync(target,'utf8')).report.run_id, 'root-a');
+  for (const args of [['--root'], ['--root',''], ['--root',outputRoot,'--root',outputRoot]]) {
+    assert.equal((await captureMain(['cases',...args,'--json'])).exitCode, 2);
+  }
+});
+
+test('human history reports damaged entries and continuation even on empty pages', async () => {
+  const outputRoot = tempRoot(); writeCase(outputRoot, 'case-a');
+  mkdirSync(join(outputRoot, 'runs', 'case-z'), {recursive:true});
+  const first = await captureMain(['cases','--root',outputRoot,'--limit','1']);
+  assert.equal(first.exitCode, 0); assert.doesNotMatch(first.stdout, /no cases yet/);
+  assert.match(first.stdout, /unavailable: case-z/); assert.match(first.stdout, /next_cursor: case-z/);
+  const next = await captureMain(['cases','--root',outputRoot,'--limit','1','--before','case-z']);
+  assert.match(next.stdout, /case-a outcome=/); assert.match(next.stdout, /next_cursor: none/);
+});
+
+test('comparison handoffs support Markdown and fail machine callers on unavailable cases', async () => {
+  const outputRoot = tempRoot(); writeCase(outputRoot, 'compare-a'); writeCase(outputRoot, 'compare-b');
+  const good = await captureMain(['compare','compare-a','compare-b','--root',outputRoot,'--markdown']);
+  assert.equal(good.exitCode, 0, good.stderr); assert.match(good.stdout, /# Saved case comparison/);
+  assert.match(good.stdout, /do not establish causation/);
+  for (const format of ['--json','--markdown']) {
+    const bad = await captureMain(['compare','compare-a','missing','--root',outputRoot,format]);
+    assert.equal(bad.exitCode, 1);
+    if (format === '--json') assert.equal(JSON.parse(bad.stdout).ok, false);
+  }
+  assert.equal((await captureMain(['compare','compare-a','compare-b','--markdown','--json'])).exitCode, 2);
+});
+
+test('verify reads a saved case without executing actions or changing its files', async () => {
+  const outputRoot=tempRoot(), runId='verify-refused';
+  const result=await runDemo([], {paths:{outputRoot},runId,componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false},status:0})});
+  const before=readFileSync(join(result.bundleDir,'manifest.json'),'utf8');
+  const verified=await captureMain(['verify',runId,'--root',outputRoot,'--json']);
+  assert.equal(verified.exitCode,1); const report=JSON.parse(verified.stdout);
+  assert.equal(report.ok,false); assert.match(report.reason,/unavailable/);
+  assert.equal(readFileSync(join(result.bundleDir,'manifest.json'),'utf8'),before);
+  assert.deepEqual(readdirSync(join(outputRoot,'runs')),[runId]);
+  assert.equal((await captureMain(['verify',runId,'--root',outputRoot,'--json'],{nodeVersion:'20.19.0'})).exitCode,1);
+  for(const args of [[],['a','b'],['a','--markdown']]) assert.equal((await captureMain(['verify',...args])).exitCode,2);
+});
+
+test('latest resolves the persisted pointer and fails closed on unavailable identities', async () => {
+  const outputRoot=tempRoot();
+  for(const runId of ['z-case','a-case']) await runDemo([], {paths:{outputRoot},runId,componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false},status:0})});
+  const latest=await captureMain(['latest','--root',outputRoot]);
+  assert.equal(latest.exitCode,0); assert.equal(latest.stdout.trim(),'a-case');
+  assert.equal(JSON.parse((await captureMain(['latest','--root',outputRoot,'--json'])).stdout).run_id,'a-case');
+  for(const pointer of [{run_id:'missing'},{run_id:'../escape'},{run_id:'z-case',manifest:'runs/a-case/manifest.json'}]) {
+    writeFileSync(join(outputRoot,'latest.json'),JSON.stringify(pointer));
+    assert.equal((await captureMain(['latest','--root',outputRoot,'--json'])).exitCode,1);
+  }
+  assert.equal((await captureMain(['latest','extra'])).exitCode,2);
+});
+
+test('case review handoffs include requested settings and bounded policy failures', async () => {
+  const {inspectCase,renderCaseMarkdown}=await import('../bin/case-review.mjs');
+  const outputRoot=tempRoot(), runId='policy-review';
+  const rules=[{rule_id:'allowed',passed:true},...Array.from({length:55},(_,index)=>({rule_id:'failed-'+index,path:'decision',kind:'equals',passed:false,reason_code:'not_equal',raw:'OMIT_RAW'}))];
+  await runDemo(['--response','fail','--domain','inventory'],{paths:{outputRoot},runId,componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false,rule_results:rules},status:0})});
+  const review=inspectCase(runId,{outputRoot});
+  assert.equal(review.policy_failures.total,55);assert.equal(review.policy_failures.rules.length,50);assert.equal(review.policy_failures.omitted,5);
+  const markdown=renderCaseMarkdown(review);assert.match(markdown,/## Requested settings/);assert.match(markdown,/domain: inventory/);assert.match(markdown,/not\\_equal/);assert.match(markdown,/5 additional failures omitted/);assert.doesNotMatch(markdown,/OMIT_RAW/);
+});
+
+test('case reviews explain verification readiness without claiming receipt verification', async () => {
+  const {inspectCase,renderCaseMarkdown}=await import('../bin/case-review.mjs');
+  const outputRoot=tempRoot(),rail={synthetic:true},digest='sha256:'+createHash('sha256').update(JSON.stringify(rail)).digest('hex');
+  const variants=[['no-rail',{},null,'unavailable'],['no-review',{action_id:'a',rail_bundle:rail},null,'unavailable'],['conflict',{action_id:'a',rail_bundle:rail},{verdict:'recorded',actionId:'a',evidenceDigest:'wrong'},'conflicting'],['ready',{action_id:'a',rail_bundle:rail},{verdict:'recorded',actionId:'a',evidenceDigest:digest},'ready']];
+  for(const [runId,act,review,state] of variants){
+    persistRunBundle({outputRoot,runId,report:{run_id:runId,stages:{}},stages:{act:{status:'passed',raw:act},prove:{status:'passed',raw:{result:review}}},componentProvenance:[],exitCode:0});
+    const report=inspectCase(runId,{outputRoot});assert.equal(report.verification_readiness.state,state);
+    const md=renderCaseMarkdown(report);assert.match(md,/## Verification next step/);assert.match(md,/Receipt verification was not performed/);
+    if(state==='ready') assert.match(md,/aas verify ready/);
+  }
+});
+
+test('filtered case pages preserve scan bounds and continuation across nonmatches', async () => {
+  const {listCasePage}=await import('../bin/case-review.mjs');
+  const outputRoot=tempRoot();
+  for(const [runId,domain] of [['case-z','refund'],['case-a','inventory']]) await runDemo(['--domain',domain],{paths:{outputRoot},runId,componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false,policy_id:'bounded-policy'},status:0})});
+  const first=listCasePage({outputRoot,limit:1,domain:'inventory'});
+  assert.deepEqual(first.cases,[]);assert.equal(first.next_cursor,'case-z');assert.equal(first.scanned,1);
+  const next=listCasePage({outputRoot,limit:1,before:first.next_cursor,domain:'inventory',outcome:'none',search:'BOUNDED-POLICY'});
+  assert.equal(next.cases[0].run_id,'case-a');assert.equal(next.next_cursor,null);
+  const cli=await captureMain(['cases','--root',outputRoot,'--domain','inventory','--outcome','none','--search','bounded-policy','--json']);
+  assert.equal(cli.exitCode,0,cli.stderr);assert.equal(JSON.parse(cli.stdout).cases.length,1);
+  for(const args of [['--domain','real'],['--outcome','paid'],['--search',''],['--search','x'.repeat(201)],['--domain','refund','--domain','inventory']]) assert.equal((await captureMain(['cases',...args,'--json'])).exitCode,2);
+});
+
+test('review handoff example honors the explicit interpreter override', () => {
+  const child=spawnSync(process.execPath,[join(ROOT,'examples/review-handoff.mjs')],{cwd:ROOT,encoding:'utf8',timeout:5000,env:{...process.env,AAS_PYTHON:'aas-synthetic-missing-python'}});
+  assert.equal(child.status,1);assert.match(child.stderr,/AAS_PYTHON/);assert.match(child.stderr,/did not report a usable Python version/);
+});

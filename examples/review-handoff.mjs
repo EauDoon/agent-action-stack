@@ -18,6 +18,7 @@
  * when policy refuses, verification fails, or a binding mismatches.
  */
 import { spawnSync } from "node:child_process";
+import { selectPython } from "../bin/aas.mjs";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -68,17 +69,6 @@ function parseArgs(argv) {
   return options;
 }
 
-function resolvePython() {
-  for (const bin of ["python3", "python"]) {
-    const probe = spawnSync(bin, ["-c", "import sys; print(sys.version_info[0] * 100 + sys.version_info[1])"], {
-      encoding: "utf8",
-      shell: false,
-    });
-    if (probe.error || probe.status !== 0) continue;
-    if (Number.parseInt(probe.stdout.trim(), 10) >= 311) return bin;
-  }
-  fail("decide needs Python 3.11+ on PATH as python3 (the testbench declares requires-python >= 3.11)");
-}
 
 function run(bin, args, { cwd, env }) {
   const result = spawnSync(bin, args, { cwd, env, encoding: "utf8", shell: false });
@@ -103,13 +93,14 @@ function note(text) {
 function main() {
   const { domain, response, fault } = parseArgs(process.argv.slice(2));
   const fixture = DOMAIN_FIXTURES[domain];
-  const python = resolvePython();
+  const python = selectPython();
+  if (!python) fail("decide needs Python 3.11+; set AAS_PYTHON to a working interpreter.");
   const scratch = mkdtempSync(join(tmpdir(), "aas-integrator-"));
   try {
     note(`domain: ${domain} (${fixture.action})`);
 
     // 1. Policy evaluation.
-    const decided = run(python, [
+    const decided = run(python.bin, [...python.prefix,
       "-m",
       "constitutional_agent_testbench.cli",
       "evaluate",
