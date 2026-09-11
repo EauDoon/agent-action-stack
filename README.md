@@ -286,3 +286,5 @@ Replay checks actual UTF-8 bytes for both files and pipes, stops oversized strea
 Exporting with --out creates a new handoff atomically and refuses to replace an existing file. Pass --overwrite with --out to explicitly replace it. --json supports machine-readable export success and error output.
 
 All saved-case commands (runs, cases, compare, inspect, export, and prune) accept --root output-directory. Use a copied case store without moving it into the checkout or bootstrapping components; paths with spaces are supported when quoted. Prune still requires an explicit --keep and supports --dry-run.
+
+Human-readable cases output includes scanned count, each unavailable case ID, and next_cursor. An entirely damaged page still gives its continuation cursor, so older readable cases remain reachable. Continue with --before and the same root/page options.

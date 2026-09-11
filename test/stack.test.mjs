@@ -1720,3 +1720,13 @@ test('saved-case commands use an explicit output root without component setup', 
     assert.equal((await captureMain(['cases',...args,'--json'])).exitCode, 2);
   }
 });
+
+test('human history reports damaged entries and continuation even on empty pages', async () => {
+  const outputRoot = tempRoot(); writeCase(outputRoot, 'case-a');
+  mkdirSync(join(outputRoot, 'runs', 'case-z'), {recursive:true});
+  const first = await captureMain(['cases','--root',outputRoot,'--limit','1']);
+  assert.equal(first.exitCode, 0); assert.doesNotMatch(first.stdout, /no cases yet/);
+  assert.match(first.stdout, /unavailable: case-z/); assert.match(first.stdout, /next_cursor: case-z/);
+  const next = await captureMain(['cases','--root',outputRoot,'--limit','1','--before','case-z']);
+  assert.match(next.stdout, /case-a outcome=/); assert.match(next.stdout, /next_cursor: none/);
+});

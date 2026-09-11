@@ -1758,7 +1758,7 @@ async function runCasesCommand(args, { asJson, outputRoot = DEFAULT_PATHS.output
   if (asJson) {
     process.stdout.write(`${JSON.stringify({ ok: true, ...page }, null, 2)}\n`);
   } else if (cases.length === 0) {
-    process.stdout.write("no cases yet\n");
+    process.stdout.write(page.scanned ? "no readable cases in this page\n" : "no cases in this page\n");
   } else {
     for (const entry of cases) {
       process.stdout.write(
@@ -1766,6 +1766,12 @@ async function runCasesCommand(args, { asJson, outputRoot = DEFAULT_PATHS.output
           + `review=${entry.review_verdict ?? "none"} exit=${entry.exit_code ?? "?"}\n`,
       );
     }
+  }
+  if (!asJson) {
+    process.stdout.write(`scanned: ${page.scanned}\n`);
+    for (const runId of page.unavailable) process.stdout.write(`unavailable: ${runId}\n`);
+    process.stdout.write(`next_cursor: ${page.next_cursor ?? "none"}\n`);
+    if (page.next_cursor) process.stdout.write(`Continue with --before ${page.next_cursor} and the same root and page options.\n`);
   }
   process.exitCode = 0;
 }
