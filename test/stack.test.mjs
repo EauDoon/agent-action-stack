@@ -1804,3 +1804,8 @@ test('filtered case pages preserve scan bounds and continuation across nonmatche
   assert.equal(cli.exitCode,0,cli.stderr);assert.equal(JSON.parse(cli.stdout).cases.length,1);
   for(const args of [['--domain','real'],['--outcome','paid'],['--search',''],['--search','x'.repeat(201)],['--domain','refund','--domain','inventory']]) assert.equal((await captureMain(['cases',...args,'--json'])).exitCode,2);
 });
+
+test('review handoff example honors the explicit interpreter override', () => {
+  const child=spawnSync(process.execPath,[join(ROOT,'examples/review-handoff.mjs')],{cwd:ROOT,encoding:'utf8',timeout:5000,env:{...process.env,AAS_PYTHON:'aas-synthetic-missing-python'}});
+  assert.equal(child.status,1);assert.match(child.stderr,/AAS_PYTHON/);assert.match(child.stderr,/did not report a usable Python version/);
+});
