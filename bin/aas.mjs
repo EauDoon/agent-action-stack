@@ -242,6 +242,7 @@ Usage:
   aas demo [--response pass|fail] [--fault none|duplicate] [--dispute] [--prove simulate|rail] [--domain refund|inventory] [--json]
   aas export <run-id> [--out <path>] [--overwrite] [--json]
   aas replay <bundle-file|-> [--json]
+  aas latest [--root output-dir] [--json]
   aas verify <run-id> [--root output-dir] [--json]
   aas inspect <run-id> [--root output-dir] [--json|--markdown]
   aas cases [--before run-id] [--limit 1..50] [--json]
@@ -253,6 +254,7 @@ Commands:
   export  Print one run bundle as portable JSON (or write it with --out)
   replay  Re-verify an exported bundle offline without rerunning the action
   verify  Re-verify one saved case without exporting or rerunning actions
+  latest  Print the latest complete saved run identity
   runs    List persisted runs newest-first
   cases   List bounded case summaries (outcome, policy, review, digest)
   compare Compare two cases and classify identical, different, or not comparable
@@ -1132,9 +1134,11 @@ export function listRuns({ outputRoot = DEFAULT_PATHS.outputRoot, limit = Number
 
 function readLatestRunId(outputRoot) {
   try {
-    const pointer = JSON.parse(readFileSync(join(outputRoot, "latest.json"), "utf8"));
+    const pointer = readBoundedCaseJson(join(outputRoot, "latest.json"));
     const runId = pointer?.run_id;
-    return typeof runId === "string" && RUN_ID_PATTERN.test(runId) ? runId : null;
+    if (!isValidRunId(runId) || pointer.manifest !== `runs/${runId}/manifest.json`) return null;
+    if (pointer.schema_version !== undefined && pointer.schema_version !== "agent-action-stack.latest/v1") return null;
+    return runId;
   } catch {
     return null;
   }
@@ -1979,6 +1983,21 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   if (isHelpToken(command) || (command === "demo" && demoRequestsHelp(argv.slice(1)))) {
     printHelp();
     process.exitCode = 0;
+    return;
+  }
+  if (command === "latest") {
+    try {
+      const { args, outputRoot } = parseRootArgs(argv.slice(1));
+      if (args.length > 1 || args.some(token => token !== "--json")) throw new UsageError("Usage: aas latest [--root output-dir] [--json]");
+      const runId = readLatestRunId(outputRoot);
+      if (runId === null) throw new Error("Latest case pointer is missing or invalid");
+      exportRunBundle(runId, {outputRoot});
+      process.stdout.write(asJson ? JSON.stringify({ok:true,run_id:runId}) + "\n" : runId + "\n");
+      process.exitCode = 0;
+    } catch (error) {
+      const usage = error instanceof UsageError;
+      writeCliError(error, {asJson,usage}); process.exitCode = usage ? 2 : 1;
+    }
     return;
   }
   if (command === "verify") {

@@ -292,3 +292,5 @@ Human-readable cases output includes scanned count, each unavailable case ID, an
 Use aas compare left-id right-id --root output-directory --markdown to print the GUI comparison handoff from the terminal. All formats return exit 1 when cases cannot be compared; JSON also sets ok to false. Comparable differences remain exit 0 and never establish causation.
 
 Use aas verify run-id --root output-directory --json to verify a saved case directly. It performs the same receipt and review checks as imported replay, with the same pinned component requirements, and never executes an action or modifies the case store. Refused or simulation-only cases without same-case evidence return unavailable and exit 1.
+
+Use aas latest --root output-directory to print the ID named by the latest complete-bundle pointer, or add --json for machine output. It validates the referenced saved bundle and fails closed for missing, inconsistent, or unreadable pointers/cases. It never guesses by sorting directory names.

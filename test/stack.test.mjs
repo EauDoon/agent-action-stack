@@ -1756,3 +1756,16 @@ test('verify reads a saved case without executing actions or changing its files'
   assert.equal((await captureMain(['verify',runId,'--root',outputRoot,'--json'],{nodeVersion:'20.19.0'})).exitCode,1);
   for(const args of [[],['a','b'],['a','--markdown']]) assert.equal((await captureMain(['verify',...args])).exitCode,2);
 });
+
+test('latest resolves the persisted pointer and fails closed on unavailable identities', async () => {
+  const outputRoot=tempRoot();
+  for(const runId of ['z-case','a-case']) await runDemo([], {paths:{outputRoot},runId,componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false},status:0})});
+  const latest=await captureMain(['latest','--root',outputRoot]);
+  assert.equal(latest.exitCode,0); assert.equal(latest.stdout.trim(),'a-case');
+  assert.equal(JSON.parse((await captureMain(['latest','--root',outputRoot,'--json'])).stdout).run_id,'a-case');
+  for(const pointer of [{run_id:'missing'},{run_id:'../escape'},{run_id:'z-case',manifest:'runs/a-case/manifest.json'}]) {
+    writeFileSync(join(outputRoot,'latest.json'),JSON.stringify(pointer));
+    assert.equal((await captureMain(['latest','--root',outputRoot,'--json'])).exitCode,1);
+  }
+  assert.equal((await captureMain(['latest','extra'])).exitCode,2);
+});
