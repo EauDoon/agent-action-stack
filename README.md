@@ -288,3 +288,5 @@ Exporting with --out creates a new handoff atomically and refuses to replace an 
 All saved-case commands (runs, cases, compare, inspect, export, and prune) accept --root output-directory. Use a copied case store without moving it into the checkout or bootstrapping components; paths with spaces are supported when quoted. Prune still requires an explicit --keep and supports --dry-run.
 
 Human-readable cases output includes scanned count, each unavailable case ID, and next_cursor. An entirely damaged page still gives its continuation cursor, so older readable cases remain reachable. Continue with --before and the same root/page options.
+
+Use aas compare left-id right-id --root output-directory --markdown to print the GUI comparison handoff from the terminal. All formats return exit 1 when cases cannot be compared; JSON also sets ok to false. Comparable differences remain exit 0 and never establish causation.

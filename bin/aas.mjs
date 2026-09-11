@@ -244,7 +244,7 @@ Usage:
   aas replay <bundle-file|-> [--json]
   aas inspect <run-id> [--root output-dir] [--json|--markdown]
   aas cases [--before run-id] [--limit 1..50] [--json]
-  aas compare <run-id> <run-id> [--json]
+  aas compare <run-id> <run-id> [--root output-dir] [--json|--markdown]
   aas help
 
 Commands:
@@ -1777,8 +1777,9 @@ async function runCasesCommand(args, { asJson, outputRoot = DEFAULT_PATHS.output
 }
 
 function printComparison(result, asJson) {
+  process.exitCode = result.classification === "not-comparable" ? 1 : 0;
   if (asJson) {
-    process.stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ ok: result.classification !== "not-comparable", ...result }, null, 2)}\n`);
     return;
   }
   process.stdout.write(`comparison: ${result.classification}\n`);
@@ -1798,14 +1799,20 @@ function printComparison(result, asJson) {
   process.exitCode = result.classification === "not-comparable" ? 1 : 0;
 }
 
-function runCompareCommand(args, { asJson, outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
-  const ids = args.filter((token) => token !== "--json");
+async function runCompareCommand(args, { asJson, outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
+  const formats = args.filter(token => token === "--json" || token === "--markdown");
+  if (formats.length > 1) throw new UsageError("Choose one comparison output format");
+  const ids = args.filter((token) => token !== "--json" && token !== "--markdown");
   if (ids.some((token) => typeof token === "string" && token.startsWith("-"))) {
     throw new UsageError(`Unsupported compare option: ${args.find((token) => String(token).startsWith("-"))}`);
   }
-  if (ids.length !== 2) throw new UsageError("Usage: aas compare <run-id> <run-id> [--json]");
+  if (ids.length !== 2) throw new UsageError("Usage: aas compare <run-id> <run-id> [--root output-dir] [--json|--markdown]");
   const result = compareRuns(ids[0], ids[1], { outputRoot });
-  printComparison(result, asJson);
+  if (formats[0] === "--markdown") {
+    const { renderComparisonMarkdown } = await import("./case-review.mjs");
+    process.stdout.write(renderComparisonMarkdown(result));
+    process.exitCode = result.classification === "not-comparable" ? 1 : 0;
+  } else printComparison(result, asJson);
 }
 
 function runPruneCommand(args, { asJson, outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
@@ -1990,7 +1997,7 @@ export async function main(argv = process.argv.slice(2), options = {}) {
       const { args, outputRoot } = parseRootArgs(argv.slice(1));
       if (command === "runs") runRunsCommand(args, { asJson, outputRoot });
       else if (command === "cases") await runCasesCommand(args, { asJson, outputRoot });
-      else if (command === "compare") runCompareCommand(args, { asJson, outputRoot });
+      else if (command === "compare") await runCompareCommand(args, { asJson, outputRoot });
       else runPruneCommand(args, { asJson, outputRoot });
     } catch (error) {
       const usage = error instanceof UsageError;

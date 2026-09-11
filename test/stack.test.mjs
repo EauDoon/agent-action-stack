@@ -1730,3 +1730,16 @@ test('human history reports damaged entries and continuation even on empty pages
   const next = await captureMain(['cases','--root',outputRoot,'--limit','1','--before','case-z']);
   assert.match(next.stdout, /case-a outcome=/); assert.match(next.stdout, /next_cursor: none/);
 });
+
+test('comparison handoffs support Markdown and fail machine callers on unavailable cases', async () => {
+  const outputRoot = tempRoot(); writeCase(outputRoot, 'compare-a'); writeCase(outputRoot, 'compare-b');
+  const good = await captureMain(['compare','compare-a','compare-b','--root',outputRoot,'--markdown']);
+  assert.equal(good.exitCode, 0, good.stderr); assert.match(good.stdout, /# Saved case comparison/);
+  assert.match(good.stdout, /do not establish causation/);
+  for (const format of ['--json','--markdown']) {
+    const bad = await captureMain(['compare','compare-a','missing','--root',outputRoot,format]);
+    assert.equal(bad.exitCode, 1);
+    if (format === '--json') assert.equal(JSON.parse(bad.stdout).ok, false);
+  }
+  assert.equal((await captureMain(['compare','compare-a','compare-b','--markdown','--json'])).exitCode, 2);
+});
