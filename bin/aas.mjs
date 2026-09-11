@@ -1685,30 +1685,44 @@ function writeCliError(error, { asJson = false, usage = false } = {}) {
 }
 
 async function readReplayInput(source, { stdin = process.stdin } = {}) {
+  let bytes;
   if (source === "-") {
     if (stdin.isTTY) throw new UsageError("replay reads stdin only from a pipe; pass a bundle file instead");
     const chunks = [];
+    let size = 0;
     for await (const chunk of stdin) {
-      chunks.push(typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk);
+      const buffer = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
+      size += buffer.length;
+      if (size > CHILD_JSON_LIMIT) throw new Error(`replay bundle exceeds the ${CHILD_JSON_LIMIT} byte limit`);
+      chunks.push(buffer);
     }
-    const text = Buffer.concat(chunks).toString("utf8");
-    if (text.length > CHILD_JSON_LIMIT) {
-      throw new Error(`replay bundle exceeds the ${CHILD_JSON_LIMIT} byte limit`);
-    }
-    if (text.trim() === "") throw new Error("replay received an empty bundle document");
-    return text;
+    bytes = Buffer.concat(chunks);
+  } else {
+    let fd;
+    try {
+      fd = openSync(source, constants.O_RDONLY | constants.O_NONBLOCK);
+      const stat = fstatSync(fd);
+      if (!stat.isFile() || stat.size > CHILD_JSON_LIMIT) throw new Error("replay file exceeds the byte limit or is not a regular file");
+      bytes = Buffer.alloc(CHILD_JSON_LIMIT + 1);
+      let size = 0;
+      while (size < bytes.length) {
+        const read = readSync(fd, bytes, size, bytes.length - size, null);
+        if (!read) break;
+        size += read;
+      }
+      if (size > CHILD_JSON_LIMIT) throw new Error("replay bundle exceeds the byte limit");
+      bytes = bytes.subarray(0, size);
+    } catch (error) {
+      if (error.code) throw new Error("replay cannot read bundle file");
+      throw error;
+    } finally { if (fd !== undefined) closeSync(fd); }
   }
   let text;
-  try {
-    text = readFileSync(source, "utf8");
-  } catch {
-    throw new Error(`replay cannot read bundle file: ${source}`);
-  }
-  if (text.length > CHILD_JSON_LIMIT) {
-    throw new Error(`replay bundle exceeds the ${CHILD_JSON_LIMIT} byte limit`);
-  }
-  if (text.trim() === "") throw new Error("replay received an empty bundle document");
-  return text;
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+  catch { throw new Error("replay requires valid UTF-8"); }
+  if (!text.trim()) throw new Error("replay received an empty bundle document");
+  try { return JSON.parse(text); }
+  catch { throw new Error("replay bundle contains invalid JSON"); }
 }
 
 function runRunsCommand(args, { asJson } = {}) {
@@ -1902,7 +1916,7 @@ async function runReplayCommand(args, { asJson, nodeVersion, stdin } = {}) {
   assertFullStackNodeVersion(nodeVersion === undefined ? {} : { version: nodeVersion });
   let bundleDoc;
   try {
-    bundleDoc = JSON.parse(await readReplayInput(source, { stdin }));
+    bundleDoc = await readReplayInput(source, { stdin });
   } catch (error) {
     if (error instanceof UsageError) throw error;
     writeCliError(error, { asJson: json || asJson, usage: false });

@@ -1673,3 +1673,21 @@ test('saved manifests reject missing records arrays and invalid artifact fields 
   assert.equal(Object.keys(exportRunBundle('complete-stages',{outputRoot}).stages).length,3);
   assert.equal(full.manifest.stages.prove.artifact,'stages/prove.json');
 });
+
+test('replay bounds UTF-8 bytes and redacts malformed JSON for files and streams', async () => {
+  const root = tempRoot(), path = join(root, 'replay.json');
+  const sources = [Buffer.from(JSON.stringify({pad: 'é'.repeat(CHILD_JSON_LIMIT / 2)})), Buffer.from('{"SYNTHETIC_PARSE_MARKER":invalid}'), Buffer.from([0xff])];
+  for (const input of sources) {
+    writeFileSync(path, input);
+    for (const source of [path, '-']) {
+      const result = await captureMain(['replay', source, '--json'], {stdin: Readable.from([input])});
+      assert.equal(result.exitCode, 1);
+      assert.doesNotMatch(result.stderr, /SYNTHETIC_PARSE_MARKER/);
+      assert.match(result.stderr, input.length > CHILD_JSON_LIMIT ? /byte limit/ : /invalid JSON|UTF-8/);
+    }
+  }
+  let consumed = 0;
+  async function* oversized() { consumed++; yield Buffer.alloc(CHILD_JSON_LIMIT + 1); consumed++; yield Buffer.from('{}'); }
+  const bounded = await captureMain(['replay', '-', '--json'], {stdin: oversized()});
+  assert.equal(bounded.exitCode, 1); assert.equal(consumed, 1);
+});

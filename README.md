@@ -280,3 +280,5 @@ The export budget counts the formatted JSON bytes actually downloaded, including
 Saved-file reads use nonblocking descriptors and validate regular-file type and size before reading, so a named pipe cannot hold the reader open. Invalid UTF-8 is rejected rather than silently replacing evidence bytes.
 
 History summaries and run listings use the same bounded saved-file reader, including when a malformed entry is skipped as unavailable.
+
+Replay checks actual UTF-8 bytes for both files and pipes, stops oversized streams as soon as the budget is crossed, and rejects nonregular files, invalid encoding, and malformed JSON without echoing document contents.
