@@ -1743,3 +1743,16 @@ test('comparison handoffs support Markdown and fail machine callers on unavailab
   }
   assert.equal((await captureMain(['compare','compare-a','compare-b','--markdown','--json'])).exitCode, 2);
 });
+
+test('verify reads a saved case without executing actions or changing its files', async () => {
+  const outputRoot=tempRoot(), runId='verify-refused';
+  const result=await runDemo([], {paths:{outputRoot},runId,componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false},status:0})});
+  const before=readFileSync(join(result.bundleDir,'manifest.json'),'utf8');
+  const verified=await captureMain(['verify',runId,'--root',outputRoot,'--json']);
+  assert.equal(verified.exitCode,1); const report=JSON.parse(verified.stdout);
+  assert.equal(report.ok,false); assert.match(report.reason,/unavailable/);
+  assert.equal(readFileSync(join(result.bundleDir,'manifest.json'),'utf8'),before);
+  assert.deepEqual(readdirSync(join(outputRoot,'runs')),[runId]);
+  assert.equal((await captureMain(['verify',runId,'--root',outputRoot,'--json'],{nodeVersion:'20.19.0'})).exitCode,1);
+  for(const args of [[],['a','b'],['a','--markdown']]) assert.equal((await captureMain(['verify',...args])).exitCode,2);
+});

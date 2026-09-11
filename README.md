@@ -290,3 +290,5 @@ All saved-case commands (runs, cases, compare, inspect, export, and prune) accep
 Human-readable cases output includes scanned count, each unavailable case ID, and next_cursor. An entirely damaged page still gives its continuation cursor, so older readable cases remain reachable. Continue with --before and the same root/page options.
 
 Use aas compare left-id right-id --root output-directory --markdown to print the GUI comparison handoff from the terminal. All formats return exit 1 when cases cannot be compared; JSON also sets ok to false. Comparable differences remain exit 0 and never establish causation.
+
+Use aas verify run-id --root output-directory --json to verify a saved case directly. It performs the same receipt and review checks as imported replay, with the same pinned component requirements, and never executes an action or modifies the case store. Refused or simulation-only cases without same-case evidence return unavailable and exit 1.

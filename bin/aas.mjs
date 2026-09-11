@@ -242,6 +242,7 @@ Usage:
   aas demo [--response pass|fail] [--fault none|duplicate] [--dispute] [--prove simulate|rail] [--domain refund|inventory] [--json]
   aas export <run-id> [--out <path>] [--overwrite] [--json]
   aas replay <bundle-file|-> [--json]
+  aas verify <run-id> [--root output-dir] [--json]
   aas inspect <run-id> [--root output-dir] [--json|--markdown]
   aas cases [--before run-id] [--limit 1..50] [--json]
   aas compare <run-id> <run-id> [--root output-dir] [--json|--markdown]
@@ -251,6 +252,7 @@ Commands:
   demo    Run decide, act, and prove and persist one run bundle
   export  Print one run bundle as portable JSON (or write it with --out)
   replay  Re-verify an exported bundle offline without rerunning the action
+  verify  Re-verify one saved case without exporting or rerunning actions
   runs    List persisted runs newest-first
   cases   List bounded case summaries (outcome, policy, review, digest)
   compare Compare two cases and classify identical, different, or not comparable
@@ -1977,6 +1979,21 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   if (isHelpToken(command) || (command === "demo" && demoRequestsHelp(argv.slice(1)))) {
     printHelp();
     process.exitCode = 0;
+    return;
+  }
+  if (command === "verify") {
+    try {
+      const { args, outputRoot } = parseRootArgs(argv.slice(1));
+      const ids = args.filter(token => token !== "--json");
+      if (ids.length !== 1 || !isValidRunId(ids[0]) || args.filter(token => token === "--json").length > 1) throw new UsageError("Usage: aas verify <run-id> [--root output-dir] [--json]");
+      assertFullStackNodeVersion(options.nodeVersion === undefined ? {} : {version:options.nodeVersion});
+      const result = replayBundle(exportRunBundle(ids[0], {outputRoot}));
+      printReplayReport(result, asJson);
+      process.exitCode = result.ok ? 0 : 1;
+    } catch (error) {
+      const usage = error instanceof UsageError;
+      writeCliError(error, {asJson, usage}); process.exitCode = usage ? 2 : 1;
+    }
     return;
   }
   if (command === "inspect") {
