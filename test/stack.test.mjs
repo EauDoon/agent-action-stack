@@ -1691,3 +1691,15 @@ test('replay bounds UTF-8 bytes and redacts malformed JSON for files and streams
   const bounded = await captureMain(['replay', '-', '--json'], {stdin: oversized()});
   assert.equal(bounded.exitCode, 1); assert.equal(consumed, 1);
 });
+
+test('handoff export preserves existing files unless replacement is explicit', () => {
+  const root = tempRoot(), target = join(root, 'case.json');
+  writeAtomicFile(target, 'original');
+  assert.throws(() => writeAtomicFile(target, 'replacement', {replace: false}), /exist|EEXIST/);
+  assert.equal(readFileSync(target, 'utf8'), 'original');
+  assert.deepEqual(readdirSync(root), ['case.json']);
+  writeAtomicFile(join(root, 'new.json'), 'new', {replace: false});
+  assert.equal(readFileSync(join(root, 'new.json'), 'utf8'), 'new');
+  writeAtomicFile(target, 'replacement', {replace: true});
+  assert.equal(readFileSync(target, 'utf8'), 'replacement');
+});

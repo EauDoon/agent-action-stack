@@ -282,3 +282,5 @@ Saved-file reads use nonblocking descriptors and validate regular-file type and 
 History summaries and run listings use the same bounded saved-file reader, including when a malformed entry is skipped as unavailable.
 
 Replay checks actual UTF-8 bytes for both files and pipes, stops oversized streams as soon as the budget is crossed, and rejects nonregular files, invalid encoding, and malformed JSON without echoing document contents.
+
+Exporting with --out creates a new handoff atomically and refuses to replace an existing file. Pass --overwrite with --out to explicitly replace it. --json supports machine-readable export success and error output.

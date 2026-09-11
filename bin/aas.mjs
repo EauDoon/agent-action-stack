@@ -18,7 +18,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
-  renameSync,
+  renameSync, linkSync,
   rmSync,
   unlinkSync,
   writeFileSync,
@@ -240,7 +240,7 @@ export function helpText() {
 
 Usage:
   aas demo [--response pass|fail] [--fault none|duplicate] [--dispute] [--prove simulate|rail] [--domain refund|inventory] [--json]
-  aas export <run-id> [--out <path>]
+  aas export <run-id> [--out <path>] [--overwrite] [--json]
   aas replay <bundle-file|-> [--json]
   aas inspect <run-id> [--root output-dir] [--json|--markdown]
   aas cases [--before run-id] [--limit 1..50] [--json]
@@ -1332,6 +1332,8 @@ export function writeAtomicFile(
   target,
   data,
   {
+    replace = true,
+    link = linkSync,
     writeFile = writeFileSync,
     rename = renameSync,
     unlink = unlinkSync,
@@ -1344,7 +1346,8 @@ export function writeAtomicFile(
   try {
     writeFile(temporary, data, { encoding: "utf8", flag: "wx" });
     written = true;
-    rename(temporary, target);
+    if (replace) rename(temporary, target);
+    else link(temporary, target);
   } catch (error) {
     throw error;
   } finally {
@@ -1853,9 +1856,15 @@ function printReplayReport(result, asJson) {
 function runExportCommand(args, { asJson } = {}) {
   let runId = null;
   let out = null;
+  let overwrite = false;
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index];
-    if (token === "--out") {
+    if (token === "--overwrite") {
+      if (overwrite) throw new UsageError("Duplicate export option: --overwrite");
+      overwrite = true;
+    } else if (token === "--json") {
+      continue;
+    } else if (token === "--out") {
       const value = args[index + 1];
       if (value === undefined || value.startsWith("-")) throw new UsageError("Missing value for export option: --out");
       if (out !== null) throw new UsageError("Duplicate export option: --out");
@@ -1871,7 +1880,8 @@ function runExportCommand(args, { asJson } = {}) {
       runId = token;
     }
   }
-  if (runId === null) throw new UsageError("Usage: aas export <run-id> [--out <path>]");
+  if (runId === null) throw new UsageError("Usage: aas export <run-id> [--out <path>] [--overwrite] [--json]");
+  if (overwrite && out === null) throw new UsageError("--overwrite requires --out");
   let bundle;
   try {
     bundle = exportRunBundle(runId, {});
@@ -1887,7 +1897,7 @@ function runExportCommand(args, { asJson } = {}) {
     return;
   }
   try {
-    writeAtomicFile(out, text, {});
+    writeAtomicFile(out, text, { replace: overwrite });
   } catch (error) {
     writeCliError(error, { asJson, usage: false });
     process.exitCode = 1;
