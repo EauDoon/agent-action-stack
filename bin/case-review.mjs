@@ -38,11 +38,14 @@ export function inspectCase(runId, options = {}) {
   const report = bundle.report;
   const review = bundle.stages.prove?.result;
   const rail = bundle.stages.act?.rail_bundle;
+  const failedRules = (Array.isArray(bundle.stages.decide?.rule_results) ? bundle.stages.decide.rule_results : []).filter(rule => rule?.passed === false);
+  const policyFailures = { total: failedRules.length, omitted: Math.max(0, failedRules.length - 50), rules: failedRules.slice(0, 50).map(rule => Object.fromEntries(['rule_id','path','kind','reason_code'].map(key => [key, typeof rule[key] === 'string' ? rule[key].slice(0, 300) : null]))) };
   const computed = rail && typeof rail === 'object' ? 'sha256:' + createHash('sha256').update(JSON.stringify(rail)).digest('hex') : null;
   return {
     schema_version: 'agent-action-stack.case-review/v1', run_id: runId,
     created_at: bundle.manifest.created_at ?? null, domain: report.domain ?? null,
     requested_options: report.requested_options ?? null,
+    policy_failures: policyFailures,
     stages: ['decide','act','prove'].map(name => ({ name, status: bundle.manifest.stages[name]?.status ?? 'unknown', reason: bundle.manifest.stages[name]?.reason ?? null, code: bundle.manifest.stages[name]?.code ?? null, artifact_available: Object.hasOwn(bundle.stages,name) })),
     policy_id: report.stages?.decide?.policy_id ?? null,
     action_id: bundle.stages.act?.action_id ?? null, outcome: report.stages?.act?.outcome ?? null,
@@ -70,6 +73,17 @@ export function renderCaseMarkdown(review) {
     '- Run ID: '+markdownText(review.run_id), '- Created: '+markdownText(review.created_at), '- Domain: '+markdownText(review.domain),
     '- Policy: '+markdownText(review.policy_id), '- Action: '+markdownText(review.action_id), '- Outcome: '+markdownText(review.outcome),
     '- Recorded review verdict: '+markdownText(review.review_verdict), '', '## Stage record', ''];
+  const stageHeading = lines.splice(-2);
+  lines.push('## Requested settings', '');
+  for (const key of ['response','domain','fault','prove','dispute']) {
+    const value = review.requested_options?.[key];
+    lines.push('- '+key+': '+markdownText(typeof value === 'string' || typeof value === 'boolean' ? value : null));
+  }
+  lines.push('', '## Policy failures', '');
+  if (!review.policy_failures?.total) lines.push('No failed rule records are available; this alone does not prove a policy pass.');
+  for (const rule of review.policy_failures?.rules ?? []) lines.push('- '+markdownText(rule.rule_id)+': '+markdownText(rule.path)+'; '+markdownText(rule.kind)+'; '+markdownText(rule.reason_code));
+  if (review.policy_failures?.omitted) lines.push(review.policy_failures.omitted+' additional failures omitted; inspect the decide artifact for all records.');
+  lines.push('', ...stageHeading);
   for(const stage of review.stages??[]) lines.push('- '+markdownText(stage.name)+': '+markdownText(stage.status)+'; artifact '+(stage.artifact_available?'present':'absent')+'; reason '+markdownText(stage.reason)+'; code '+markdownText(stage.code));
   lines.push('', '## Evidence binding', '', '- Recorded digest: '+markdownText(review.recorded_evidence_digest), '- Recomputed digest: '+markdownText(review.recomputed_evidence_digest), '- Digests match: '+markdownText(review.digest_matches), '', '## Component revisions', '');
   for(const entry of review.component_provenance??[]) lines.push('- '+markdownText(entry.name)+': '+markdownText(entry.commit));

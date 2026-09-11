@@ -1769,3 +1769,13 @@ test('latest resolves the persisted pointer and fails closed on unavailable iden
   }
   assert.equal((await captureMain(['latest','extra'])).exitCode,2);
 });
+
+test('case review handoffs include requested settings and bounded policy failures', async () => {
+  const {inspectCase,renderCaseMarkdown}=await import('../bin/case-review.mjs');
+  const outputRoot=tempRoot(), runId='policy-review';
+  const rules=[{rule_id:'allowed',passed:true},...Array.from({length:55},(_,index)=>({rule_id:'failed-'+index,path:'decision',kind:'equals',passed:false,reason_code:'not_equal',raw:'OMIT_RAW'}))];
+  await runDemo(['--response','fail','--domain','inventory'],{paths:{outputRoot},runId,componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false,rule_results:rules},status:0})});
+  const review=inspectCase(runId,{outputRoot});
+  assert.equal(review.policy_failures.total,55);assert.equal(review.policy_failures.rules.length,50);assert.equal(review.policy_failures.omitted,5);
+  const markdown=renderCaseMarkdown(review);assert.match(markdown,/## Requested settings/);assert.match(markdown,/domain: inventory/);assert.match(markdown,/not\\_equal/);assert.match(markdown,/5 additional failures omitted/);assert.doesNotMatch(markdown,/OMIT_RAW/);
+});

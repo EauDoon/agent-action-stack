@@ -294,3 +294,5 @@ Use aas compare left-id right-id --root output-directory --markdown to print the
 Use aas verify run-id --root output-directory --json to verify a saved case directly. It performs the same receipt and review checks as imported replay, with the same pinned component requirements, and never executes an action or modifies the case store. Refused or simulation-only cases without same-case evidence return unavailable and exit 1.
 
 Use aas latest --root output-directory to print the ID named by the latest complete-bundle pointer, or add --json for machine output. It validates the referenced saved bundle and fails closed for missing, inconsistent, or unreadable pointers/cases. It never guesses by sorting directory names.
+
+Case-review Markdown now carries all five requested settings and a policy-failure summary with rule identity, path, kind, and reason code. It includes at most 50 failed rules with bounded text fields and an explicit omitted count; raw response values remain in the original artifact only. Missing rule records never imply a policy pass.
