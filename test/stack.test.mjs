@@ -1705,7 +1705,8 @@ test('handoff export preserves existing files unless replacement is explicit', (
 });
 
 test('saved-case commands use an explicit output root without component setup', async () => {
-  const outputRoot = tempRoot(); writeCase(outputRoot, 'root-a'); writeCase(outputRoot, 'root-b');
+  const outputRoot = tempRoot();
+  for (const runId of ['root-a', 'root-b']) await runDemo([], {paths:{outputRoot},runId,componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false},status:0})});
   for (const command of [['runs'], ['cases'], ['compare', 'root-a', 'root-b'], ['export', 'root-a'], ['prune', '--keep', '1', '--dry-run']]) {
     const result = await captureMain([...command, '--root', outputRoot, '--json']);
     assert.equal(result.exitCode, 0, result.stderr);
