@@ -41,7 +41,13 @@ export function inspectCase(runId, options = {}) {
   const failedRules = (Array.isArray(bundle.stages.decide?.rule_results) ? bundle.stages.decide.rule_results : []).filter(rule => rule?.passed === false);
   const policyFailures = { total: failedRules.length, omitted: Math.max(0, failedRules.length - 50), rules: failedRules.slice(0, 50).map(rule => Object.fromEntries(['rule_id','path','kind','reason_code'].map(key => [key, typeof rule[key] === 'string' ? rule[key].slice(0, 300) : null]))) };
   const computed = rail && typeof rail === 'object' ? 'sha256:' + createHash('sha256').update(JSON.stringify(rail)).digest('hex') : null;
+  let readiness;
+  if (!rail || typeof rail !== 'object' || Array.isArray(rail)) readiness = {state:'unavailable',reason:'No same-case rail bundle was saved.',next_step:'Inspect stage records. A skipped action or simulation-only case has no same-case evidence to verify.'};
+  else if (review?.verdict !== 'recorded') readiness = {state:'unavailable',reason:'No recorded same-case review was saved.',next_step:'Inspect the prove stage diagnostic. Existing evidence cannot be repaired by rerunning verification.'};
+  else if (computed !== review.evidenceDigest || typeof bundle.stages.act?.action_id !== 'string' || review.actionId !== bundle.stages.act.action_id) readiness = {state:'conflicting',reason:'Recorded review identity or digest differs from the saved action evidence.',next_step:'Preserve the case and compare it with the original handoff; do not treat it as verified.'};
+  else readiness = {state:'ready',reason:'The saved action identity and evidence digest agree. Receipts remain unverified.',next_step:'Run aas verify '+runId+' with the correct --root and installed pinned components.'};
   return {
+    verification_readiness: readiness,
     schema_version: 'agent-action-stack.case-review/v1', run_id: runId,
     created_at: bundle.manifest.created_at ?? null, domain: report.domain ?? null,
     requested_options: report.requested_options ?? null,
@@ -87,6 +93,7 @@ export function renderCaseMarkdown(review) {
   for(const stage of review.stages??[]) lines.push('- '+markdownText(stage.name)+': '+markdownText(stage.status)+'; artifact '+(stage.artifact_available?'present':'absent')+'; reason '+markdownText(stage.reason)+'; code '+markdownText(stage.code));
   lines.push('', '## Evidence binding', '', '- Recorded digest: '+markdownText(review.recorded_evidence_digest), '- Recomputed digest: '+markdownText(review.recomputed_evidence_digest), '- Digests match: '+markdownText(review.digest_matches), '', '## Component revisions', '');
   for(const entry of review.component_provenance??[]) lines.push('- '+markdownText(entry.name)+': '+markdownText(entry.commit));
+  lines.push('', '## Verification next step', '', '- Readiness: '+markdownText(review.verification_readiness?.state), '- Reason: '+markdownText(review.verification_readiness?.reason), '- Next step: '+markdownText(review.verification_readiness?.next_step));
   lines.push('', '## Limits', '');
   for(const limit of review.limits??[]) lines.push('- '+markdownText(limit));
   return lines.join('\n')+'\n';

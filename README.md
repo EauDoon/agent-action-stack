@@ -296,3 +296,5 @@ Use aas verify run-id --root output-directory --json to verify a saved case dire
 Use aas latest --root output-directory to print the ID named by the latest complete-bundle pointer, or add --json for machine output. It validates the referenced saved bundle and fails closed for missing, inconsistent, or unreadable pointers/cases. It never guesses by sorting directory names.
 
 Case-review Markdown now carries all five requested settings and a policy-failure summary with rule identity, path, kind, and reason code. It includes at most 50 failed rules with bounded text fields and an explicit omitted count; raw response values remain in the original artifact only. Missing rule records never imply a policy pass.
+
+Case reviews classify verification readiness as unavailable, conflicting, or ready and explain the next read-only step. Ready means that recorded action identity and recomputed digest agree; it does not mean receipts are verified. Missing rail evidence, missing reviews, and conflicting bindings receive separate recovery guidance.

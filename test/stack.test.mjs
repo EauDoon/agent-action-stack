@@ -1779,3 +1779,15 @@ test('case review handoffs include requested settings and bounded policy failure
   assert.equal(review.policy_failures.total,55);assert.equal(review.policy_failures.rules.length,50);assert.equal(review.policy_failures.omitted,5);
   const markdown=renderCaseMarkdown(review);assert.match(markdown,/## Requested settings/);assert.match(markdown,/domain: inventory/);assert.match(markdown,/not\\_equal/);assert.match(markdown,/5 additional failures omitted/);assert.doesNotMatch(markdown,/OMIT_RAW/);
 });
+
+test('case reviews explain verification readiness without claiming receipt verification', async () => {
+  const {inspectCase,renderCaseMarkdown}=await import('../bin/case-review.mjs');
+  const outputRoot=tempRoot(),rail={synthetic:true},digest='sha256:'+createHash('sha256').update(JSON.stringify(rail)).digest('hex');
+  const variants=[['no-rail',{},null,'unavailable'],['no-review',{action_id:'a',rail_bundle:rail},null,'unavailable'],['conflict',{action_id:'a',rail_bundle:rail},{verdict:'recorded',actionId:'a',evidenceDigest:'wrong'},'conflicting'],['ready',{action_id:'a',rail_bundle:rail},{verdict:'recorded',actionId:'a',evidenceDigest:digest},'ready']];
+  for(const [runId,act,review,state] of variants){
+    persistRunBundle({outputRoot,runId,report:{run_id:runId,stages:{}},stages:{act:{status:'passed',raw:act},prove:{status:'passed',raw:{result:review}}},componentProvenance:[],exitCode:0});
+    const report=inspectCase(runId,{outputRoot});assert.equal(report.verification_readiness.state,state);
+    const md=renderCaseMarkdown(report);assert.match(md,/## Verification next step/);assert.match(md,/Receipt verification was not performed/);
+    if(state==='ready') assert.match(md,/aas verify ready/);
+  }
+});
