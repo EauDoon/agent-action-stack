@@ -588,6 +588,25 @@ test("nonzero prove JSON is recorded as a failed proof, not a child-process erro
   );
 });
 
+test("structured act failure (ok:false with parseable JSON) records the act stage as failed and skips prove", async () => {
+  const outputRoot = tempRoot();
+  const options = stubOptions(outputRoot, { runId: "act-fail-run" });
+  options.runActFn = async () => ({
+    ok: false,
+    raw: { outcome: null, state: "UNKNOWN", error: { code: "RECEIPT_FAILED", message: "rail failed" } },
+    status: 1,
+    stderr: "rail: failure",
+  });
+  const result = await runDemo(["--response", "pass", "--fault", "duplicate"], options);
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.manifest.stages.act.status, "failed");
+  assert.equal(result.report.stages.act.status, "failed");
+  assert.equal(result.manifest.exit_code, 1);
+  assert.equal(result.manifest.stages.prove.status, "skipped");
+  assert.equal(result.report.stages.prove.reason, "act_failed");
+  assert.equal(result.report.flow, "decide -> act -> stop (act failed)");
+});
+
 test("child-process errors are visible as safe stage errors and downstream skips", async () => {
   const outputRoot = tempRoot();
   const result = await runDemo(["--response", "pass"], stubOptions(outputRoot, {

@@ -1603,9 +1603,10 @@ export async function runDemo(args = [], options = {}) {
       persistRailBundle: proveMode === "rail" && options.runActFn === undefined,
     });
     const outcome = act.raw?.outcome ?? null;
-    stages.act = stageRecord("passed", { raw: act.raw });
+    stages.act = stageRecord(act.ok ? "passed" : "failed", { raw: act.raw });
+    if (!act.ok) exitCode = 1;
     report.stages.act = {
-      status: "passed",
+      status: stages.act.status,
       outcome,
       state: act.raw?.state ?? null,
       fault: act.raw?.fault ?? fault,
@@ -1613,6 +1614,12 @@ export async function runDemo(args = [], options = {}) {
       assurance_mode: act.raw?.assurance_mode ?? null,
       bundle_verification: act.raw?.bundle_verification ?? null,
     };
+    if (!act.ok) {
+      stages.prove = stageRecord("skipped", { reason: "act_failed" });
+      report.stages.prove = stages.prove;
+      report.flow = "decide -> act -> stop (act failed)";
+      return finalize();
+    }
     report.flow = "decide -> act";
     const shouldProve = forceDispute || outcome !== "settled";
     if (!shouldProve) {
