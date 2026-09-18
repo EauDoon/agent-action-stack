@@ -36,6 +36,10 @@ npm run bootstrap
 npm run demo
 ```
 
+Optional, only for the browser test suite: Playwright needs a Chromium
+binary. After `npm install`, run `npx playwright install chromium` once
+before `npm run test:browser`.
+
 Expected human output (pass path, no fault):
 
 ```text
