@@ -208,6 +208,10 @@ Browser artifacts are written to `test-results/` and `playwright-report/`
 - MandateBound’s prove step uses `simulate --scenario operator` as the dispute-oriented demo path. Full AP2 pack assemble/verify remains in MandateBound’s own CLI and docs.
 - This repo does not read or write any private GitHub repositories.
 
+For deeper coverage of how the orchestrator sequences the three libraries and
+how `stack-lock.json` is governed, see [docs/architecture.md](docs/architecture.md)
+and [docs/stack-lock.md](docs/stack-lock.md).
+
 ## License
 
 Apache-2.0
