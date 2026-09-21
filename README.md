@@ -1,5 +1,9 @@
 # Agent Action Stack
 
+[![build](https://img.shields.io/github/actions/workflow/status/EauDoon/agent-action-stack/ci.yml?branch=main)](https://github.com/EauDoon/agent-action-stack/actions)
+[![license](https://img.shields.io/github/license/EauDoon/agent-action-stack)](https://github.com/EauDoon/agent-action-stack/blob/main/LICENSE)
+[![last commit](https://img.shields.io/github/last-commit/EauDoon/agent-action-stack)](https://github.com/EauDoon/agent-action-stack)
+
 **One reference path across three public libraries: decide, act, prove.**
 
 Agent Action Stack is a thin orchestrator. It does not re-implement the libraries. It runs them in a fixed order so a visitor can see how they compose.
