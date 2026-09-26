@@ -121,7 +121,7 @@ function checkIndependentReplay(sourcePath) {
     const cli = join(isolated, "deps/mandatebound/dist/cli.js");
     renameSync(cli, `${cli}.unavailable`);
     const unavailable = invoke();
-    check(unavailable.status === 1 && /npm run bootstrap/.test(unavailable.stdout),
+    check(unavailable.status === 1 && /npm run bootstrap/.test(unavailable.stderr),
       "independent replay did not explain how to recover a missing review component");
     check(readFileSync(handoff).equals(sourceBytes), "independent replay modified imported evidence");
     check(!existsSync(join(isolated, ".out")), "independent replay created an action case store");
