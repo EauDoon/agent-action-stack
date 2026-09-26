@@ -19,7 +19,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { request as httpRequest } from "node:http";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -78,7 +78,8 @@ function runDemo(args) {
 }
 
 function checkIndependentReplay(sourcePath) {
-  const isolated = mkdtempSync(join(tmpdir(), "aas offline replay "));
+  // Resolve macOS /var -> /private/var before invoking the ESM CLI entrypoint.
+  const isolated = realpathSync(mkdtempSync(join(tmpdir(), "aas offline replay ")));
   try {
     // Copy only the already-prepared verifier runtime. No action fixtures,
     // testbench, original case store, Git metadata, or bootstrap invocation.
@@ -263,7 +264,7 @@ async function main() {
   let latest = null;
   {
     latest = readJson(join(root, ".out", "latest.json"));
-    casePath = join(root, ".out", "replay-case.json");
+    casePath = join(root, ".out", `replay-${latest.run_id}.json`);
     const exported = run(process.execPath, ["./bin/aas.mjs", "export", latest.run_id, "--out", casePath]);
     check(exported.status === 0, `export failed: ${exported.stderr.slice(-400)}`);
     const replayed = run(process.execPath, ["./bin/aas.mjs", "replay", casePath, "--json"]);
