@@ -8,9 +8,10 @@
  * clean tracked files, structured outcomes, stage gating, and
  * stale-artifact isolation.
  *
- * The prove stage runs the synthetic MandateBound operator simulation only;
- * a passing prove stage does not verify the rail case and claims no evidence
- * handoff or binding to the rail bundle.
+ * Covers both the synthetic MandateBound operator simulation and same-case
+ * review. Independently replays an exported case with only the prepared
+ * verifier runtime, including altered-review rejection. This proves the
+ * synthetic evidence handoff, not source truth or real-world reversibility.
  *
  * Run through `npm run integration`: the npm runner locates the npm CLI on
  * every platform (required for the install step on Windows).
@@ -18,7 +19,8 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { request as httpRequest } from "node:http";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -36,8 +38,8 @@ function check(condition, message) {
   return Boolean(condition);
 }
 
-function run(command, args, { cwd = root } = {}) {
-  const result = spawnSync(command, args, { cwd, encoding: "utf8", shell: false });
+function run(command, args, { cwd = root, env = process.env } = {}) {
+  const result = spawnSync(command, args, { cwd, env, encoding: "utf8", shell: false });
   return {
     status: result.status ?? 1,
     stdout: result.stdout ?? "",
@@ -73,6 +75,59 @@ function runDemo(args) {
   const result = run(process.execPath, ["./bin/aas.mjs", "demo", ...args, "--json"]);
   check(result.status === 0, `demo ${args.join(" ") || "(pass)"} exited ${result.status}: ${result.stderr.slice(-400)}`);
   return result;
+}
+
+function checkIndependentReplay(sourcePath) {
+  // Resolve macOS /var -> /private/var before invoking the ESM CLI entrypoint.
+  const isolated = realpathSync(mkdtempSync(join(tmpdir(), "aas offline replay ")));
+  try {
+    // Copy only the already-prepared verifier runtime. No action fixtures,
+    // testbench, original case store, Git metadata, or bootstrap invocation.
+    for (const path of ["bin/aas.mjs", "scripts/bootstrap.mjs", "stack-lock.json",
+      "deps/consequence-rail/cmd", "deps/consequence-rail/src", "deps/consequence-rail/package.json",
+      "deps/mandatebound/dist", "deps/mandatebound/node_modules", "deps/mandatebound/package.json"]) {
+      mkdirSync(dirname(join(isolated, path)), { recursive: true });
+      cpSync(join(root, path), join(isolated, path), { recursive: true, dereference: true });
+    }
+    const handoff = join(isolated, "case.json");
+    const sourceBytes = readFileSync(sourcePath);
+    writeFileSync(handoff, sourceBytes);
+    const invoke = () => run(process.execPath, [join(isolated, "bin/aas.mjs"), "replay", handoff, "--json"], {
+      cwd: isolated,
+      env: { ...process.env, PATH: "", Path: "", AAS_PYTHON: "unavailable-offline-python" },
+    });
+    const intact = invoke();
+    check(intact.status === 0, `independent replay failed: ${intact.stdout.slice(-600)}${intact.stderr.slice(-300)}`);
+    if (intact.status === 0) check(JSON.parse(intact.stdout).ok === true, "independent replay was not verified");
+
+    for (const [name, mutate] of [
+      ["legal effect", (review) => { review.legalEffect = "legally-binding"; }],
+      ["receipt outcome", (review) => { review.receipt.outcome = "altered"; }],
+      ["trust key", (review) => { review.upstream.trustedKeyIds = ["altered"]; }],
+      ["missing field", (review) => { delete review.receipt; }],
+      ["additional claim", (review) => { review.sourceTruth = "verified"; }],
+    ]) {
+      const altered = JSON.parse(sourceBytes);
+      mutate(altered.stages.prove.result);
+      writeFileSync(handoff, JSON.stringify(altered));
+      const replayed = invoke();
+      const report = JSON.parse(replayed.stdout);
+      check(replayed.status === 1 && report.ok === false, `independent replay accepted altered ${name}`);
+      check(report.checks?.at(-1)?.name === "review-replay" && report.checks.at(-1).passed === false,
+        `independent replay did not diagnose altered ${name} at review-replay`);
+    }
+
+    writeFileSync(handoff, sourceBytes);
+    const cli = join(isolated, "deps/mandatebound/dist/cli.js");
+    renameSync(cli, `${cli}.unavailable`);
+    const unavailable = invoke();
+    check(unavailable.status === 1 && /npm run bootstrap/.test(unavailable.stderr),
+      "independent replay did not explain how to recover a missing review component");
+    check(readFileSync(handoff).equals(sourceBytes), "independent replay modified imported evidence");
+    check(!existsSync(join(isolated, ".out")), "independent replay created an action case store");
+  } finally {
+    rmSync(isolated, { recursive: true, force: true });
+  }
 }
 
 async function main() {
@@ -209,7 +264,7 @@ async function main() {
   let latest = null;
   {
     latest = readJson(join(root, ".out", "latest.json"));
-    casePath = join(root, ".out", "replay-case.json");
+    casePath = join(root, ".out", `replay-${latest.run_id}.json`);
     const exported = run(process.execPath, ["./bin/aas.mjs", "export", latest.run_id, "--out", casePath]);
     check(exported.status === 0, `export failed: ${exported.stderr.slice(-400)}`);
     const replayed = run(process.execPath, ["./bin/aas.mjs", "replay", casePath, "--json"]);
@@ -268,6 +323,8 @@ async function main() {
       await new Promise((resolve) => server.close(resolve));
     }
   }
+
+  checkIndependentReplay(casePath);
 
   const inventory = run(process.execPath, ["./bin/aas.mjs", "demo", "--domain", "inventory", "--fault", "duplicate", "--prove", "rail"]);
   check(inventory.status === 0, `inventory demo failed: ${inventory.stderr.slice(-400)}`);

@@ -26,6 +26,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import {
   assertFullStackNodeVersion,
   inspectDependencyDirectory,
@@ -908,8 +909,8 @@ export function runProveRail(bundle, { depsDir = DEFAULT_PATHS.deps, runner = ru
  * bundle without rerunning the action. Every check is explicit: digest
  * recomputation, the rail's own bundle verification over the exported
  * bytes, and a deterministic re-execution of the MandateBound review whose
- * digest must equal the recorded one. Trust basis: the rail's synthetic
- * demo keys via its own verifier; nothing embedded in the bundle is
+ * digest and complete result must equal the recorded review. Trust basis:
+ * the rail's synthetic demo keys via its own verifier; nothing embedded in the bundle is
  * trusted for its own integrity, and caller-owned digests come from the
  * recorded review, never from untrusted annotations.
  *
@@ -994,9 +995,13 @@ export function replayBundle(bundleDoc, { depsDir = DEFAULT_PATHS.deps, runner =
     const replayed = parseStageJson("replay", reviewResult);
     const reproduced = reviewResult.status === 0 && replayed && replayed.ok === true
       && replayed.result && replayed.result.verdict === "recorded"
-      && replayed.result.reviewDigest === review.reviewDigest;
+      && replayed.result.reviewDigest === review.reviewDigest
+      // A copied digest alone does not bind the saved review's claims. Compare
+      // every field against the component's deterministic result, ignoring only
+      // JSON object key order (array order and additional/missing fields matter).
+      && isDeepStrictEqual(replayed.result, review);
     if (!record("review-replay", reproduced,
-      reproduced ? `re-executed review digest ${replayed.result.reviewDigest}` : "re-executed review does not match the record")) {
+      reproduced ? `complete review matches re-executed digest ${replayed.result.reviewDigest}` : "re-executed review contents or digest do not match the record")) {
       return { ok: false, runId, checks, reason: "conflicting: replayed review differs from the record" };
     }
     return { ok: true, runId, checks };

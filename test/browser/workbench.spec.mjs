@@ -167,6 +167,37 @@ test("tampered evidence is reported as conflicting, not verified", async ({ page
   await expect(page.locator("#import-result")).toContainText("digest-binding: FAIL");
 });
 
+test("a downloaded review with altered claims fails replay without running another action", async ({ page }) => {
+  await page.goto("/");
+  let executions = 0;
+  page.on("request", (request) => { if (request.url().includes("/api/run?")) executions++; });
+  await page.selectOption("#scenario", "compensated");
+  await page.click("#apply-scenario");
+  await page.click("#run");
+  await expect(page.locator("#run")).toBeEnabled({ timeout: 120_000 });
+  await expect(page.locator("#summary")).toContainText("review recorded");
+  const downloading = page.waitForEvent("download");
+  await page.click("#download");
+  const download = await downloading;
+  const path = await download.path();
+  await page.setInputFiles("#case-file", path);
+  await page.click("#replay");
+  await expect(page.locator("#import-result h3")).toHaveText(/— replay verified under synthetic demo keys$/);
+
+  const bundle = JSON.parse(readFileSync(path, "utf8"));
+  bundle.stages.prove.result.legalEffect = "legally-binding";
+  bundle.stages.prove.result.receipt.outcome = "settled";
+  await page.setInputFiles("#case-file", caseFile("altered-review.json", JSON.stringify(bundle)));
+  await expect(page.locator("#import-result")).toBeEmpty();
+  await page.click("#replay");
+  await expect(page.locator("#import-result h3")).toHaveText(/— not verified$/);
+  await expect(page.locator("#import-result")).toContainText("digest-binding: pass");
+  await expect(page.locator("#import-result")).toContainText("rail-verification: pass");
+  await expect(page.locator("#import-result")).toContainText("review-replay: FAIL");
+  await expect(page.locator("#import-result")).toContainText("conflicting");
+  expect(executions).toBe(1);
+});
+
 test("guided inventory cases can be searched inspected and downloaded on mobile", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
