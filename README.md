@@ -105,13 +105,17 @@ action:
 
 ```bash
 node ./bin/aas.mjs demo --fault duplicate --prove rail
-node ./bin/aas.mjs export "$(ls -t .out/runs | head -1)" --out case.json
+node ./bin/aas.mjs export "$(node ./bin/aas.mjs latest)" --out case.json
 node ./bin/aas.mjs replay case.json
 ```
 
 Replay recomputes the evidence digest, re-runs the rail's own bundle
 verification over the exported bytes, and re-executes the MandateBound
-review, requiring a byte-identical review digest. It reports unavailable
+review, requiring both the same review digest and the complete recorded review
+to match the reproduced result. Changing receipt claims, trust keys, legal effect,
+or adding/removing review fields fails replay even if the original digest was
+copied unchanged. JSON whitespace and object key order do not affect review
+comparison; array order remains significant. It reports unavailable
 evidence, conflicts, and unsupported verification explicitly, and exits
 nonzero unless every check passes. Trust basis: the rail's synthetic demo
 keys via its own verifier; nothing embedded in the bundle is trusted for
@@ -119,6 +123,12 @@ its own integrity. An exported case can also be imported in the GUI
 ("Replay an imported case"), which runs the same verification with no
 action execution or remediation; imported identity is untrusted text and
 the result proves no provenance or link to a local run.
+
+On a separate machine, bootstrap the same pinned stack while online before
+disconnecting and copying in `case.json`. Replay needs the prepared rail and
+MandateBound verifier components, but does not need Python, action fixtures,
+or the originating `.out` case store. The export is evidence, not a bundled
+verifier installation.
 
 ## Reproducibility and run bundles
 

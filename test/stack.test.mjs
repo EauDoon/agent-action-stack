@@ -1269,6 +1269,60 @@ test("replay reports unavailable evidence and conflicts explicitly", () => {
   assert.equal(badDoc.ok, false);
 });
 
+test("replay binds every recorded review field, not just its copied digest", async (t) => {
+  const { railBundle, digest } = replayBundleFixture();
+  const review = {
+    format: "MandateBoundExternalEvidenceReview/v1",
+    verdict: "recorded",
+    reviewId: "review-replay-1",
+    source: { sourceId: "consequence-rail", eventClass: "settlement" },
+    actionId: "act_replay_1",
+    evidenceDigest: digest,
+    legalEffect: "not-determined",
+    receipt: { receiptId: "receipt_replay_1", outcome: "compensated", recourseStatus: "consumed" },
+    upstream: { valid: true, verifier: "consequence-rail:bundle-verify", outcome: "compensated", trustedKeyIds: ["k", "c"] },
+    reviewDigest: "sha256:replayed",
+  };
+  const verification = { valid: true, action_id: "act_replay_1", outcome: "compensated", trusted_key_id: "k", trusted_connector_key_id: "c" };
+  const replay = (recorded) => replayBundle({
+    report: { run_id: "run-replay-1" },
+    stages: { act: { action_id: "act_replay_1", rail_bundle: railBundle }, prove: { result: recorded } },
+  }, { runner: replayRunnerFixture(verification, review) });
+  const mutations = {
+    "legal effect": (value) => { value.legalEffect = "legally-binding"; },
+    "receipt outcome": (value) => { value.receipt.outcome = "settled"; },
+    "receipt identity": (value) => { value.receipt.receiptId = "substituted"; },
+    "recourse status": (value) => { value.receipt.recourseStatus = "released"; },
+    "trust keys": (value) => { value.upstream.trustedKeyIds = ["substituted"]; },
+    "trust key order": (value) => { value.upstream.trustedKeyIds.reverse(); },
+    "verifier": (value) => { value.upstream.verifier = "substituted"; },
+    "upstream verdict": (value) => { value.upstream.valid = false; },
+    "source": (value) => { value.source.sourceId = "substituted"; },
+    "review identity": (value) => { value.reviewId = "substituted"; },
+    "format": (value) => { value.format = "unsupported"; },
+    "missing field": (value) => { delete value.receipt; },
+    "extra field": (value) => { value.sourceTruth = "verified"; },
+    "extra nested field": (value) => { value.receipt.realWorldReversal = true; },
+    "digest": (value) => { value.reviewDigest = "sha256:substituted"; },
+  };
+  for (const [name, mutate] of Object.entries(mutations)) {
+    await t.test(name, () => {
+      const recorded = structuredClone(review);
+      mutate(recorded);
+      const result = replay(recorded);
+      assert.equal(result.ok, false);
+      assert.match(result.reason, /^conflicting:/);
+      assert.equal(result.checks.at(-1).name, "review-replay");
+      assert.equal(result.checks.at(-1).passed, false);
+      assert.ok(result.checks.slice(0, -1).every((check) => check.passed));
+    });
+  }
+  const reordered = JSON.parse(JSON.stringify(review, null, 4));
+  reordered.upstream = Object.fromEntries(Object.entries(reordered.upstream).reverse());
+  assert.equal(replay(Object.fromEntries(Object.entries(reordered).reverse())).ok, true,
+    "JSON formatting and object property order do not change a review");
+});
+
 test("replay fails closed when child verification rejects the bytes", () => {
   const { railBundle, digest } = replayBundleFixture();
   const review = { verdict: "recorded", actionId: "act_replay_1", evidenceDigest: digest, legalEffect: "not-determined", upstream: { outcome: "compensated" } };
