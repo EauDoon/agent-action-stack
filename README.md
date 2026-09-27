@@ -212,9 +212,29 @@ Browser artifacts are written to `test-results/` and `playwright-report/`
 
 ## Fixtures
 
-- `fixtures/policy.json`: refund gate: accept, low/moderate risk, recourse required, not blocked
-- `fixtures/response.pass.json`: passes the gate
-- `fixtures/response.fail.json`: fails the gate; act and prove are skipped
+`aas demo --domain refund` uses the `refund` set and `--domain inventory` uses
+the `inventory` set. Both sets carry the same six policy rules with only the
+action rule retargeted, so a gate failure is about the response, never about
+which policy was loaded.
+
+Refund domain:
+
+- `fixtures/policy.json` (`aas-refund-gate-v1`): requires `summary`, an `accept`
+  decision, `action_type` of `refund`, a `low` or `moderate` `risk_level`,
+  `blocked` false, and `recourse_required` true
+- `fixtures/response.pass.json`: satisfies all six rules
+- `fixtures/response.fail.json`: fails four of them (`decision-accept`,
+  `risk-allowed`, `blocked-is-false`, `recourse-required`), so act and prove are
+  skipped
+
+Inventory domain:
+
+- `fixtures/inventory.policy.json` (`aas-inventory-gate-v1`): the same six rules,
+  with the action rule retargeted as `action-is-allocation` over
+  `allocate_inventory`
+- `fixtures/inventory.response.pass.json`: satisfies all six rules, with a
+  `moderate` risk level
+- `fixtures/inventory.response.fail.json`: fails the same four rules
 
 ## Design bounds
 
