@@ -246,8 +246,10 @@ Usage:
   aas latest [--root output-dir] [--json]
   aas verify <run-id> [--root output-dir] [--json]
   aas inspect <run-id> [--root output-dir] [--json|--markdown]
+  aas runs [--root output-dir] [--json]
   aas cases [--root output-dir] [--before run-id] [--limit 1..50] [--domain refund|inventory|unknown] [--outcome settled|compensated|none] [--search text] [--json]
   aas compare <run-id> <run-id> [--root output-dir] [--json|--markdown]
+  aas prune --keep <n> [--dry-run] [--json]
   aas help
 
 Commands:
@@ -260,6 +262,7 @@ Commands:
   cases   List bounded case summaries (outcome, policy, review, digest)
   compare Compare two cases and classify identical, different, or not comparable
   prune   Remove oldest runs beyond --keep (latest stays; --dry-run previews)
+  help    Show this help (also -h or --help)
 
 Options:
   --response pass|fail     Policy fixture to evaluate (default: pass)
@@ -269,7 +272,17 @@ Options:
                            or review of the same-case rail bundle
   --domain refund|inventory  Synthetic action domain (default: refund)
   --root output-dir        Select saved-case storage for inspect/runs/cases/compare/export/prune
-  --json                   Print the run report as JSON
+  --out <path>             Write an export to this file (refuses to replace; see --overwrite)
+  --overwrite              Allow --out to replace an existing file
+  --before run-id          Start a cases page older than this run id
+  --limit 1..50            Cases page size (default: 25)
+  --outcome settled|compensated|none
+                           Filter a cases page by saved act outcome
+  --search text            Filter a cases page by case metadata (1 to 200 characters)
+  --keep <n>               prune: keep the n newest runs, plus the latest pointer's run
+  --dry-run                prune: report what would be removed without deleting
+  --markdown               Print the readable Markdown form (compare, inspect)
+  --json                   Print machine-readable JSON
   -h, --help               Show this help
 
 Flow:

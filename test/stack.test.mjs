@@ -805,6 +805,22 @@ test("CLI help covers usage, help flags, and exit codes", () => {
   assert.match(text, /Exit codes:/);
 });
 
+test("CLI help documents every command and every option the usage block names", () => {
+  const text = helpText();
+  const usage = text.split("Usage:")[1].split("Commands:")[0];
+  const commands = text.split("Commands:")[1].split("Options:")[0];
+  const options = text.split("Options:")[1].split("Flow:")[0];
+  for (const command of ["demo", "export", "replay", "verify", "latest", "runs", "cases", "compare", "prune", "help"]) {
+    assert.match(usage, new RegExp(`^ {2}aas ${command}(?: |$)`, "m"), `usage block is missing ${command}`);
+    assert.match(commands, new RegExp(`^ {2}${command} +\\S`, "m"), `command list is missing ${command}`);
+  }
+  // Every long option a usage line accepts must also appear in the reference
+  // block, so a flag cannot be usable but undocumented.
+  for (const [, option] of usage.matchAll(/(--[a-z][a-z-]*)/g)) {
+    assert.ok(options.includes(option), `option block does not document ${option}`);
+  }
+});
+
 test("CLI prints help for help tokens and demo --help", async () => {
   for (const argv of [[], ["help"], ["--help"], ["-h"], ["demo", "--help"], ["demo", "-h"]]) {
     const result = await captureMain(argv);
