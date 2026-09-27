@@ -40,4 +40,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
   `npm run bootstrap` still reported success for a component that had never
   been installed or built. The shipped `stack-lock.json` is unchanged.
 
+### Changed
+- `npm run gui:smoke` now requests `/api/health` and the workbench page over
+  loopback HTTP and asserts the response status, the `text/html` content type,
+  the content security policy header, and the presence of every embedded page
+  helper. It previously started the server, closed it, and asserted nothing, so
+  it passed even when the page renderer or a route was broken. The rendered
+  helper list is now a single `PAGE_HELPERS` constant shared by `renderPage`
+  and the smoke check.
+
 [Unreleased]: https://github.com/EauDoon/agent-action-stack/compare/main...HEAD
