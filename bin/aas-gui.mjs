@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Lightweight local GUI for the Agent Action Stack orchestrator. */
 import { inspectCase, renderCaseMarkdown, renderComparisonMarkdown } from "./case-review.mjs";
-import { createServer } from "node:http";
+import { createServer, request } from "node:http";
 import { runGuiTask } from "./aas-gui-worker.mjs";
 import { pathToFileURL } from "node:url";
 import {
@@ -292,9 +292,14 @@ export function scenarioPreset(name) {
   return Object.hasOwn(presets, name) ? presets[name] : null;
 }
 
+/**
+ * Helpers the page script runs in the browser. Listed once so the rendered
+ * page and the smoke test cannot disagree about what is embedded.
+ */
+const PAGE_HELPERS = [stageDetailsModel, isReviewRunId, validatedRunSettings, scenarioPreset, filterHistory, validateRunBundle, escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, compareModel, historyModel, renderCaseOptions, sha256HexText];
+
 export function renderPage() {
-  const embedded = [stageDetailsModel, isReviewRunId, validatedRunSettings, scenarioPreset, filterHistory, validateRunBundle, escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, compareModel, historyModel, renderCaseOptions, sha256HexText]
-    .map((fn) => fn.toString()).join("\n");
+  const embedded = PAGE_HELPERS.map((fn) => fn.toString()).join("\n");
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Agent Action Stack</title>
@@ -823,10 +828,44 @@ export async function startGui({ port = DEFAULT_GUI_PORT, host = "127.0.0.1", ..
   return server;
 }
 
+/** One loopback GET, with no keep-alive so the server can close cleanly. */
+function getOnce(port, pathname) {
+  return new Promise((resolve, reject) => {
+    const call = request({ hostname: "127.0.0.1", port, path: pathname, method: "GET", agent: false }, (response) => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => { body += chunk; });
+      response.on("end", () => resolve({ status: response.statusCode, headers: response.headers, body }));
+      response.on("error", reject);
+    });
+    call.on("error", reject);
+    call.end();
+  });
+}
+
 async function main() {
   if (process.argv.includes("--smoke-test")) {
     const server = await startGui({ port: 0 });
-    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    const port = server.address().port;
+    try {
+      const health = await getOnce(port, "/api/health");
+      if (health.status !== 200 || health.body.includes('"ok": true') !== true) {
+        throw new Error(`GUI health check failed: ${health.status}`);
+      }
+      const page = await getOnce(port, "/");
+      if (page.status !== 200 || !/text\/html/.test(page.headers["content-type"] ?? "")) {
+        throw new Error(`GUI page request failed: ${page.status}`);
+      }
+      if (!page.headers["content-security-policy"]) throw new Error("GUI page is missing its content security policy.");
+      if (!page.body.includes("<script>") || !page.body.includes("</html>")) {
+        throw new Error("GUI page body is truncated.");
+      }
+      for (const fn of PAGE_HELPERS) {
+        if (!page.body.includes(fn.toString())) throw new Error(`GUI page is missing embedded helper ${fn.name}.`);
+      }
+    } finally {
+      await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
     process.stdout.write("GUI smoke test passed.\n");
     return;
   }

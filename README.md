@@ -177,8 +177,9 @@ bindings panel (action identity, recomputed evidence digest, provenance, and
 the review verdict with its limits), and downloads a JSON export of the
 selected run bundle. The prove selector offers the canned simulation or the
 same-case rail review; every result and export stays tied to its run id.
-`npm run gui:smoke` checks the server without
-starting a long-running process. The server binds only to `127.0.0.1` on port
+`npm run gui:smoke` starts the server on an ephemeral loopback port, requests
+`/api/health` and the workbench page over HTTP, and exits without starting a
+long-running process. The server binds only to `127.0.0.1` on port
 8787 by default (`AAS_GUI_PORT` selects another loopback port), requires the
 exact loopback Host and same-origin boundary, and uses POST for a run.
 
