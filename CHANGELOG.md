@@ -20,4 +20,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
   and from `aas runs`/`aas cases`/`aas compare` summaries for any run whose
   proof failed. Only the raw child payload is stripped now.
 
+### Changed
+- `aas help` now documents the whole CLI surface. The usage block listed
+  neither `aas runs` nor `aas prune` although both are dispatched, the command
+  list omitted `help`, and the option reference omitted nine accepted flags:
+  `--out`, `--overwrite`, `--before`, `--limit`, `--outcome`, `--search`,
+  `--keep`, `--dry-run`, and `--markdown`.
+
 [Unreleased]: https://github.com/EauDoon/agent-action-stack/compare/main...HEAD
