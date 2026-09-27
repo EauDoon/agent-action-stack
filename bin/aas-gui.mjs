@@ -239,11 +239,17 @@ function renderCaseOptions(cases) {
 
 /**
  * Render the bounded history list. Summary-only: no raw evidence.
+ *
+ * The searched fields are the same ones `listCasePage` matches for
+ * `aas cases --search`, so one query gives one answer in either place. The list
+ * is written out rather than imported because this function is embedded in the
+ * page script, where module scope does not exist; a test pins the two together.
  */
 export function filterHistory(cases, query = "", outcome = "") {
   const needle = String(query).trim().toLowerCase();
+  const searchable = ["run_id", "domain", "policy_id", "action_id", "outcome", "review_verdict", "evidence_digest"];
   return (Array.isArray(cases) ? cases : []).filter((entry) => (!outcome || entry.outcome === outcome)
-    && [entry.run_id, entry.policy_id, entry.domain, entry.review_verdict].some((value) => String(value ?? "").toLowerCase().includes(needle)));
+    && searchable.some((key) => typeof entry[key] === "string" && entry[key].toLowerCase().includes(needle)));
 }
 
 export function historyModel(cases) {

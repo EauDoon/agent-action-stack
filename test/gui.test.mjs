@@ -755,6 +755,36 @@ test("history search matches case metadata without broadening outcome filters", 
   assert.deepEqual(filterHistory(cases), cases);
 });
 
+test('GUI history search matches the same fields as aas cases --search', () => {
+  const outputRoot = mkdtempSync(join(tmpdir(), 'aas-search-parity-'));
+  writeCase(outputRoot, '2026-09-06T050000000Z-alpha', {
+    report: {
+      run_id: '2026-09-06T050000000Z-alpha',
+      flow: 'decide -> act',
+      domain: 'inventory',
+      component_provenance: [],
+      stages: {
+        decide: { status: 'passed', policy_id: 'aas-inventory-gate-v1' },
+        act: { status: 'passed', outcome: 'compensated', state: 'CLOSED', fault: 'duplicate', action_id: 'act_alpha_9' },
+        prove: { status: 'passed', mode: 'rail-review' },
+      },
+    },
+    prove: { ok: true, result: { verdict: 'recorded', reviewId: 'review_alpha', actionId: 'act_alpha_9', evidenceDigest: 'sha256:'.padEnd(71, 'a'), legalEffect: 'not-determined' } },
+  });
+  writeCase(outputRoot, '2026-09-06T050000001Z-beta');
+  const summaries = listCasePage({ outputRoot }).cases;
+  assert.equal(summaries.length, 2);
+  const alpha = summaries.find((entry) => entry.run_id.endsWith('alpha'));
+  for (const field of ['run_id', 'domain', 'policy_id', 'action_id', 'outcome', 'review_verdict', 'evidence_digest']) {
+    assert.equal(typeof alpha[field], 'string', `fixture case is missing ${field}`);
+    const needle = field === 'evidence_digest' ? alpha[field].slice(0, 14) : alpha[field];
+    const viaCli = listCasePage({ outputRoot, search: needle }).cases.map((entry) => entry.run_id);
+    const viaGui = filterHistory(summaries, needle).map((entry) => entry.run_id);
+    assert.deepEqual(viaGui, viaCli, `aas cases --search and the GUI search disagree on ${field}`);
+  }
+  assert.deepEqual(filterHistory(summaries, 'alpha').map((entry) => entry.run_id), [alpha.run_id]);
+});
+
 test("saved case inspection binds its download and keeps live output separate", async () => {
   const document = stubDocument(); document.elements['left-case'].value='saved-1';
   document.elements.summary.innerHTML='live result';
