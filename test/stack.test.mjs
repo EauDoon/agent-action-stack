@@ -116,6 +116,27 @@ test("reviewed component lock contains the exact public dependencies", () => {
   assert.deepEqual(components.map(({ name, repository, commit }) => ({ name, repository, commit })), PROVENANCE.map(({ name, repository, commit }) => ({ name, repository, commit })));
 });
 
+test("lock rejects install and build steps prepareDependencies cannot dispatch", () => {
+  const base = JSON.parse(readFileSync(LOCK, "utf8"));
+  const write = (mutate) => {
+    const copy = structuredClone(base);
+    mutate(copy);
+    const path = join(tempRoot(), "stack-lock.json");
+    writeFileSync(path, `${JSON.stringify(copy)}\n`);
+    return path;
+  };
+  for (const [field, value] of [["install", "npm ci"], ["install", "npm-CI"], ["build", "npm run build"], ["build", "tsc"]]) {
+    assert.throws(
+      () => loadComponentLock(write((copy) => { copy.components[2][field] = value; })),
+      new RegExp(`unsupported ${field} step: ${value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+    );
+  }
+  // The shipped lock must keep loading, and the supported spellings must still
+  // be accepted.
+  assert.equal(loadComponentLock(LOCK)[2].install, "npm-ci");
+  assert.equal(loadComponentLock(write((copy) => { copy.components[2].build = "npm-run-build"; }))[2].build, "npm-run-build");
+});
+
 test("lock mismatch rejects substituted or stale pre-existing dependencies", () => {
   const component = loadComponentLock(LOCK)[0];
   for (const mismatch of [

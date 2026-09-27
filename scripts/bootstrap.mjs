@@ -112,6 +112,13 @@ export function loadComponentLock(path = lockPath) {
     if (component.post_build_entrypoints !== undefined && (!Array.isArray(component.post_build_entrypoints) || component.post_build_entrypoints.some((item) => typeof item !== "string" || item.length === 0 || item.startsWith("/") || item.includes("..") || item.includes("\\")))) {
       throw new Error(`Component ${component.name} has invalid post-build entrypoints.`);
     }
+    // `install` and `build` are dispatched by exact string match below, so an
+    // unrecognised value would skip the step and still report success.
+    for (const [field, allowed] of [["install", ["npm-ci"]], ["build", ["npm-run-build"]]]) {
+      if (component[field] !== undefined && !allowed.includes(component[field])) {
+        throw new Error(`Component ${component.name} has an unsupported ${field} step: ${String(component[field])}`);
+      }
+    }
     names.add(component.name);
   }
   if (names.size !== required.size || [...required.keys()].some((name) => !names.has(name))) {

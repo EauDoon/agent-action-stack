@@ -33,4 +33,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
   every other value-taking option in the CLI. The `aas cases` usage message
   also lists the `--domain`, `--outcome`, and `--search` filters it accepts.
 
+### Changed
+- `loadComponentLock` now rejects an `install` or `build` value other than the
+  supported tokens (`npm-ci`, `npm-run-build`). Those fields are dispatched by
+  exact string match, so an unrecognised value was skipped silently and
+  `npm run bootstrap` still reported success for a component that had never
+  been installed or built. The shipped `stack-lock.json` is unchanged.
+
 [Unreleased]: https://github.com/EauDoon/agent-action-stack/compare/main...HEAD
