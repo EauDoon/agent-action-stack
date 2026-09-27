@@ -34,9 +34,12 @@ and prepares each dependency under `deps/`:
 2. If absent, bootstrap clones the public URL at the pinned commit, checks
    out detached, and verifies the entrypoints.
 3. For components with an `install` hook, bootstrap runs the declared
-   command (`npm ci --ignore-scripts` for MandateBound).
-4. For components with a `build` hook, bootstrap runs the declared command
+   step (`npm-ci`, which runs `npm ci --ignore-scripts`, for MandateBound).
+4. For components with a `build` hook, bootstrap runs the declared step
    (`npm-run-build` for MandateBound), then verifies post-build entrypoints.
+   Both hook fields accept only those exact tokens; `loadComponentLock` rejects
+   any other value rather than skipping the step, because a silently ignored
+   hook would report a successful bootstrap for an unprepared component.
 The orchestrator records each component's provenance on every run bundle. A
 run resolving components whose checkout disagrees with the lock surfaces the
 disagreement in its manifest.
