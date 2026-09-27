@@ -663,10 +663,12 @@ export function runAct(
     bundlePath = join(scratch, "rail-bundle.json");
     args.push("--out", bundlePath);
   }
-  const result = runner(process.execPath, [crctl, ...args], {
-    cwd: railDir,
-  });
+  // The runner call belongs inside the try so a runner that throws cannot
+  // strand the scratch directory; runProveRail already has this shape.
   try {
+    const result = runner(process.execPath, [crctl, ...args], {
+      cwd: railDir,
+    });
     if (result.error) throw childProcessError("act", result);
     const payload = parseStageJson("act", result);
     if (result.status !== 0) {

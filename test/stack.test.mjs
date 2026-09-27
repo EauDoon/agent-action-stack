@@ -329,6 +329,20 @@ test("timed-out children fail closed with AAS_CHILD_TIMEOUT", () => {
   );
 });
 
+test("act removes its rail scratch directory even when the runner throws", () => {
+  const countScratch = () => readdirSync(tmpdir()).filter((name) => name.startsWith("aas-act-")).length;
+  const before = countScratch();
+  assert.throws(
+    () => runAct("duplicate", {
+      depsDir: tempRoot(),
+      persistRailBundle: true,
+      runner: () => { throw new Error("runner exploded before returning"); },
+    }),
+    /runner exploded/,
+  );
+  assert.equal(countScratch(), before);
+});
+
 test("decide does not try another Python after a child timeout", () => {
   let calls = 0;
   assert.throws(
