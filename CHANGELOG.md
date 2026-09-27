@@ -12,4 +12,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - `CHANGELOG.md` (this file).
 - Playwright setup note in the Quick start section of `README.md`.
 
+### Fixed
+- A prove-stage error no longer wipes the act result from the run report. The
+  error path rebuilt `report.stages.act` from the internal stage record, so
+  `outcome`, `state`, `fault`, `action_id`, `assurance_mode`, and
+  `bundle_verification` disappeared from `report.json`, from the human output,
+  and from `aas runs`/`aas cases`/`aas compare` summaries for any run whose
+  proof failed. Only the raw child payload is stripped now.
+
 [Unreleased]: https://github.com/EauDoon/agent-action-stack/compare/main...HEAD

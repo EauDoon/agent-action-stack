@@ -1681,9 +1681,14 @@ export async function runDemo(args = [], options = {}) {
       report.stages.prove = stages.prove;
     }
     if (actStarted && !proveStarted) stages.prove = stageRecord("skipped", { reason: "act_error" });
-    if (proveStarted && stages.act.status === "pending") stages.act = stageRecord("skipped", { reason: "prove_error" });
-    report.stages.act = { ...stages.act, raw: undefined };
-    report.stages.prove = { ...stages.prove, raw: undefined };
+    if (proveStarted && stages.act.status === "pending") {
+      stages.act = stageRecord("skipped", { reason: "prove_error" });
+      report.stages.act = stages.act;
+    }
+    // Only strip the raw child payload. Rebuilding these from `stages` would
+    // discard the act fields the report already carries when prove errors.
+    report.stages.act = { ...report.stages.act, raw: undefined };
+    report.stages.prove = { ...report.stages.prove, raw: undefined };
     report.flow = actStarted && !proveStarted ? "decide -> act error" : "decide -> act -> prove error";
     return finalize();
   }

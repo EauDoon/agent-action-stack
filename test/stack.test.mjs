@@ -678,6 +678,11 @@ test("act and prove child-process errors keep the run isolated", async () => {
   assert.equal(proveError.exitCode, 1);
   assert.equal(proveError.manifest.stages.prove.status, "error");
   assert.match(proveError.report.stages.prove.reason, /EPIPE/);
+  // A prove failure must not erase the act result the report already holds.
+  assert.equal(proveError.report.stages.act.status, "passed");
+  assert.equal(proveError.report.stages.act.outcome, "settled");
+  assert.equal(proveError.report.stages.act.action_id, "act-1");
+  assert.ok(!("raw" in proveError.report.stages.act));
 });
 
 test("atomic writes leave no partial target or temporary file after a write failure", () => {
