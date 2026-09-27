@@ -26,5 +26,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
   list omitted `help`, and the option reference omitted nine accepted flags:
   `--out`, `--overwrite`, `--before`, `--limit`, `--outcome`, `--search`,
   `--keep`, `--dry-run`, and `--markdown`.
+- `aas cases --search` no longer accepts a value that begins with `-`.
+  `aas cases --search --json` used to consume `--json` as the search term and
+  exit 0 with an unfiltered listing, so a mistyped or reordered flag silently
+  changed the result set. It now reports a missing value and exits 2, matching
+  every other value-taking option in the CLI. The `aas cases` usage message
+  also lists the `--domain`, `--outcome`, and `--search` filters it accepts.
 
 [Unreleased]: https://github.com/EauDoon/agent-action-stack/compare/main...HEAD

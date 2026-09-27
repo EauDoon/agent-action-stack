@@ -944,6 +944,11 @@ test('history pages advance across unreadable cases without duplicates or skippi
   assert.throws(()=>listCasePage({outputRoot,limit:51}),/limit/);
   assert.throws(()=>listCasePage({outputRoot,before:'../x'}),/cursor/);
   assert.throws(()=>parseCasePageArgs(['--limit','2','--limit','3']),/Usage/);
+  // A flag-looking value is a missing value, as it is for every other
+  // value-taking option in this CLI, not a literal search term.
+  assert.throws(()=>parseCasePageArgs(['--search','--json']),/Missing value for cases option: --search/);
+  assert.throws(()=>parseCasePageArgs(['--search','-refund']),/Missing value for cases option: --search/);
+  assert.deepEqual(parseCasePageArgs(['--search','refund','--json']),{search:'refund'});
 });
 
 test('GUI loads older history pages while retaining selected comparison cases',async()=>{
