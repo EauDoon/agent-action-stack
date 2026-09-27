@@ -34,7 +34,11 @@ jobs:
       - name: Run tests
         run: npm test
       - name: Check syntax
-        run: node --check bin/aas.mjs && node --check bin/aas-gui.mjs && node --check scripts/bootstrap.mjs
+        # Every shipped module except the test files, which `npm test` and
+        # `npm run test:browser` already parse by running them. A parse error
+        # in the integration proof or an example otherwise surfaces only in the
+        # integration and browser jobs, and only on one platform.
+        run: node --check bin/aas.mjs && node --check bin/aas-gui.mjs && node --check bin/aas-gui-worker.mjs && node --check bin/case-review.mjs && node --check scripts/bootstrap.mjs && node --check scripts/integration-check.mjs && node --check examples/connector-conformance.mjs && node --check examples/review-handoff.mjs && node --check playwright.config.mjs
       - name: Smoke test GUI
         run: npm run gui:smoke
   integration:
