@@ -7,7 +7,7 @@ This checklist describes the evidence required before a public versioning update
 - [ ] Review the final raw tree and changed-file list.
 - [ ] Confirm `stack-lock.json` still contains the approved public URLs and commits:
   - Constitutional Agent Testbench: `16b2faa71b0f92b9afa15b13afad8c48da8132f4`
-  - Consequence Rail: `89811e423a1a41bad3ecb77e18ebf557615219f8`
+  - Consequence Rail: `6c61e9fdcd1a4701afad1d2371abcb3f13bbab57`
   - MandateBound: `e526c4c32ac61571757a98ca1a69189821c3dce7`
 - [ ] Run bootstrap from a clean workspace and verify detached, clean, exact dependency checkouts.
 - [ ] Confirm no private repository, credential, or production endpoint is referenced.
