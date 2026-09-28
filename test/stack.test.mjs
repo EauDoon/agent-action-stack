@@ -640,6 +640,10 @@ test("structured act failure (ok:false with parseable JSON) records the act stag
   assert.equal(result.manifest.stages.prove.status, "skipped");
   assert.equal(result.report.stages.prove.reason, "act_failed");
   assert.equal(result.report.flow, "decide -> act -> stop (act failed)");
+  // A structured act failure still carries the child's stderr. Dropping it
+  // makes the report and the human output look successful-but-silent.
+  assert.equal(result.report.stages.act.stderr, "rail: failure");
+  assert.equal(result.manifest.stages.act.stderr, result.report.stages.act.stderr);
 });
 
 test("child-process errors are visible as safe stage errors and downstream skips", async () => {
