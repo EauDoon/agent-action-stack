@@ -2077,6 +2077,29 @@ test('case review handoffs include requested settings and bounded policy failure
   const markdown=renderCaseMarkdown(review);assert.match(markdown,/## Requested settings/);assert.match(markdown,/domain: inventory/);assert.match(markdown,/not\\_equal/);assert.match(markdown,/5 additional failures omitted/);assert.doesNotMatch(markdown,/OMIT_RAW/);
 });
 
+test("case review includes persisted stage stderr", async () => {
+  const { inspectCase, renderCaseMarkdown } = await import("../bin/case-review.mjs");
+  const outputRoot = tempRoot();
+  const runId = "stderr-review";
+  persistRunBundle({
+    outputRoot,
+    runId,
+    report: { run_id: runId, stages: {} },
+    stages: {
+      act: { status: "failed", stderr: "crctl: <boom>", raw: { outcome: null } },
+    },
+    componentProvenance: [],
+    exitCode: 1,
+  });
+  const review = inspectCase(runId, { outputRoot });
+  const act = review.stages.find((stage) => stage.name === "act");
+  assert.equal(act.stderr, "crctl: <boom>");
+  const markdown = renderCaseMarkdown(review);
+  assert.match(markdown, /stderr crctl: &lt;boom&gt;/);
+  assert.doesNotMatch(markdown, /<boom>/);
+  assert.equal(review.stages.find((stage) => stage.name === "decide").stderr, null);
+});
+
 test('case reviews explain verification readiness without claiming receipt verification', async () => {
   const {inspectCase,renderCaseMarkdown}=await import('../bin/case-review.mjs');
   const outputRoot=tempRoot(),rail={synthetic:true},digest='sha256:'+createHash('sha256').update(JSON.stringify(rail)).digest('hex');

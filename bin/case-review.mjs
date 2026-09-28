@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { assertRunsDirectory, DEFAULT_PATHS, UsageError, exportRunBundle, isValidRunId, summarizeRun } from "./aas.mjs";
+import { assertRunsDirectory, clipChildStderr, DEFAULT_PATHS, UsageError, exportRunBundle, isValidRunId, summarizeRun } from "./aas.mjs";
 
 export function listCasePage({ outputRoot = DEFAULT_PATHS.outputRoot, before = null, limit = 25, domain = null, outcome = null, search = null } = {}) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error("History limit must be an integer from 1 to 50.");
@@ -66,7 +66,7 @@ export function inspectCase(runId, options = {}) {
     created_at: bundle.manifest.created_at ?? null, domain: report.domain ?? null,
     requested_options: report.requested_options ?? null,
     policy_failures: policyFailures,
-    stages: ['decide','act','prove'].map(name => ({ name, status: bundle.manifest.stages[name]?.status ?? 'unknown', reason: bundle.manifest.stages[name]?.reason ?? null, code: bundle.manifest.stages[name]?.code ?? null, artifact_available: Object.hasOwn(bundle.stages,name) })),
+    stages: ['decide','act','prove'].map(name => ({ name, status: bundle.manifest.stages[name]?.status ?? 'unknown', reason: bundle.manifest.stages[name]?.reason ?? null, code: bundle.manifest.stages[name]?.code ?? null, stderr: clipChildStderr(bundle.manifest.stages[name]?.stderr) || null, artifact_available: Object.hasOwn(bundle.stages,name) })),
     policy_id: report.stages?.decide?.policy_id ?? null,
     action_id: bundle.stages.act?.action_id ?? null, outcome: report.stages?.act?.outcome ?? null,
     review_verdict: review?.verdict ?? null,
@@ -104,7 +104,7 @@ export function renderCaseMarkdown(review) {
   for (const rule of review.policy_failures?.rules ?? []) lines.push('- '+markdownText(rule.rule_id)+': '+markdownText(rule.path)+'; '+markdownText(rule.kind)+'; '+markdownText(rule.reason_code));
   if (review.policy_failures?.omitted) lines.push(review.policy_failures.omitted+' additional failures omitted; inspect the decide artifact for all records.');
   lines.push('', ...stageHeading);
-  for(const stage of review.stages??[]) lines.push('- '+markdownText(stage.name)+': '+markdownText(stage.status)+'; artifact '+(stage.artifact_available?'present':'absent')+'; reason '+markdownText(stage.reason)+'; code '+markdownText(stage.code));
+  for(const stage of review.stages??[]) lines.push('- '+markdownText(stage.name)+': '+markdownText(stage.status)+'; artifact '+(stage.artifact_available?'present':'absent')+'; reason '+markdownText(stage.reason)+'; code '+markdownText(stage.code)+(stage.stderr?'; stderr '+markdownText(stage.stderr):''));
   lines.push('', '## Evidence binding', '', '- Recorded digest: '+markdownText(review.recorded_evidence_digest), '- Recomputed digest: '+markdownText(review.recomputed_evidence_digest), '- Digests match: '+markdownText(review.digest_matches), '', '## Component revisions', '');
   for(const entry of review.component_provenance??[]) lines.push('- '+markdownText(entry.name)+': '+markdownText(entry.commit));
   lines.push('', '## Verification next step', '', '- Readiness: '+markdownText(review.verification_readiness?.state), '- Reason: '+markdownText(review.verification_readiness?.reason), '- Next step: '+markdownText(review.verification_readiness?.next_step));
