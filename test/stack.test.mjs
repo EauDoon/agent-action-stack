@@ -1938,3 +1938,27 @@ test('review handoff example honors the explicit interpreter override', () => {
   const child=spawnSync(process.execPath,[join(ROOT,'examples/review-handoff.mjs')],{cwd:ROOT,encoding:'utf8',timeout:5000,env:{...process.env,AAS_PYTHON:'aas-synthetic-missing-python'}});
   assert.equal(child.status,1);assert.match(child.stderr,/AAS_PYTHON/);assert.match(child.stderr,/did not report a usable Python version/);
 });
+
+test("npm test reports every declared test", () => {
+  // Process isolation ships test events on stdout. This file also writes
+  // captured CLI output there, which drops events. The parent then reports a
+  // short run and, on failure, only "test failed" with no test name.
+  if (process.env.AAS_COUNTING === "1") return;
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+  const tokens = pkg.scripts.test.split(/\s+/);
+  assert.equal(tokens[0], "node");
+  const flags = tokens.slice(1).filter((token) => token.startsWith("--"));
+  const declared = readFileSync(fileURLToPath(import.meta.url), "utf8").match(/^test\(/gm).length;
+  const env = { ...process.env, AAS_COUNTING: "1" };
+  // The suite under test must be a real runner. Inheriting this process's
+  // child-v8 context makes `node --test` refuse to run files.
+  delete env.NODE_TEST_CONTEXT;
+  const result = spawnSync(process.execPath, [...flags, "test/stack.test.mjs"], {
+    cwd: ROOT,
+    encoding: "utf8",
+    env,
+  });
+  assert.equal(result.status, 0, result.stderr.slice(-800));
+  const reported = Number(result.stdout.match(/# tests (\d+)/)?.[1]);
+  assert.ok(reported >= declared, `runner reported ${reported} results but ${declared} tests are declared`);
+});

@@ -13,6 +13,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Playwright setup note in the Quick start section of `README.md`.
 
 ### Fixed
+- `npm test` now runs every declared test. The default process-isolation
+  runner carries test events on stdout, and this suite also writes captured
+  CLI output there, so the parent only reported the last few dozen tests and
+  turned any earlier failure into a nameless "test failed". In-process
+  reporting keeps the full count and the failing test's name.
 - A prove-stage error no longer wipes the act result from the run report. The
   error path rebuilt `report.stages.act` from the internal stage record, so
   `outcome`, `state`, `fault`, `action_id`, `assurance_mode`, and
