@@ -13,6 +13,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Playwright setup note in the Quick start section of `README.md`.
 
 ### Fixed
+- Bootstrap now refuses a pre-existing dependency directory that is a symlink.
+  `existsSync` follows the link, so a symlink whose git metadata matched the
+  lock was accepted as the component checkout.
 - Listing, export, and prune now refuse a `runs` directory that is a symlink.
   Those paths followed the link, so prune deleted runs in the target tree.
 - `runCapture` no longer lets caller options enable a shell or replace the
