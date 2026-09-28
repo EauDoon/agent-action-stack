@@ -13,6 +13,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Playwright setup note in the Quick start section of `README.md`.
 
 ### Fixed
+- `runCapture` no longer lets caller options enable a shell or replace the
+  stdout cap. Those fields were applied before `...opts`, so `shell: true` or
+  a larger `maxBuffer` overrode the limits. Timeout remains caller-set.
 - `runDecide` now rejects a domain other than `refund` or `inventory`. Any
   other value used to load the refund policy and could report a pass for the
   wrong gate.
