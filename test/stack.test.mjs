@@ -180,6 +180,25 @@ test("pre-existing dependency symlinks are rejected", (t) => {
   );
 });
 
+test("a symlinked dependency directory is not used as the checkout root", (t) => {
+  const outside = tempRoot();
+  const marker = join(outside, "keep.txt");
+  writeFileSync(marker, "keep");
+  const project = tempRoot();
+  const link = join(project, "deps");
+  if (!linkOrSkip(t, outside, link)) return;
+  assert.throws(
+    () => prepareDependencies({ root: project, deps: link, components: [] }),
+    /regular directory/,
+  );
+  assert.throws(
+    () => resolveComponentProvenance(link, LOCK),
+    /regular directory/,
+  );
+  assert.equal(readFileSync(marker, "utf8"), "keep");
+  assert.equal(existsSync(join(outside, ".git")), false);
+});
+
 test("missing or non-Git pre-existing directories fail closed", () => {
   const component = loadComponentLock(LOCK)[1];
   const target = join(tempRoot(), component.name);

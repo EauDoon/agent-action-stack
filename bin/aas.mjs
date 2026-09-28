@@ -28,6 +28,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import {
+  assertDependencyDirectory,
   assertFullStackNodeVersion,
   inspectDependencyDirectory,
   loadComponentLock,
@@ -567,6 +568,7 @@ export function resolveComponentProvenance(
   depsDir = DEFAULT_PATHS.deps,
   lockPath = DEFAULT_PATHS.lock,
 ) {
+  assertDependencyDirectory(depsDir);
   const components = loadComponentLock(lockPath);
   return components.map((component) => {
     const target = join(depsDir, component.name);
