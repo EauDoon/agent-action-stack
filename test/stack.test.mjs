@@ -153,6 +153,17 @@ test("lock mismatch rejects substituted or stale pre-existing dependencies", () 
   }
 });
 
+test("pre-existing dependency symlinks are rejected", () => {
+  const component = loadComponentLock(LOCK)[1];
+  const fixture = fakeDependency(component);
+  const link = join(tempRoot(), component.name);
+  symlinkSync(fixture.target, link);
+  assert.throws(
+    () => inspectDependencyDirectory(link, component, { command: fixture.command }),
+    /regular directory/,
+  );
+});
+
 test("missing or non-Git pre-existing directories fail closed", () => {
   const component = loadComponentLock(LOCK)[1];
   const target = join(tempRoot(), component.name);

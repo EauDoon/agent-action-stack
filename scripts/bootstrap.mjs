@@ -4,7 +4,7 @@
  * This script never accesses private repositories.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -129,6 +129,10 @@ export function loadComponentLock(path = lockPath) {
 
 export function inspectDependencyDirectory(target, component, { command = exec } = {}) {
   if (!existsSync(target)) return { exists: false, target };
+  const listing = lstatSync(target);
+  if (listing.isSymbolicLink() || !listing.isDirectory()) {
+    throw new Error(`Refusing pre-existing dependency that is not a regular directory: ${component.name}`);
+  }
   if (!existsSync(join(target, ".git"))) {
     throw new Error(`Refusing pre-existing dependency without Git metadata: ${component.name}`);
   }
