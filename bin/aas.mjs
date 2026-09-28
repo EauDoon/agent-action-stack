@@ -1090,6 +1090,7 @@ function validateSavedManifest(manifest, bundleDir) {
 
 export function readRunBundle(outputRoot, runId) {
   if (!isValidRunId(runId)) throw new Error("Invalid run id.");
+  assertRunsDirectory(outputRoot);
   const bundleDir = join(outputRoot, "runs", runId);
   const directory = lstatSync(bundleDir);
   if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error("Case directory must be a regular directory.");
@@ -1121,11 +1122,30 @@ function runsDirectory(outputRoot) {
 }
 
 /**
+ * Case stores must be a real directory. A symlink here is followed by
+ * readdir, export, and prune, so a planted link reads or deletes another tree.
+ */
+export function assertRunsDirectory(outputRoot) {
+  const dir = runsDirectory(outputRoot);
+  let stat;
+  try {
+    stat = lstatSync(dir);
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error("Runs directory must be a regular directory.");
+  }
+}
+
+/**
  * List persisted runs newest-first. Entries without a readable manifest
  * (interrupted writes, stray files) are omitted; export and replay still
  * fail closed on them when addressed directly.
  */
 export function listRuns({ outputRoot = DEFAULT_PATHS.outputRoot, limit = Number.MAX_SAFE_INTEGER } = {}) {
+  assertRunsDirectory(outputRoot);
   const dir = runsDirectory(outputRoot);
   let entries;
   try {
@@ -1427,6 +1447,7 @@ export function persistRunBundle({
   // The same rule as readers. The regex alone accepts ".", "..", and "...",
   // and `RegExp.test` stringifies non-strings, so ".." was a path escape.
   if (!isValidRunId(runId)) throw new Error("Invalid run id.");
+  assertRunsDirectory(outputRoot);
   const runsDir = join(outputRoot, "runs");
   const finalDir = join(runsDir, runId);
   const temporaryDir = join(runsDir, `.${runId}.${process.pid}.${randomUUID()}.tmp`);
