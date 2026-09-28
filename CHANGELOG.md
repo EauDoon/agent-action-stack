@@ -13,6 +13,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Playwright setup note in the Quick start section of `README.md`.
 
 ### Fixed
+- The act stage now reads the rail bundle file with the same byte cap and
+  symlink refusal as a saved case. The previous read followed a link and
+  accepted a file larger than the child stdout cap.
 - Bootstrap and provenance now refuse a `deps` directory that is a symlink.
   Checkout and later reads followed the link, so a planted `deps` link was
   accepted as the component root.

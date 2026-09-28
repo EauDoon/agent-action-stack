@@ -1251,6 +1251,34 @@ test("runAct persists the rail bundle only when asked", () => {
   assert.equal("rail_bundle" in plain.raw, false);
 });
 
+test("runAct rejects a rail bundle file past the child output cap", () => {
+  const runner = (_bin, args) => {
+    const out = args[args.indexOf("--out") + 1];
+    writeFileSync(out, Buffer.alloc(CHILD_JSON_LIMIT + 1, 0x78));
+    return { status: 0, stdout: '{"outcome":"settled","state":"CLOSED","fault":"none","action_id":"a"}\n', stderr: "", error: null };
+  };
+  assert.throws(
+    () => runAct("none", { depsDir: "deps", runner, persistRailBundle: true }),
+    /byte limit/,
+  );
+});
+
+test("runAct does not follow a symlinked rail bundle file", (t) => {
+  const probe = tempRoot();
+  if (!linkOrSkip(t, join(probe, "missing"), join(probe, "link"))) return;
+  const runner = (_bin, args) => {
+    const out = args[args.indexOf("--out") + 1];
+    const target = join(out, "..", "target.json");
+    writeFileSync(target, JSON.stringify({ action: { action_id: "leaked" }, settlement_receipt: { outcome: "settled" } }));
+    symlinkSync(target, out);
+    return { status: 0, stdout: '{"outcome":"settled","state":"CLOSED","fault":"none","action_id":"a"}\n', stderr: "", error: null };
+  };
+  assert.throws(
+    () => runAct("none", { depsDir: "deps", runner, persistRailBundle: true }),
+    /symbolic link/,
+  );
+});
+
 test("demo rail mode records the review binding and fails closed without a bundle", async () => {
   const outputRoot = mkdtempSync(join(tmpdir(), "agent-action-stack-rail-"));
   const bundle = railBundleFixture();
