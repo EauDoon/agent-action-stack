@@ -1633,7 +1633,11 @@ export async function runDemo(args = [], options = {}) {
       persistRailBundle: proveMode === "rail" && options.runActFn === undefined,
     });
     const outcome = act.raw?.outcome ?? null;
-    stages.act = stageRecord(act.ok ? "passed" : "failed", { raw: act.raw });
+    const actStderr = clipChildStderr(act.stderr);
+    stages.act = stageRecord(act.ok ? "passed" : "failed", {
+      raw: act.raw,
+      ...(actStderr ? { stderr: actStderr } : {}),
+    });
     if (!act.ok) exitCode = 1;
     report.stages.act = {
       status: stages.act.status,
@@ -1643,6 +1647,7 @@ export async function runDemo(args = [], options = {}) {
       action_id: act.raw?.action_id ?? null,
       assurance_mode: act.raw?.assurance_mode ?? null,
       bundle_verification: act.raw?.bundle_verification ?? null,
+      ...(actStderr ? { stderr: actStderr } : {}),
     };
     if (!act.ok) {
       stages.prove = stageRecord("skipped", { reason: "act_failed" });
