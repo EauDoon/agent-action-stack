@@ -1089,6 +1089,15 @@ function validateSavedManifest(manifest, bundleDir) {
 }
 
 export function readRunBundle(outputRoot, runId) {
+  try {
+    return readRunBundleBody(outputRoot, runId);
+  } catch (error) {
+    if (error && !error.code) error.code = "AAS_CASE_REJECTED";
+    throw error;
+  }
+}
+
+function readRunBundleBody(outputRoot, runId) {
   if (!isValidRunId(runId)) throw new Error("Invalid run id.");
   assertRunsDirectory(outputRoot);
   const bundleDir = join(outputRoot, "runs", runId);
