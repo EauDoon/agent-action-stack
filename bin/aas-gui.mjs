@@ -798,7 +798,7 @@ export function createGuiServer({
           response.writeHead(200, { "content-type": "text/markdown; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff", "content-disposition": 'attachment; filename="case-comparison.md"' });
           response.end(renderComparisonMarkdown(comparison)); return;
         }
-        sendJson(response, 200, { ok: true, ...comparison });
+        sendJson(response, 200, { ok: comparison.classification !== "not-comparable", ...comparison });
         return;
       }
       if (request.method === "GET" && url.pathname.startsWith("/api/review/")) {
