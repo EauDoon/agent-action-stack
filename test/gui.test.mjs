@@ -1099,3 +1099,22 @@ test('comparison Markdown preserves uncertainty and escapes hostile difference f
   try {const res=await requestServer(server,'/api/compare?a=compare-one&b=compare-two&format=markdown');assert.equal(res.status,200);assert.match(res.body,/# Saved case comparison/);assert.match(res.headers['content-type'],/markdown/);assert.equal((await requestServer(server,'/api/compare?a=x&b=y&format=html')).status,400);}
   finally {await new Promise(resolve=>server.close(resolve));}
 });
+
+test("saved verification uses 422 for a structurally invalid case and 404 when it is missing", async () => {
+  const outputRoot = mkdtempSync(join(tmpdir(), "aas-verify-saved-status-"));
+  const runId = "invalid-saved-case";
+  mkdirSync(join(outputRoot, "runs", runId), { recursive: true });
+  writeFileSync(join(outputRoot, "runs", runId, "manifest.json"), "{not json");
+  const server = createGuiServer({ outputRoot });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const invalid = await requestServer(server, `/api/replay-saved/${runId}`, { method: "POST", headers: { origin } });
+    assert.equal(invalid.status, 422);
+    assert.equal(JSON.parse(invalid.body).error, "Saved case is unreadable or structurally invalid.");
+    const missing = await requestServer(server, "/api/replay-saved/missing-saved-case", { method: "POST", headers: { origin } });
+    assert.equal(missing.status, 404);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

@@ -728,7 +728,15 @@ export function createGuiServer({
         try {
           const result = await runGuiTask({ operation: "replay-saved", runId, options: { outputRoot, ...(depsDir === undefined ? {} : { depsDir }) } });
           sendJson(response, replayHttpStatus(result), { ok: result.ok, run_id: result.runId, checks: result.checks, reason: result.reason ?? null });
-        } catch (error) { sendJson(response, error.code === "ENOENT" ? 404 : 500, { error: error.code === "ENOENT" ? "Saved case not found." : "Saved verification could not complete." }); }
+        } catch (error) {
+          const status = error.code === "ENOENT" ? 404 : error.code === "AAS_CASE_REJECTED" ? 422 : 500;
+          const message = error.code === "ENOENT"
+            ? "Saved case not found."
+            : error.code === "AAS_CASE_REJECTED"
+              ? "Saved case is unreadable or structurally invalid."
+              : "Saved verification could not complete.";
+          sendJson(response, status, { error: message });
+        }
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/replay") {

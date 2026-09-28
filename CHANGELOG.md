@@ -13,6 +13,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Playwright setup note in the Quick start section of `README.md`.
 
 ### Fixed
+- Verify saved case now returns HTTP 422 when the saved case is structurally
+  invalid, the same distinction inspect already makes with 404 and 422. The
+  route used to report that failure as HTTP 500.
 - Bootstrap now refuses a pre-existing dependency directory that is a symlink.
   `existsSync` follows the link, so a symlink whose git metadata matched the
   lock was accepted as the component checkout.
