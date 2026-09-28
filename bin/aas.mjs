@@ -1696,7 +1696,7 @@ export async function runDemo(args = [], options = {}) {
       status: stages.act.status,
       outcome,
       state: act.raw?.state ?? null,
-      fault: act.raw?.fault ?? fault,
+      fault: act.raw && Object.hasOwn(act.raw, "fault") ? act.raw.fault : fault,
       action_id: act.raw?.action_id ?? null,
       assurance_mode: act.raw?.assurance_mode ?? null,
       bundle_verification: act.raw?.bundle_verification ?? null,

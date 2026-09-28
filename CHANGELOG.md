@@ -13,6 +13,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Playwright setup note in the Quick start section of `README.md`.
 
 ### Fixed
+- An act result that explicitly reports `fault: null` is stored as null. The
+  report used to replace that null with the requested fault, so a cleared
+  fault was recorded as `duplicate` when `--fault duplicate` was passed.
 - The integrator example now removes its scratch directory when decide fails
   or policy refuses the response. `process.exit` skipped the cleanup, so each
   failed run left an `aas-integrator-` directory behind.
