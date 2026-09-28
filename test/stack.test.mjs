@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -1577,6 +1577,18 @@ test("persistRunBundle rejects run ids readers already refuse", () => {
   }
   assert.equal(readFileSync(marker, "utf8"), "keep");
   assert.equal(existsSync(join(outputRoot, "runs", "...")), false);
+});
+
+test("a symlinked runs directory is not used as the case store", () => {
+  const outputRoot = tempRoot();
+  const outsideParent = tempRoot();
+  const runId = "2026-09-06T050000000Z-outside";
+  writeCase(outsideParent, runId);
+  symlinkSync(join(outsideParent, "runs"), join(outputRoot, "runs"));
+  assert.throws(() => listRuns({ outputRoot }), /regular directory/);
+  assert.throws(() => pruneRuns({ outputRoot, keep: 1 }), /regular directory/);
+  assert.throws(() => exportRunBundle(runId, { outputRoot }), /regular directory/);
+  assert.equal(existsSync(join(outsideParent, "runs", runId, "manifest.json")), true);
 });
 
 test("run ids cannot escape the runs directory", async () => {

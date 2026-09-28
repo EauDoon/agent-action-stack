@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_PATHS, UsageError, exportRunBundle, isValidRunId, summarizeRun } from "./aas.mjs";
+import { assertRunsDirectory, DEFAULT_PATHS, UsageError, exportRunBundle, isValidRunId, summarizeRun } from "./aas.mjs";
 
 export function listCasePage({ outputRoot = DEFAULT_PATHS.outputRoot, before = null, limit = 25, domain = null, outcome = null, search = null } = {}) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error("History limit must be an integer from 1 to 50.");
@@ -9,6 +9,7 @@ export function listCasePage({ outputRoot = DEFAULT_PATHS.outputRoot, before = n
   if (domain !== null && !['refund','inventory','unknown'].includes(domain)) throw new Error('Domain filter must be refund, inventory, or unknown.');
   if (outcome !== null && !['settled','compensated','none'].includes(outcome)) throw new Error('Outcome filter must be settled, compensated, or none.');
   if (search !== null && (typeof search !== 'string' || !search.trim() || search.length > 200)) throw new Error('Search must contain 1 to 200 characters.');
+  assertRunsDirectory(outputRoot);
   let entries;
   try { entries = readdirSync(join(outputRoot, "runs"), { withFileTypes: true }); }
   catch (error) { if (error.code === "ENOENT") return { cases: [], next_cursor: null, scanned: 0, unavailable: [] }; throw error; }

@@ -13,6 +13,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Playwright setup note in the Quick start section of `README.md`.
 
 ### Fixed
+- Listing, export, and prune now refuse a `runs` directory that is a symlink.
+  Those paths followed the link, so prune deleted runs in the target tree.
 - `runCapture` no longer lets caller options enable a shell or replace the
   stdout cap. Those fields were applied before `...opts`, so `shell: true` or
   a larger `maxBuffer` overrode the limits. Timeout remains caller-set.
