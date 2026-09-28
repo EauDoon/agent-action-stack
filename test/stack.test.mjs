@@ -2027,6 +2027,12 @@ test("npm test reports every declared test", () => {
     env,
   });
   assert.equal(result.status, 0, result.stderr.slice(-800));
-  const reported = Number(result.stdout.match(/# tests (\d+)/)?.[1]);
+  // Node's default reporter changed from tap to spec, so the summary line is
+  // `# tests N` on some versions and `i tests N` on others. Accept either
+  // instead of assuming one, and fail loudly when neither is present rather
+  // than comparing NaN and reporting a confusing count.
+  const counts = [...result.stdout.matchAll(/^(?:#|\u2139) tests (\d+)$/gm)].map((match) => Number(match[1]));
+  const reported = Math.max(0, ...counts);
+  assert.ok(counts.length > 0, `no test count in the runner summary:\n${result.stdout.slice(-800)}`);
   assert.ok(reported >= declared, `runner reported ${reported} results but ${declared} tests are declared`);
 });
