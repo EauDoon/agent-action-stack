@@ -577,6 +577,14 @@ compareButton.addEventListener('click',async()=>{
 </script></body></html>`;
 }
 
+function savedPathId(pathname, prefix) {
+  try {
+    return decodeURIComponent(pathname.slice(prefix.length));
+  } catch {
+    return null;
+  }
+}
+
 export function hasOnlySingleOptions(params, allowed) {
   return [...params.keys()].every((key) => allowed.has(key) && params.getAll(key).length === 1);
 }
@@ -717,7 +725,7 @@ export function createGuiServer({
         return;
       }
       if (request.method === "POST" && url.pathname.startsWith("/api/replay-saved/")) {
-        const runId = decodeURIComponent(url.pathname.slice("/api/replay-saved/".length));
+        const runId = savedPathId(url.pathname, "/api/replay-saved/");
         if (!isReviewRunId(runId) || url.search) { sendJson(response, 400, { error: "Invalid saved verification request." }); return; }
         try {
           assertFullStackNodeVersion(
@@ -821,7 +829,7 @@ export function createGuiServer({
         return;
       }
       if (request.method === "GET" && url.pathname.startsWith("/api/review/")) {
-        const runId = decodeURIComponent(url.pathname.slice("/api/review/".length));
+        const runId = savedPathId(url.pathname, "/api/review/");
         if (!isReviewRunId(runId) || url.search) { sendJson(response, 400, { error: "Invalid case review request." }); return; }
         let content;
         try { content = renderCaseMarkdown(inspectCase(runId, { outputRoot })); }
@@ -830,7 +838,7 @@ export function createGuiServer({
         response.end(content); return;
       }
       if (request.method === "GET" && url.pathname.startsWith("/api/bundle/")) {
-        const runId = decodeURIComponent(url.pathname.slice("/api/bundle/".length));
+        const runId = savedPathId(url.pathname, "/api/bundle/");
         if (!isReviewRunId(runId)) { sendJson(response, 400, { error: "Invalid saved run ID." }); return; }
         let bundle;
         try { bundle = exportRunBundle(runId, { outputRoot }); }

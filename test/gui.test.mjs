@@ -686,6 +686,25 @@ test("GUI compare refuses a symlinked runs directory", (t) => {
   });
 });
 
+test("malformed percent-encoding in a saved-case path is a client error", async () => {
+  const server = createGuiServer({ outputRoot: mkdtempSync(join(tmpdir(), "aas-gui-pct-")) });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    for (const path of ["/api/bundle/%ZZ", "/api/review/%E0%A4%A", "/api/replay-saved/%"]) {
+      const response = await requestServer(server, path, {
+        method: path.startsWith("/api/replay-saved/") ? "POST" : "GET",
+        headers: { origin },
+      });
+      assert.equal(response.status, 400, path);
+      assert.match(response.body, /Invalid/);
+      assert.doesNotMatch(response.body, /Request failed/);
+    }
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
 test("GUI exposes a domain selector defaulting to refund", () => {
   const page = renderPage();
   assert.match(page, /<select id="domain">/);
