@@ -13,6 +13,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Playwright setup note in the Quick start section of `README.md`.
 
 ### Fixed
+- The integrator example now removes its scratch directory when decide fails
+  or policy refuses the response. `process.exit` skipped the cleanup, so each
+  failed run left an `aas-integrator-` directory behind.
 - `aas inspect --root` now rejects a blank path, matching the other saved-case
   commands. A whitespace root used to be treated as a directory and failed
   with a filesystem error.

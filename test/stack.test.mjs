@@ -2075,6 +2075,33 @@ test('filtered case pages preserve scan bounds and continuation across nonmatche
   for(const args of [['--domain','real'],['--outcome','paid'],['--search',''],['--search','x'.repeat(201)],['--domain','refund','--domain','inventory']]) assert.equal((await captureMain(['cases',...args,'--json'])).exitCode,2);
 });
 
+test("review handoff removes its scratch directory when decide cannot start", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aas-handoff-scratch-"));
+  const preload = join(dir, "preload.cjs");
+  writeFileSync(preload, [
+    "if (typeof process.argv[1] === 'string' && process.argv[1].includes('sys.version_info')) {",
+    "  process.stdout.write('3.13\\n');",
+    "  process.exit(0);",
+    "}",
+    "",
+  ].join("\n"));
+  const result = spawnSync(process.execPath, [join(ROOT, "examples/review-handoff.mjs"), "--response", "fail"], {
+    cwd: ROOT,
+    encoding: "utf8",
+    timeout: 15000,
+    env: {
+      ...process.env,
+      TMPDIR: dir,
+      TMP: dir,
+      TEMP: dir,
+      AAS_PYTHON: process.execPath,
+      NODE_OPTIONS: `--require ${JSON.stringify(preload)}`,
+    },
+  });
+  assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
+  assert.deepEqual(readdirSync(dir).filter((name) => name.startsWith("aas-integrator-")), []);
+});
+
 test('review handoff example honors the explicit interpreter override', () => {
   const child=spawnSync(process.execPath,[join(ROOT,'examples/review-handoff.mjs')],{cwd:ROOT,encoding:'utf8',timeout:5000,env:{...process.env,AAS_PYTHON:'aas-synthetic-missing-python'}});
   assert.equal(child.status,1);assert.match(child.stderr,/AAS_PYTHON/);assert.match(child.stderr,/did not report a usable Python version/);
