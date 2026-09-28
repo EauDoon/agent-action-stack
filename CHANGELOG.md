@@ -13,6 +13,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Playwright setup note in the Quick start section of `README.md`.
 
 ### Fixed
+- Saved-case GUI paths with malformed percent-encoding now return HTTP 400.
+  `decodeURIComponent` used to throw, and the request became HTTP 500.
 - The workbench comparison panel now says the comparison is unavailable when
   the pair is not comparable. It previously said no compared field differs,
   which disagreed with the Markdown download for the same result.
