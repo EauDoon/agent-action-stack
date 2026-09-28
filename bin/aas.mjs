@@ -599,6 +599,9 @@ export function runDecide(
     domain = "refund",
   } = {},
 ) {
+  if (!DEMO_DOMAINS.has(domain)) {
+    throw new Error("decide domain must be refund or inventory");
+  }
   const policyPath = join(
     fixturesDir,
     domain === "inventory" ? "inventory.policy.json" : "policy.json",

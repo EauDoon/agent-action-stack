@@ -1726,6 +1726,19 @@ test("runAct targets the requested rail demo domain", () => {
   assert.equal(seen[0][2], "inventory");
 });
 
+test("runDecide rejects an unknown domain instead of loading the refund policy", () => {
+  let called = false;
+  assert.throws(() => runDecide("unused", {
+    fixturesDir: join(ROOT, "fixtures"),
+    domain: "payments",
+    runner: () => {
+      called = true;
+      return { status: 0, stdout: '{"passed":true,"policy_id":"p","rule_results":[]}\n', stderr: "", error: null };
+    },
+  }), /decide domain must be refund or inventory/);
+  assert.equal(called, false);
+});
+
 test("runDecide uses the domain policy fixture", () => {
   const seen = [];
   const runner = (bin, args) => {
