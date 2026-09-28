@@ -13,6 +13,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Playwright setup note in the Quick start section of `README.md`.
 
 ### Fixed
+- The GUI import endpoint now requires one JSON document. It used the child
+  stdout parser, so a log line followed by an object was accepted and replayed.
 - `persistRunBundle` now uses the same run-id rule as readers. The old check
   accepted `.`, `..`, and `...`, and `RegExp.test` stringified non-strings, so
   a run id of `..` resolved outside `runs/`.

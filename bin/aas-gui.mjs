@@ -12,7 +12,6 @@ import {
   exportRunBundle,
   isValidRunId,
   listRunSummaries,
-  parseJsonOutput,
   replayBundle,
   resolveGuiPort,
   runCapture,
@@ -48,7 +47,14 @@ async function readJsonRequest(request, { maxBytes = CHILD_JSON_LIMIT } = {}) {
   if (tooLarge) throw Object.assign(new Error("Imported case is too large."), { status: 413 });
   const text = Buffer.concat(chunks).toString("utf8");
   if (text.trim() === "") throw Object.assign(new Error("Imported case is empty."), { status: 400 });
-  return parseJsonOutput(text, "imported case", maxBytes);
+  // Child stdout may recover a JSON value from surrounding logs. An upload
+  // is one document: a prefix, a second value, or other trailing text is
+  // invalid JSON, not a case to replay.
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw Object.assign(new Error("Imported case contains invalid JSON."), { status: 400 });
+  }
 }
 
 /**
