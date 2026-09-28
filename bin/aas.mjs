@@ -675,6 +675,9 @@ export function runAct(
     domain = "refund",
   } = {},
 ) {
+  if (!DEMO_DOMAINS.has(domain)) {
+    throw new Error("act domain must be refund or inventory");
+  }
   const crctl = join(depsDir, "consequence-rail", "cmd", "crctl.js");
   if (runner === runCapture && !existsSync(crctl)) {
     throw missingChildTool("act CLI (deps/consequence-rail/cmd/crctl.js)");
