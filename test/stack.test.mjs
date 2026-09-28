@@ -1813,6 +1813,20 @@ test("demo rejects an unknown domain before running any stage", async () => {
   assert.equal(rejected.exitCode, 2);
 });
 
+test("an explicit null act fault stays null instead of becoming the requested fault", async () => {
+  const outputRoot = tempRoot();
+  const cleared = await runDemo(["--fault", "duplicate"], stubOptions(outputRoot, {
+    runId: "null-fault",
+    runActFn: async () => ({ ok: true, raw: { outcome: "settled", state: "CLOSED", fault: null, action_id: "act-null" }, status: 0 }),
+  }));
+  assert.equal(cleared.report.stages.act.fault, null);
+  const omitted = await runDemo(["--fault", "duplicate"], stubOptions(outputRoot, {
+    runId: "omitted-fault",
+    runActFn: async () => ({ ok: true, raw: { outcome: "settled", state: "CLOSED", action_id: "act-omit" }, status: 0 }),
+  }));
+  assert.equal(omitted.report.stages.act.fault, "duplicate");
+});
+
 test("runAct targets the requested rail demo domain", () => {
   const seen = [];
   const runner = (bin, args) => {
