@@ -1983,6 +1983,14 @@ test('saved-case commands use an explicit output root without component setup', 
   }
 });
 
+test("inspect rejects a blank output root", async () => {
+  for (const root of ["   ", "\t"]) {
+    const result = await captureMain(["inspect", "case-a", "--root", root]);
+    assert.equal(result.exitCode, 2, result.stderr);
+    assert.match(result.stderr, /output root/);
+  }
+});
+
 test('human history reports damaged entries and continuation even on empty pages', async () => {
   const outputRoot = tempRoot(); writeCase(outputRoot, 'case-a');
   mkdirSync(join(outputRoot, 'runs', 'case-z'), {recursive:true});
