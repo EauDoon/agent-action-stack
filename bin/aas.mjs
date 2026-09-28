@@ -322,12 +322,20 @@ function missingChildTool(label) {
 
 /** @returns {ChildResult} */
 export function runCapture(command, args, opts = {}) {
-  const { timeout = resolveChildTimeoutMs(), ...rest } = opts;
+  const {
+    timeout = resolveChildTimeoutMs(),
+    // These three are safety limits. Spreading `opts` after them used to let a
+    // caller turn the shell on or raise the stdout cap.
+    shell: _shell,
+    maxBuffer: _maxBuffer,
+    encoding: _encoding,
+    ...rest
+  } = opts;
   const result = spawnSync(command, args, {
+    ...rest,
     encoding: "utf8",
     shell: false,
     maxBuffer: CHILD_JSON_LIMIT,
-    ...rest,
     timeout,
   });
   return {

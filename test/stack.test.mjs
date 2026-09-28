@@ -409,6 +409,16 @@ test("act names the child and preserves stderr on a spawn failure", () => {
   );
 });
 
+test("runCapture keeps shell disabled and the stdout cap caller options cannot override", () => {
+  const shelled = runCapture("echo ok", [], { shell: true, timeout: 5000 });
+  assert.notEqual(shelled.status, 0);
+  assert.ok(shelled.error);
+  const capped = runCapture(process.execPath, ["-e", "process.stdout.write('x'.repeat(80))"], { maxBuffer: 20, timeout: 5000 });
+  assert.equal(capped.error, undefined);
+  assert.equal(capped.status, 0);
+  assert.equal(capped.stdout, "x".repeat(80));
+});
+
 test("child stderr clipper strips ANSI and keeps the tail", () => {
   assert.equal(clipChildStderr("  \u001b[31mboom\u001b[0m \n"), "boom");
   assert.equal(clipChildStderr(""), "");
