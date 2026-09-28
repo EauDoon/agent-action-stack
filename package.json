@@ -14,7 +14,7 @@
     "demo:dispute": "node ./bin/aas.mjs demo --fault duplicate",
     "gui": "node ./bin/aas-gui.mjs",
     "gui:smoke": "node ./bin/aas-gui.mjs --smoke-test",
-    "test": "node --test test/gui.test.mjs test/stack.test.mjs",
+    "test": "node --test --experimental-test-isolation=none test/gui.test.mjs test/stack.test.mjs",
     "integration": "node scripts/integration-check.mjs",
     "example:review-handoff": "node examples/review-handoff.mjs",
     "check": "npm test",
