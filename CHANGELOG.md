@@ -13,6 +13,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Playwright setup note in the Quick start section of `README.md`.
 
 ### Fixed
+- `runAct` now rejects a domain other than `refund` or `inventory` before it
+  spawns the rail CLI. Any other value was passed through as the demo
+  command.
 - An act result that explicitly reports `fault: null` is stored as null. The
   report used to replace that null with the requested fault, so a cleared
   fault was recorded as `duplicate` when `--fault duplicate` was passed.

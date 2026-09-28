@@ -1838,6 +1838,19 @@ test("runAct targets the requested rail demo domain", () => {
   assert.equal(seen[0][2], "inventory");
 });
 
+test("runAct rejects an unknown domain before spawning the rail CLI", () => {
+  let called = false;
+  assert.throws(() => runAct("none", {
+    depsDir: "deps",
+    domain: "payments",
+    runner: () => {
+      called = true;
+      return { status: 0, stdout: '{"outcome":"settled","state":"CLOSED","fault":"none","action_id":"a"}\n', stderr: "", error: null };
+    },
+  }), /act domain must be refund or inventory/);
+  assert.equal(called, false);
+});
+
 test("runDecide rejects an unknown domain instead of loading the refund policy", () => {
   let called = false;
   assert.throws(() => runDecide("unused", {
