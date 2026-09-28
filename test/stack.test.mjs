@@ -1551,6 +1551,24 @@ test("cases and compare CLI commands validate arguments and print classification
   assert.equal(badFlag.exitCode, 2);
 });
 
+test("persistRunBundle rejects run ids readers already refuse", () => {
+  const outputRoot = tempRoot();
+  const marker = join(outputRoot, "marker.json");
+  writeFileSync(marker, "keep");
+  for (const bad of [".", "..", "...", 12]) {
+    assert.throws(() => persistRunBundle({
+      outputRoot,
+      runId: bad,
+      report: { run_id: "x" },
+      stages: {},
+      componentProvenance: [],
+      exitCode: 0,
+    }), /Invalid run id/, `expected ${String(bad)} to be rejected`);
+  }
+  assert.equal(readFileSync(marker, "utf8"), "keep");
+  assert.equal(existsSync(join(outputRoot, "runs", "...")), false);
+});
+
 test("run ids cannot escape the runs directory", async () => {
   const outputRoot = tempRoot();
   const ids = await makeRuns(outputRoot, 1);
