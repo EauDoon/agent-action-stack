@@ -225,7 +225,9 @@ export function compareModel(result) {
     : "";
   const differences = Array.isArray(body.differences) ? body.differences : [];
   const rows = differences.length === 0
-    ? "<p>No compared field differs.</p>"
+    ? (body.classification === "not-comparable"
+      ? "<p>Comparison unavailable.</p>"
+      : "<p>No compared field differs.</p>")
     : `<ul>${differences.map((entry) => `<li>${escapeHtml(entry.field)}: ${escapeHtml(JSON.stringify(entry.left))} vs ${escapeHtml(JSON.stringify(entry.right))}</li>`).join("")}</ul>`;
   const notes = Array.isArray(body.notes) && body.notes.length > 0
     ? body.notes

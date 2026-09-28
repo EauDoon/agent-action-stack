@@ -551,6 +551,17 @@ test("history and comparison models escape untrusted values and state limits", (
 
   const empty = compareModel({ classification: "identical", left: { run_id: "a" }, right: { run_id: "b" } });
   assert.match(empty, /No compared field differs/);
+
+  const unavailable = compareModel({
+    classification: "not-comparable",
+    left: null,
+    right: null,
+    errors: ["left (missing): Cannot read run missing."],
+    differences: [],
+  });
+  assert.match(unavailable, /Comparison unavailable/);
+  assert.doesNotMatch(unavailable, /No compared field differs/);
+  assert.match(unavailable, /Cannot read run missing/);
 });
 
 

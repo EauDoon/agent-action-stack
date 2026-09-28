@@ -13,6 +13,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Playwright setup note in the Quick start section of `README.md`.
 
 ### Fixed
+- The workbench comparison panel now says the comparison is unavailable when
+  the pair is not comparable. It previously said no compared field differs,
+  which disagreed with the Markdown download for the same result.
 - Comparison and case summaries now refuse a `runs` directory that is a
   symlink, matching list, export, and prune. The comparison path used to
   follow the link and read the target tree. The GUI compare route returns
