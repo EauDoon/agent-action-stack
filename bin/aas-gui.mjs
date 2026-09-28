@@ -801,7 +801,16 @@ export function createGuiServer({
           sendJson(response, 400, { error: "Compare requires two valid run ids." });
           return;
         }
-        const comparison = compareRuns(left, right, { outputRoot });
+        let comparison;
+        try {
+          comparison = compareRuns(left, right, { outputRoot });
+        } catch (error) {
+          if (/regular directory/.test(error?.message ?? "")) {
+            sendJson(response, 422, { error: "Runs directory must be a regular directory." });
+            return;
+          }
+          throw error;
+        }
         if (url.searchParams.get("format") === "markdown") {
           response.writeHead(200, { "content-type": "text/markdown; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff", "content-disposition": 'attachment; filename="case-comparison.md"' });
           response.end(renderComparisonMarkdown(comparison)); return;

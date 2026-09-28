@@ -1265,6 +1265,9 @@ function readStageArtifact(bundleDir, manifest, name) {
  * component revisions only.
  */
 export function summarizeRun(runId, { outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
+  // Same store rule as list, export, and prune. Otherwise a symlinked runs
+  // directory is followed and comparison reads the link target.
+  assertRunsDirectory(outputRoot);
   const { bundleDir, manifest } = readRunManifest(runsDirectory(outputRoot), runId);
   validateSavedManifest(manifest, bundleDir);
   const report = readRunReport(bundleDir, manifest);
@@ -1344,6 +1347,9 @@ const COMPARED_FIELDS = [
  * identical evidence.
  */
 export function compareRuns(leftId, rightId, { outputRoot = DEFAULT_PATHS.outputRoot } = {}) {
+  // summarizeRun reports a bad id as not-comparable. A symlinked store is a
+  // precondition failure, same as list and export, and must not be swallowed.
+  assertRunsDirectory(outputRoot);
   let left = null;
   let right = null;
   const errors = [];

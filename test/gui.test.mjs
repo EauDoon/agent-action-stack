@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { createHash } from "node:crypto";
 import { request } from "node:http";
-import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -637,6 +637,42 @@ test("GUI history and compare endpoints serve summaries and classifications", as
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
+});
+
+test("GUI compare refuses a symlinked runs directory", (t) => {
+  const outputRoot = mkdtempSync(join(tmpdir(), "aas-gui-runs-link-"));
+  const outside = mkdtempSync(join(tmpdir(), "aas-gui-runs-outside-"));
+  const runId = "2026-09-06T050000000Z-outside";
+  writeCase(outside, runId, {
+    report: {
+      run_id: runId,
+      flow: "decide -> act",
+      domain: "inventory",
+      policy_id: "outside-only-policy",
+      component_provenance: [],
+      stages: { decide: { status: "passed", policy_id: "outside-only-policy" }, act: { status: "skipped" }, prove: { status: "skipped" } },
+    },
+  });
+  try {
+    symlinkSync(join(outside, "runs"), join(outputRoot, "runs"));
+  } catch (error) {
+    if (["EPERM", "EACCES", "ENOSYS"].includes(error.code)) {
+      t.skip("symlinks are unavailable on this platform");
+      return;
+    }
+    throw error;
+  }
+  const server = createGuiServer({ outputRoot });
+  return new Promise((resolve) => server.listen(0, "127.0.0.1", resolve)).then(async () => {
+    try {
+      const compared = await requestServer(server, `/api/compare?a=${runId}&b=${runId}`);
+      assert.equal(compared.status, 422);
+      assert.match(compared.body, /regular directory/);
+      assert.doesNotMatch(compared.body, /outside-only-policy/);
+    } finally {
+      await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
 });
 
 test("GUI exposes a domain selector defaulting to refund", () => {
