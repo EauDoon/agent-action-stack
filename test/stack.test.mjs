@@ -153,11 +153,27 @@ test("lock mismatch rejects substituted or stale pre-existing dependencies", () 
   }
 });
 
-test("pre-existing dependency symlinks are rejected", () => {
+// Windows only permits symlink creation for elevated or Developer Mode
+// processes. Where the platform refuses, skip rather than report a false
+// failure; the Linux CI runners still exercise these paths.
+function linkOrSkip(t, target, path, type) {
+  try {
+    symlinkSync(target, path, type);
+  } catch (error) {
+    if (["EPERM", "EACCES", "ENOSYS"].includes(error.code)) {
+      t.skip("symlinks are unavailable on this platform");
+      return false;
+    }
+    throw error;
+  }
+  return true;
+}
+
+test("pre-existing dependency symlinks are rejected", (t) => {
   const component = loadComponentLock(LOCK)[1];
   const fixture = fakeDependency(component);
   const link = join(tempRoot(), component.name);
-  symlinkSync(fixture.target, link);
+  if (!linkOrSkip(t, fixture.target, link)) return;
   assert.throws(
     () => inspectDependencyDirectory(link, component, { command: fixture.command }),
     /regular directory/,
@@ -1590,12 +1606,12 @@ test("persistRunBundle rejects run ids readers already refuse", () => {
   assert.equal(existsSync(join(outputRoot, "runs", "...")), false);
 });
 
-test("a symlinked runs directory is not used as the case store", () => {
+test("a symlinked runs directory is not used as the case store", (t) => {
   const outputRoot = tempRoot();
   const outsideParent = tempRoot();
   const runId = "2026-09-06T050000000Z-outside";
   writeCase(outsideParent, runId);
-  symlinkSync(join(outsideParent, "runs"), join(outputRoot, "runs"));
+  if (!linkOrSkip(t, join(outsideParent, "runs"), join(outputRoot, "runs"))) return;
   assert.throws(() => listRuns({ outputRoot }), /regular directory/);
   assert.throws(() => pruneRuns({ outputRoot, keep: 1 }), /regular directory/);
   assert.throws(() => exportRunBundle(runId, { outputRoot }), /regular directory/);
