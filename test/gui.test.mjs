@@ -622,6 +622,13 @@ test("GUI history and compare endpoints serve summaries and classifications", as
 
     const same = await requestServer(server, "/api/compare?a=2026-09-06T050000000Z-one&b=2026-09-06T050000000Z-one");
     assert.equal(JSON.parse(same.body).classification, "identical");
+    assert.equal(JSON.parse(same.body).ok, true);
+
+    const missing = await requestServer(server, "/api/compare?a=2026-09-06T050000000Z-absent&b=2026-09-06T050000001Z-absent");
+    assert.equal(missing.status, 200);
+    const missingBody = JSON.parse(missing.body);
+    assert.equal(missingBody.classification, "not-comparable");
+    assert.equal(missingBody.ok, false);
 
     for (const query of ["", "?a=2026-09-06T050000000Z-one", "?a=../escape&b=x", "?a=x&b=y/z", "?a=..&b=x", "?a=.&b=x", "?a=...&b=x"]) {
       const rejected = await requestServer(server, `/api/compare${query}`);
