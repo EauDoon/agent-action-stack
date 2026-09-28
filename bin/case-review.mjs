@@ -118,7 +118,7 @@ export function parseInspectArgs(args) {
   for(let index=0;index<args.length;index++) {
     const token=args[index];
     if(token==='--root') {
-      if(seenRoot || !args[index+1] || args[index+1].startsWith('--')) throw new UsageError('inspect requires one output root path.');
+      if (seenRoot || !args[index + 1]?.trim() || args[index + 1].startsWith("--")) throw new UsageError("inspect requires one output root path.");
       seenRoot=true;outputRoot=args[++index];
     } else if(token==='--json'||token==='--markdown') {
       if(format!==null) throw new UsageError('Choose one inspect output format.');

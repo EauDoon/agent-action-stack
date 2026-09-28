@@ -13,6 +13,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Playwright setup note in the Quick start section of `README.md`.
 
 ### Fixed
+- `aas inspect --root` now rejects a blank path, matching the other saved-case
+  commands. A whitespace root used to be treated as a directory and failed
+  with a filesystem error.
 - The act stage now reads the rail bundle file with the same byte cap and
   symlink refusal as a saved case. The previous read followed a link and
   accepted a file larger than the child stdout cap.
