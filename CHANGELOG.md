@@ -13,6 +13,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Playwright setup note in the Quick start section of `README.md`.
 
 ### Fixed
+- Comparison and case summaries now refuse a `runs` directory that is a
+  symlink, matching list, export, and prune. The comparison path used to
+  follow the link and read the target tree. The GUI compare route returns
+  HTTP 422 for that refusal.
 - Verify saved case now returns HTTP 422 when the saved case is structurally
   invalid, the same distinction inspect already makes with 404 and 422. The
   route used to report that failure as HTTP 500.

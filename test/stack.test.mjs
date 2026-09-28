@@ -1615,6 +1615,8 @@ test("a symlinked runs directory is not used as the case store", (t) => {
   assert.throws(() => listRuns({ outputRoot }), /regular directory/);
   assert.throws(() => pruneRuns({ outputRoot, keep: 1 }), /regular directory/);
   assert.throws(() => exportRunBundle(runId, { outputRoot }), /regular directory/);
+  assert.throws(() => summarizeRun(runId, { outputRoot }), /regular directory/);
+  assert.throws(() => compareRuns(runId, runId, { outputRoot }), /regular directory/);
   assert.equal(existsSync(join(outsideParent, "runs", runId, "manifest.json")), true);
 });
 
