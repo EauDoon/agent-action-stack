@@ -45,9 +45,16 @@ const DOMAIN_FIXTURES = {
   },
 };
 
+class HandoffExit extends Error {
+  constructor(code) {
+    super("handoff exit");
+    this.exitCode = code;
+  }
+}
+
 function fail(reason) {
   process.stderr.write(`integrator example failed: ${reason}\n`);
-  process.exit(1);
+  throw new HandoffExit(1);
 }
 
 function parseArgs(argv) {
@@ -111,7 +118,7 @@ function main() {
     const evaluation = readJson("decide", decided);
     if (evaluation.passed !== true) {
       note("decide: policy refused the response; act and prove are skipped (fail-closed)");
-      process.exit(1);
+      throw new HandoffExit(1);
     }
     note(`decide: policy ${evaluation.policy_id} passed (${evaluation.rule_results.length} rules)`);
 
@@ -218,4 +225,12 @@ function main() {
   }
 }
 
-main();
+try {
+  main();
+} catch (error) {
+  if (error instanceof HandoffExit) {
+    process.exitCode = error.exitCode;
+  } else {
+    throw error;
+  }
+}
