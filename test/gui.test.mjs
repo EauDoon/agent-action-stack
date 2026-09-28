@@ -483,6 +483,12 @@ test("GUI replay reports conflicting, unavailable, malformed, and oversized impo
 
     const malformed = await replayPost(server, "{not json");
     assert.equal(malformed.status, 400);
+    // A body that is not itself JSON must not be salvaged from a trailing
+    // object. Child-stdout recovery is for process output, not this upload.
+    const embedded = await replayPost(server, 'note\n{"report":{"run_id":"embedded"},"stages":{}}');
+    assert.equal(embedded.status, 400);
+    const concatenated = await replayPost(server, '{"report":{"run_id":"a"}}\n{"report":{"run_id":"b"}}');
+    assert.equal(concatenated.status, 400);
     const notObject = await replayPost(server, "[]");
     assert.equal(notObject.status, 400);
     const empty = await replayPost(server, "   ");
