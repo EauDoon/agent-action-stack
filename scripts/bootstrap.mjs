@@ -48,6 +48,23 @@ export function assertFullStackNodeVersion({ version = process.versions.node } =
   return parsed;
 }
 
+/**
+ * The dependency root must be a real directory. A symlink is followed by
+ * checkout and provenance reads, so bootstrap and demo would use another tree.
+ */
+export function assertDependencyDirectory(depsDir) {
+  let stat;
+  try {
+    stat = lstatSync(depsDir);
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error("Dependency directory must be a regular directory.");
+  }
+}
+
 function normalizeRemote(value) {
   return value.trim().replace(/\.git$/, "").replace(/\/$/, "").toLowerCase();
 }
@@ -200,6 +217,7 @@ function runNpm(target, args) {
 export function prepareDependencies({ root: projectRoot = root, deps = join(projectRoot, "deps"), components = loadComponentLock(join(projectRoot, "stack-lock.json")), nodeVersion } = {}) {
   assertFullStackNodeVersion(nodeVersion === undefined ? {} : { version: nodeVersion });
   mkdirSync(deps, { recursive: true });
+  assertDependencyDirectory(deps);
   const prepared = [];
   for (const component of components) {
     const target = join(deps, component.name);

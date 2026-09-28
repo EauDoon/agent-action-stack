@@ -13,6 +13,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Playwright setup note in the Quick start section of `README.md`.
 
 ### Fixed
+- Bootstrap and provenance now refuse a `deps` directory that is a symlink.
+  Checkout and later reads followed the link, so a planted `deps` link was
+  accepted as the component root.
 - Saved-case GUI paths with malformed percent-encoding now return HTTP 400.
   `decodeURIComponent` used to throw, and the request became HTTP 500.
 - The workbench comparison panel now says the comparison is unavailable when
