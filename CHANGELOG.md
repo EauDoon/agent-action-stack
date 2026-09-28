@@ -13,6 +13,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Playwright setup note in the Quick start section of `README.md`.
 
 ### Fixed
+- `persistRunBundle` now uses the same run-id rule as readers. The old check
+  accepted `.`, `..`, and `...`, and `RegExp.test` stringified non-strings, so
+  a run id of `..` resolved outside `runs/`.
 - `npm test` now runs every declared test. The default process-isolation
   runner carries test events on stdout, and this suite also writes captured
   CLI output there, so the parent only reported the last few dozen tests and

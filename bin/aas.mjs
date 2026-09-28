@@ -1413,7 +1413,9 @@ export function persistRunBundle({
   exitCode,
   now = new Date().toISOString(),
 }) {
-  if (!/^[A-Za-z0-9._-]+$/.test(runId)) throw new Error("Invalid run id.");
+  // The same rule as readers. The regex alone accepts ".", "..", and "...",
+  // and `RegExp.test` stringifies non-strings, so ".." was a path escape.
+  if (!isValidRunId(runId)) throw new Error("Invalid run id.");
   const runsDir = join(outputRoot, "runs");
   const finalDir = join(runsDir, runId);
   const temporaryDir = join(runsDir, `.${runId}.${process.pid}.${randomUUID()}.tmp`);
