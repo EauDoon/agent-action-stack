@@ -727,7 +727,9 @@ export function runAct(
     }
     if (scratch !== null) {
       try {
-        payload.rail_bundle = JSON.parse(readFileSync(bundlePath, "utf8"));
+        // Same bounds as a saved case file. readFileSync followed a symlink
+        // and accepted a bundle larger than the child stdout cap.
+        payload.rail_bundle = readBoundedCaseJson(bundlePath);
       } catch (error) {
         throw attachChildDiagnostics(
           new Error(`act did not persist a readable rail bundle: ${error.message}`),
