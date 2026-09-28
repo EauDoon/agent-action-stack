@@ -13,6 +13,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Playwright setup note in the Quick start section of `README.md`.
 
 ### Fixed
+- `runDecide` now rejects a domain other than `refund` or `inventory`. Any
+  other value used to load the refund policy and could report a pass for the
+  wrong gate.
 - `GET /api/compare` now sets `ok` to false when the pair is not comparable,
   matching `aas compare --json`. It previously reported `ok: true` for a
   missing or unreadable pair. The HTTP status stays 200 so the workbench can
