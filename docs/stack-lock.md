@@ -61,6 +61,30 @@ is bumped only when the shape changes in a way that requires loader
 changes; existing tools keep reading older versions until the bump lands
 across all consumers.
 
+The integration proof also runs `test/component-compatibility.test.mjs` against
+the prepared components. It checks canonical bytes independently of producer
+round trips, both currency validation boundaries, and refusal of re-signed
+synthetic evidence whose currency contradicts the proposal. The historical
+`fixtures/legacy-rail-review.json` was exported using Rail `6c61e9f` and
+MandateBound `e526c4c`; it pins replay compatibility for an ordinary synthetic
+refund. Its public demonstration signatures establish no real-world provenance.
+
+An older artifact with numeric-looking object keys may contain signatures made
+with the former Rail canonical ordering. The current verifier does not try that
+obsolete ordering after verification fails. Preserve the original artifact and
+its recorded producer revision for historical inspection; do not rewrite its
+signatures or describe a newly generated case as the same evidence. A successful
+legacy fixture replay establishes compatibility for that fixture, not every
+previously accepted artifact or an alternate canonical profile.
+
+The MandateBound pin also corrects U+2028/U+2029 bytes under its existing
+RFC8785 profile. Legacy proofs containing those separators can fail current
+integrity checks. Keep original bytes and the exact producer commit for
+historical replay; version labels alone do not identify the affected behavior.
+There is no alternate-byte verification or automatic migration. Follow the
+[producer's compatibility guidance](https://github.com/EauDoon/mandatebound/blob/b51fe137958afe26eee052c5a129e5481ccae560/docs/PROTOCOL.md)
+before reissuing affected artifacts.
+
 ## Who can update
 
 The lock is owned by the Agent Action Stack maintainers. Updates land via

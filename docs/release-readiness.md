@@ -2,13 +2,20 @@
 
 This checklist describes the evidence required before a public versioning update.
 
+Current requirements: Node.js 22.12+ and Python 3.11+; the exact component pins
+come from `stack-lock.json`. CI includes unit, full-stack integration, and real
+Chromium browser workflows. The dated candidate records below are historical
+evidence for their stated commits, not current runtime or test-count claims.
+Local checks may install dependencies and write caches or temporary files; see
+[local write targets](architecture.md#local-write-targets).
+
 ## Source and dependency gates
 
 - [ ] Review the final raw tree and changed-file list.
 - [ ] Confirm `stack-lock.json` still contains the approved public URLs and commits:
   - Constitutional Agent Testbench: `16b2faa71b0f92b9afa15b13afad8c48da8132f4`
-  - Consequence Rail: `6c61e9fdcd1a4701afad1d2371abcb3f13bbab57`
-  - MandateBound: `e526c4c32ac61571757a98ca1a69189821c3dce7`
+  - Consequence Rail: `9f60ab3223970c22371c20d3584e8330674d997c` ([PR #67](https://github.com/EauDoon/consequence-rail/pull/67))
+  - MandateBound: `b51fe137958afe26eee052c5a129e5481ccae560` ([PR #102](https://github.com/EauDoon/mandatebound/pull/102))
 - [ ] Run bootstrap from a clean workspace and verify detached, clean, exact dependency checkouts.
 - [ ] Confirm no private repository, credential, or production endpoint is referenced.
 
@@ -24,8 +31,8 @@ This checklist describes the evidence required before a public versioning update
 ## Integration evidence, 2026-09-06 candidate
 
 Candidate: this branch at the pin-update commit (`chore/update-stack-pins-202609`;
-orchestrator base `a0e25144aaebff2885b67eb6b5b355c37a167f37`). Component pins
-are the reviewed merge SHAs above: testbench PR #20 (`16b2faa7`), rail PR #20
+orchestrator base `a0e25144aaebff2885b67eb6b5b355c37a167f37`). That candidate's
+component pins were testbench PR #20 (`16b2faa7`), rail PR #20
 (`64cb30`, includes the unknown-recourse receipt-refusal fix), MandateBound PR
 #26 (`3682a24`, includes the fast-uri advisory fix). No component was upgraded
 past its reviewed merge; the rail SHA supersedes the earlier `7cf59e79`
@@ -45,8 +52,8 @@ Clean-checkout proof (`/tmp/aas-clean`, fresh clone, no `deps/`, `dist/`, or
   modifications, HEAD equal to the pinned full SHA; remotes are the three
   public `EauDoon` repository URLs; MandateBound `npm ci` reports
   0 vulnerabilities and its `tsc` build produces `dist/cli.js`.
-- `npm test`: 51 passed, 0 failed (includes the lock-provenance fixture that
-  asserts the three pins above).
+- `npm test`: 51 passed, 0 failed (includes the lock-provenance fixture for
+  that candidate's three pins).
 - `npm run gui:smoke`: passed.
 - `node ./bin/aas.mjs demo`: pass path, `decide passed`, `act settled`,
   `CLOSED`, `flow: decide -> act`; bundle records stage artifacts plus

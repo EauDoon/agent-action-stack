@@ -159,6 +159,10 @@ async function main() {
     }
   }
 
+  const compatibility = run(process.execPath, ["--test", "test/component-compatibility.test.mjs"]);
+  check(compatibility.status === 0,
+    `component compatibility failed: ${compatibility.stdout.slice(-1800)}${compatibility.stderr.slice(-500)}`);
+
   runDemo([]);
   {
     const { manifest } = latestBundle();
