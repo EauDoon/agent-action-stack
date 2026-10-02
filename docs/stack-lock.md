@@ -69,6 +69,13 @@ synthetic evidence whose currency contradicts the proposal. The historical
 MandateBound `e526c4c`; it pins replay compatibility for an ordinary synthetic
 refund. Its public demonstration signatures establish no real-world provenance.
 
+The current Rail pin also binds a receipt's close time to its terminal event,
+so a clock advancing between reads still produces evidence that survives the
+same-case handoff and replay. The MandateBound pin rejects weak Ed25519 keys in
+caller-pinned CasePack checkpoint trust snapshots using its existing strict key
+validator. Ordinary valid evidence retains the same format; neither update
+rewrites old artifacts. The testbench runtime pin is unchanged.
+
 An older artifact with numeric-looking object keys may contain signatures made
 with the former Rail canonical ordering. The current verifier does not try that
 obsolete ordering after verification fails. Preserve the original artifact and

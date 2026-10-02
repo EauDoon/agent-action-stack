@@ -1424,18 +1424,17 @@ export function writeAtomicFile(
   const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
   let written = false;
   try {
-    writeFile(temporary, data, { encoding: "utf8", flag: "wx" });
+    const fd = openSync(temporary, "wx");
     written = true;
+    try { writeFile(fd, data, { encoding: "utf8" }); }
+    finally { closeSync(fd); }
     if (replace) rename(temporary, target);
     else link(temporary, target);
   } catch (error) {
     throw error;
   } finally {
     if (written) {
-      // Best-effort cleanup. Only attempt unlink when we know the
-      // temporary was created; if the write itself failed, the file
-      // does not exist and unlink would just throw ENOENT we have to
-      // swallow. Rethrow the original error above either way.
+      // Clean up only the temporary we created, including partial writes.
       try {
         unlink(temporary);
       } catch (cleanupError) {

@@ -13,7 +13,7 @@
     {
       "name": "consequence-rail",
       "repository": "https://github.com/EauDoon/consequence-rail.git",
-      "commit": "9f60ab3223970c22371c20d3584e8330674d997c",
+      "commit": "c430383c0a0931f0dcf17845d6f0e8ccf328615a",
       "expected_entrypoints": [
         "package.json",
         "cmd/crctl.js"
@@ -22,7 +22,7 @@
     {
       "name": "mandatebound",
       "repository": "https://github.com/EauDoon/mandatebound.git",
-      "commit": "b51fe137958afe26eee052c5a129e5481ccae560",
+      "commit": "708256d4e48babeb13079fac7589d172920a5c95",
       "expected_entrypoints": [
         "package.json",
         "package-lock.json",
