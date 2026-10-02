@@ -28,6 +28,11 @@ The `runDemo` function in `bin/aas.mjs` is the orchestrator. It runs three
 stages in order. Each stage returns a child result captured from a spawned
 process, and the orchestrator records the stage status into the report.
 
+The decide stage evaluates a response fixture. Its pass gates whether the act
+stage runs, but it is not a signed authorization over the rail proposal. The
+act stage constructs its own synthetic action inside the rail demo. Same-case
+binding begins with that rail bundle and its subsequent review and replay.
+
 ```
    decide (Constitutional Agent Testbench, Python)
         |
@@ -108,7 +113,24 @@ else: `test` (unit suite plus syntax check plus GUI smoke), `integration`
 or release step. It does not write to any registry, package index, or
 hosted target. `contents: read` is the only permission requested.
 
-The same boundary holds locally: `npm test`, `npm run integration`,
-`npm run example:review-handoff`, and `npm run test:browser` are read-only
-with respect to anything outside `.out/`. The orchestrator writes only to
-`.out/` for run bundles and to `.out/latest.json` for the latest pointer.
+## Local write targets
+
+Local verification does write files. Use a disposable checkout for integration
+and browser tests. The commands do not publish, deploy, or operate real accounts.
+
+| Command | Local writes |
+| --- | --- |
+| `npm ci --ignore-scripts` | Root `node_modules/` and npm's configured cache/log directory |
+| `npm run bootstrap` | Pinned public clones under `deps/`, MandateBound `node_modules/` and `dist/`, and npm cache/log files |
+| `aas demo`, GUI **Run stack**, integrator examples | `.out/runs/`, `.out/latest.json`, temporary handoff directories under the OS temporary directory, and Python bytecode caches under `deps/constitutional-agent-testbench/src/constitutional_agent_testbench/__pycache__/` unless bytecode writing is disabled |
+| `npm test`, `npm run gui:smoke` | Test fixtures, temporary case stores, and child-process scratch files under the OS temporary directory where needed |
+| `npm run integration` | Root install, dependency bootstrap/build, the demo writes above (including Python bytecode), and temporary copied verifier runtimes; invokes npm and Git |
+| Playwright install and `npm run test:browser` | Configured browser cache, `test-results/`, `playwright-report/`, temporary test case stores, and the GUI **Run stack** writes above (including `.out/` and Python bytecode) |
+| `aas runs`, `cases`, `compare`, `inspect`, `latest` | Read saved cases only; shell redirection can write the printed report |
+| `aas replay`, `verify`, GUI verification | Read the case store or import, write temporary verifier inputs, and remove scratch files afterward; do not execute an action or alter saved cases |
+| `aas export --out` | Writes the named export; existing files require explicit `--overwrite` |
+| `aas prune --keep` | Deletes eligible old runs under the selected output root; `--dry-run` previews without deletion |
+
+Saved-case commands honor `--root`. npm and Playwright honor their own cache
+configuration, and temporary directories use the operating system's configured
+temporary location. Interrupted processes can leave temporary files behind.

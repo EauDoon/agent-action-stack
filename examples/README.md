@@ -31,6 +31,10 @@ One journey across both synthetic domains (`--domain refund|inventory`):
 The pass path exits 0 after every binding verifies. The refusal path exits 1
 after the policy refuses, before anything executes.
 
+This is the primary same-case demonstration. The separate `--prove simulate`
+mode runs an unrelated canned dispute scenario. The testbench pass is a gate
+over a response fixture, not a signed authorization of the rail proposal.
+
 What it establishes: the policy gate passed for this response, the rail
 produced this outcome for this action, recourse was reserved before the
 effect, the rail's verifier accepts the persisted bytes under the synthetic
@@ -76,7 +80,7 @@ treats an observed effect as proof of external truth.
   connector's synthetic demo key. Verifier trust is supplied by the caller;
   nothing embedded in a bundle is trusted for its own integrity.
 - Caller-owned anchors (expected digests, expected action identity) are
-  separate from exported untrusted material. Rethem recomputation always runs
+  separate from exported untrusted material. Digest recomputation always runs
   over the actual bytes.
 - Source truth is never established. A recorded review proves the handoff
   and the digest binding, not the underlying external state.

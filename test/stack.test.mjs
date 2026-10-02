@@ -60,7 +60,7 @@ const PROVENANCE = [
   {
     name: "consequence-rail",
     repository: "https://github.com/EauDoon/consequence-rail.git",
-    commit: "6c61e9fdcd1a4701afad1d2371abcb3f13bbab57",
+    commit: "9f60ab3223970c22371c20d3584e8330674d997c",
     origin: "https://github.com/EauDoon/consequence-rail.git",
     detached: true,
     clean: true,
@@ -69,7 +69,7 @@ const PROVENANCE = [
   {
     name: "mandatebound",
     repository: "https://github.com/EauDoon/mandatebound.git",
-    commit: "e526c4c32ac61571757a98ca1a69189821c3dce7",
+    commit: "b51fe137958afe26eee052c5a129e5481ccae560",
     origin: "https://github.com/EauDoon/mandatebound.git",
     detached: true,
     clean: true,

@@ -129,15 +129,21 @@ function main() {
     await inventory.execute(inventoryProposal, inventoryProposal.idempotency_key);
     const first = await inventory.remediate(inventoryProposal, { connector_commitment: reservation }, "remedy:a");
     const onHandAfterFirst = inventory.inventory.get("sku_demo_1");
-    const second = await inventory.remediate(inventoryProposal, { connector_commitment: reservation }, "remedy:b");
+    const replay = await inventory.remediate(inventoryProposal, { connector_commitment: reservation }, "remedy:a");
+    let secondError = null;
+    try { await inventory.remediate(inventoryProposal, { connector_commitment: reservation }, "remedy:b"); }
+    catch (error) { secondError = error.code; }
     out({
-      first: first.status, second: second.status,
+      first: first.status, sameResult: JSON.stringify(first) === JSON.stringify(replay),
+      recourse: inventory.recourseStatus(reservation.reservation_token).status,
+      secondError,
       restoredOnce: inventory.inventory.get("sku_demo_1") === onHandAfterFirst,
       onHand: inventory.inventory.get("sku_demo_1"),
     });
   `);
   check(RULES[4],
-    remedy.first === "remediated" && remedy.second === "failed" && remedy.restoredOnce === true,
+    remedy.first === "remediated" && remedy.sameResult === true && remedy.recourse === "consumed"
+      && remedy.secondError === "RECOURSE_NOT_ACTIVE" && remedy.restoredOnce === true,
     `the remedy must reverse once and refuse a second restoration (saw ${JSON.stringify(remedy)})`);
 
   const remedyStatus = run(`

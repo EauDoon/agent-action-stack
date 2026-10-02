@@ -8,6 +8,10 @@
 
 Agent Action Stack is a thin orchestrator. It does not re-implement the libraries. It runs them in a fixed order so a visitor can see how they compose.
 
+The testbench pass gates orchestration for a response fixture. It is not a
+signed authorization over the rail's separately constructed synthetic proposal.
+The same-case workflow below binds the rail outcome to its review and replay.
+
 ![Reference workflow from policy evaluation through recourse-gated action and outcome verification, with an optional dispute evidence simulation. Policy failure stops execution.](.github/assets/project-overview.svg)
 
 On policy failure the stack stops. On a clean `settled` outcome, MandateBound is skipped unless you pass `--dispute`.
@@ -37,8 +41,17 @@ Private repositories are never cloned or modified.
 
 ```bash
 npm run bootstrap
-npm run demo
+node ./bin/aas.mjs demo --fault duplicate --prove rail
 ```
+
+This primary demonstration compensates a duplicate synthetic refund, verifies
+its rail receipt, and records a MandateBound review of those same bytes. Expect
+`act_outcome: compensated`, `prove_mode: rail-review`, and
+`flow: decide -> act -> prove`. A recorded handoff does not establish source
+truth or legal effect. Follow the export/replay commands below to review it
+without executing the action again.
+
+For a clean settlement that needs no review, run `npm run demo`.
 
 Optional, only for the browser test suite: Playwright needs a Chromium
 binary. After `npm install`, run `npx playwright install chromium` once
@@ -69,10 +82,10 @@ Fail closed at decide:
 npm run demo:fail
 ```
 
-Force the dispute path via a compensated rail outcome:
+Review a compensated rail outcome using the same case:
 
 ```bash
-npm run demo:dispute
+node ./bin/aas.mjs demo --fault duplicate --prove rail
 ```
 
 Expected flow line:
@@ -81,11 +94,15 @@ Expected flow line:
 flow: decide -> act -> prove
 ```
 
-Review the same case instead of simulating one:
+The separate canned simulation remains available explicitly:
 
 ```bash
-node ./bin/aas.mjs demo --fault duplicate --prove rail
+node ./bin/aas.mjs demo --fault duplicate --prove simulate
 ```
+
+`npm run demo:dispute` retains this simulation behavior for compatibility. Its
+MandateBound scenario is unrelated to the rail case and does not produce a
+same-case handoff. CLI defaults are unchanged.
 
 The rail-review path persists the act-stage rail bundle, verifies it with the
 rail's own verifier, and binds it into a MandateBound review record for the
@@ -182,6 +199,9 @@ same-case rail review; every result and export stays tied to its run id.
 long-running process. The server binds only to `127.0.0.1` on port
 8787 by default (`AAS_GUI_PORT` selects another loopback port), requires the
 exact loopback Host and same-origin boundary, and uses POST for a run.
+Choose the **Duplicate compensation and review** preset for the
+primary handoff workflow. Applying it only prepares the controls; **Run stack**
+starts the synthetic action.
 
 ## Tests
 
@@ -193,6 +213,9 @@ npm run check
 `npm test` is the unit suite (orchestrator and GUI models). `npm run
 integration` proves the pinned components from a clean checkout, and
 `npm run example:review-handoff` runs the integrator example.
+Installation, bootstrap, tests, and replay can write dependencies, caches, or
+temporary files. See the [local write targets](docs/architecture.md#local-write-targets)
+before running them in an existing checkout.
 
 Real browser workflow tests drive the GUI through actual clicks, file
 selection, and asynchronous responses with Playwright (Chromium only, to
