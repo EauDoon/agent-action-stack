@@ -60,7 +60,7 @@ const PROVENANCE = [
   {
     name: "consequence-rail",
     repository: "https://github.com/EauDoon/consequence-rail.git",
-    commit: "9f60ab3223970c22371c20d3584e8330674d997c",
+    commit: "c430383c0a0931f0dcf17845d6f0e8ccf328615a",
     origin: "https://github.com/EauDoon/consequence-rail.git",
     detached: true,
     clean: true,
@@ -69,7 +69,7 @@ const PROVENANCE = [
   {
     name: "mandatebound",
     repository: "https://github.com/EauDoon/mandatebound.git",
-    commit: "b51fe137958afe26eee052c5a129e5481ccae560",
+    commit: "708256d4e48babeb13079fac7589d172920a5c95",
     origin: "https://github.com/EauDoon/mandatebound.git",
     detached: true,
     clean: true,
@@ -783,10 +783,16 @@ test("act and prove child-process errors keep the run isolated", async () => {
 test("atomic writes leave no partial target or temporary file after a write failure", () => {
   const outputRoot = tempRoot();
   const target = join(outputRoot, "atomic", "manifest.json");
+  mkdirSync(join(outputRoot, "atomic"));
+  writeFileSync(target, "original evidence");
   assert.throws(() => writeAtomicFile(target, "payload", {
-    writeFile: () => { throw new Error("simulated partial write"); },
+    writeFile: (fd) => {
+      writeFileSync(fd, "partial evidence");
+      throw new Error("simulated partial write");
+    },
   }), /partial write/);
-  assert.equal(readdirSync(join(outputRoot, "atomic")).length, 0);
+  assert.equal(readFileSync(target, "utf8"), "original evidence");
+  assert.deepEqual(readdirSync(join(outputRoot, "atomic")), ["manifest.json"]);
 });
 
 test("persistRunBundle refuses a final-directory collision", () => {

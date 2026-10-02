@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { replayBundle, runProveRail } from "../bin/aas.mjs";
 import { canonicalJson, digest } from "../deps/consequence-rail/src/canonical.js";
-import { createDemoRuntime, buildRefundProposal, runRefundDemo } from "../deps/consequence-rail/src/demo.js";
+import { createDemoRuntime, buildRefundProposal, prepareRefund, runRefundDemo } from "../deps/consequence-rail/src/demo.js";
 import { validateSettlementBundle } from "../deps/consequence-rail/src/bundle-validation.js";
 import { MemoryEventStore } from "../deps/consequence-rail/src/event-store.js";
 import { createDemoSigner, signArtifact } from "../deps/consequence-rail/src/signing.js";
@@ -62,4 +62,21 @@ test("ordinary synthetic case exported by the previous pins still replays", () =
   const result = replayBundle(legacy);
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.ok(result.checks.every((check) => check.passed));
+});
+
+test("moving-clock rail evidence survives the same-case handoff and replay", async () => {
+  let tick = Date.parse("2035-01-01T00:00:00.000Z");
+  const runtime = createDemoRuntime({ clock: { now: () => new Date(tick++).toISOString() } });
+  const { actionId } = prepareRefund(runtime);
+  await runtime.rail.execute(actionId, { fault: "duplicate" });
+  await runtime.rail.verifyOutcome(actionId);
+  await runtime.rail.remediate(actionId);
+  const bundle = runtime.rail.exportBundle(actionId, { profile: "audit" });
+  const proved = runProveRail(bundle);
+  assert.equal(proved.ok, true);
+  const replayed = replayBundle({
+    report: { run_id: "moving-clock" },
+    stages: { act: { action_id: actionId, rail_bundle: bundle }, prove: proved.raw },
+  });
+  assert.equal(replayed.ok, true, JSON.stringify(replayed));
 });

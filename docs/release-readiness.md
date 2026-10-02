@@ -14,8 +14,8 @@ Local checks may install dependencies and write caches or temporary files; see
 - [ ] Review the final raw tree and changed-file list.
 - [ ] Confirm `stack-lock.json` still contains the approved public URLs and commits:
   - Constitutional Agent Testbench: `16b2faa71b0f92b9afa15b13afad8c48da8132f4`
-  - Consequence Rail: `9f60ab3223970c22371c20d3584e8330674d997c` ([PR #67](https://github.com/EauDoon/consequence-rail/pull/67))
-  - MandateBound: `b51fe137958afe26eee052c5a129e5481ccae560` ([PR #102](https://github.com/EauDoon/mandatebound/pull/102))
+  - Consequence Rail: `c430383c0a0931f0dcf17845d6f0e8ccf328615a` ([PR #68](https://github.com/EauDoon/consequence-rail/pull/68))
+  - MandateBound: `708256d4e48babeb13079fac7589d172920a5c95` ([PR #103](https://github.com/EauDoon/mandatebound/pull/103))
 - [ ] Run bootstrap from a clean workspace and verify detached, clean, exact dependency checkouts.
 - [ ] Confirm no private repository, credential, or production endpoint is referenced.
 
