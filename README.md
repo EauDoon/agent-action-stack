@@ -210,7 +210,10 @@ npm test
 npm run check
 ```
 
-`npm test` is the unit suite (orchestrator and GUI models). `npm run
+`npm test` is the unit suite (orchestrator and GUI models). `npm run check`
+runs the unit suite and then the syntax gate, which parses every tracked
+JavaScript module with `node --check`; the module list comes from
+`git ls-files`, so a new script is covered without editing CI. `npm run
 integration` proves the pinned components from a clean checkout, and
 `npm run example:review-handoff` runs the integrator example.
 Installation, bootstrap, tests, and replay can write dependencies, caches, or

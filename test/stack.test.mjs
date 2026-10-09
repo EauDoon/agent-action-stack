@@ -8,6 +8,7 @@ import { Readable } from "node:stream";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertFullStackNodeVersion, compareVersionTuples, isEntrypoint, loadComponentLock, inspectDependencyDirectory, MIN_FULL_STACK_NODE, npmInvocation, parseNodeVersion, prepareDependencies } from "../scripts/bootstrap.mjs";
+import { checkSyntax, listSyntaxTargets } from "../scripts/check-syntax.mjs";
 import {
   buildRailReviewRequest,
   CHILD_JSON_LIMIT,
@@ -2193,6 +2194,42 @@ test("review handoff removes its scratch directory when decide cannot start", ()
 test('review handoff example honors the explicit interpreter override', () => {
   const child=spawnSync(process.execPath,[join(ROOT,'examples/review-handoff.mjs')],{cwd:ROOT,encoding:'utf8',timeout:5000,env:{...process.env,AAS_PYTHON:'aas-synthetic-missing-python'}});
   assert.equal(child.status,1);assert.match(child.stderr,/AAS_PYTHON/);assert.match(child.stderr,/did not report a usable Python version/);
+});
+
+test("syntax gate lists every tracked module and reports a parse failure", () => {
+  const targets = listSyntaxTargets(ROOT);
+  for (const file of [
+    "bin/aas.mjs",
+    "bin/aas-gui.mjs",
+    "bin/aas-gui-worker.mjs",
+    "bin/case-review.mjs",
+    "examples/connector-conformance.mjs",
+    "examples/review-handoff.mjs",
+    "playwright.config.mjs",
+    "scripts/bootstrap.mjs",
+    "scripts/check-syntax.mjs",
+    "scripts/integration-check.mjs",
+    "test/browser/workbench.spec.mjs",
+    "test/component-compatibility.test.mjs",
+    "test/gui.test.mjs",
+    "test/stack.test.mjs",
+  ]) {
+    assert.ok(targets.includes(file), `syntax gate does not list ${file}`);
+  }
+  assert.ok(targets.every((file) => /\.(?:mjs|cjs|js)$/.test(file) && !file.includes("\\")));
+  assert.ok(!targets.some((file) => /^(?:deps|node_modules|\.out)\//.test(file)));
+
+  // Without Git the gate walks the tree and still skips generated folders.
+  const walked = listSyntaxTargets(ROOT, { command: () => ({ status: 128, stdout: "", stderr: "not a git repository" }) });
+  assert.ok(walked.includes("bin/aas.mjs") && walked.includes("scripts/check-syntax.mjs"));
+  assert.ok(!walked.some((file) => /^(?:deps|node_modules|\.out)\//.test(file)));
+
+  const scratch = tempRoot();
+  writeFileSync(join(scratch, "valid.mjs"), "export const ok = 1;\n");
+  writeFileSync(join(scratch, "broken.mjs"), "export const = ;\n");
+  const failures = checkSyntax(["valid.mjs", "broken.mjs"], { cwd: scratch });
+  assert.deepEqual(failures.map((failure) => failure.file), ["broken.mjs"]);
+  assert.match(failures[0].detail, /SyntaxError/);
 });
 
 test("npm test reports every declared test", () => {

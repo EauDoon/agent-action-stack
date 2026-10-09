@@ -17,7 +17,8 @@
     "test": "node --test --experimental-test-isolation=none test/gui.test.mjs test/stack.test.mjs",
     "integration": "node scripts/integration-check.mjs",
     "example:review-handoff": "node examples/review-handoff.mjs",
-    "check": "npm test",
+    "check": "npm test && npm run check:syntax",
+    "check:syntax": "node scripts/check-syntax.mjs",
     "test:browser": "playwright test",
     "example:connector-conformance": "node examples/connector-conformance.mjs"
   },

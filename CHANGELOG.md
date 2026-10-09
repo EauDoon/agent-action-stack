@@ -90,6 +90,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
   proof failed. Only the raw child payload is stripped now.
 
 ### Changed
+- `npm run check` now runs the unit suite and a syntax gate,
+  `npm run check:syntax`, which parses every module `git ls-files` reports
+  with `node --check`. CI's test job runs the same gate in place of a
+  hand-written list of nine files, which had already drifted once. A new
+  `.gitattributes` pins LF line endings, so a Windows checkout no longer
+  turns every tracked file into a CRLF modification.
 - `aas help` now documents the whole CLI surface. The usage block listed
   neither `aas runs` nor `aas prune` although both are dispatched, the command
   list omitted `help`, and the option reference omitted nine accepted flags:

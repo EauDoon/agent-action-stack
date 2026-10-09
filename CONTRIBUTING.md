@@ -41,10 +41,14 @@ contributions.
 ## Local checks
 
 ```bash
-npm test
+npm run check
 npm run integration
 npm run example:review-handoff
 ```
+
+`npm run check` is the unit suite (`npm test`) followed by the syntax gate
+(`npm run check:syntax`), which parses every tracked JavaScript module.
+`.gitattributes` keeps every text file LF, including on Windows checkouts.
 
 `npm run test:browser` requires Playwright Chromium:
 
