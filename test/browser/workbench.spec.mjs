@@ -67,6 +67,11 @@ test("refusal shows policy refusal and skips act and prove", async ({ page }) =>
   await expect(page.locator("#summary")).toContainText("act: skipped");
   await expect(page.locator("#summary")).toContainText("prove: skipped");
   await expect(page.locator("#bindings")).toContainText("action: none");
+  // The outcome is announced in the visible status, not only in the
+  // collapsed raw report.
+  await expect(page.locator("#run-status")).toBeVisible();
+  await expect(page.locator("#run-status")).toContainText("finished");
+  await expect(page.locator("#run-status")).toContainText("decide -> stop (policy failed)");
 });
 
 test("repeated runs replace the previous summary instead of stacking", async ({ page }) => {

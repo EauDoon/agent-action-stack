@@ -328,6 +328,7 @@ export function renderPage() {
 <label><input id="dispute" type="checkbox"> force dispute proof</label>
 <label>Prove <select id="prove"><option value="simulate">separate canned simulation</option><option value="rail">same-case rail review</option></select></label>
 <br><button id="run">Run stack</button>
+<p id="run-status" role="status" aria-live="polite"></p>
 <a id="download" class="download" download="agent-action-stack-run.json">Download run bundle</a></div>
 <div class="panel" id="summary" aria-live="polite"></div>
 <div class="panel" id="bindings"></div>
@@ -371,6 +372,7 @@ document.getElementById('apply-scenario').addEventListener('click',()=>{
 });
 for(const name of ['response','fault','prove','dispute']) document.getElementById(name).addEventListener('change',()=>{ document.getElementById('scenario-note').textContent='Custom options selected. Review the controls before running.'; });
 const output=document.getElementById('output');
+const runStatus=document.getElementById('run-status');
 const summary=document.getElementById('summary');
 const bindings=document.getElementById('bindings');
 const runButton=document.getElementById('run');
@@ -477,17 +479,23 @@ runButton.addEventListener('click',async()=>{
   summary.innerHTML='';
   bindings.innerHTML='';
   clearImported();
-  output.textContent='Running...';
+  // Progress and failures go to the visible status line, which screen
+  // readers announce; #output under the collapsed details holds raw JSON only.
+  runStatus.textContent='Running the synthetic stack...';
+  output.textContent='';
   const query=new URLSearchParams({response:document.getElementById('response').value,fault:document.getElementById('fault').value,prove:document.getElementById('prove').value,domain:document.getElementById('domain').value});
   if(document.getElementById('dispute').checked) query.set('dispute','1');
   let runBody;
   try {
     const response=await fetch('/api/run?'+query,{method:'POST'});
     runBody=await response.json();
-  } catch(error) { if(token!==latestToken) return; output.textContent='Request failed: '+error.message; runButton.disabled=false; return; }
+  } catch(error) { if(token!==latestToken) return; runStatus.textContent='Run request failed: '+error.message; runButton.disabled=false; return; }
   if(token!==latestToken) return;
-  if(!runBody || typeof runBody.run_id!=='string') { output.textContent='Request failed: '+(runBody?.error ?? 'No run identity returned.'); runButton.disabled=false; return; }
+  if(!runBody || typeof runBody.run_id!=='string') { runStatus.textContent='Run not started: '+(runBody?.error ?? 'No run identity returned.'); runButton.disabled=false; return; }
   const runId=runBody.run_id;
+  const finished=runBody.exit_code!==0
+    ? 'Run '+runId+' finished with a stage failure; see the summary.'
+    : 'Run '+runId+' finished: '+(typeof runBody.report?.flow==='string'?runBody.report.flow:'flow unavailable');
   output.textContent=JSON.stringify(runBody.report ?? runBody,null,2);
   try { summary.innerHTML=summaryModel(runBody.report ?? {}); } catch(error) { summary.innerHTML='<p class="error">Summary unavailable.</p>'; }
   let bundle;
@@ -496,7 +504,7 @@ runButton.addEventListener('click',async()=>{
     bundle=await bundleResponse.json();
     if(bundleResponse.ok===false) throw new Error(bundle?.error ?? 'Bundle request failed.');
     validateRunBundle(bundle,runId);
-  } catch(error) { if(token!==latestToken) return; bindings.textContent='Bundle unavailable: '+error.message; runButton.disabled=false; return; }
+  } catch(error) { if(token!==latestToken) return; bindings.textContent='Bundle unavailable: '+error.message; runStatus.textContent='Run '+runId+' finished, but its bundle is unavailable.'; runButton.disabled=false; return; }
   if(token!==latestToken) return;
   let bindingHtml;
   try { bindingHtml=await bindingsModel(bundle); } catch(error) { bindingHtml='<p class="error">Bindings unavailable.</p>'; }
@@ -505,6 +513,7 @@ runButton.addEventListener('click',async()=>{
   if(token!==latestToken) return;
   download.href='/api/bundle/'+encodeURIComponent(runId);
   download.style.display='inline-block';
+  runStatus.textContent=finished;
   runButton.disabled=false;
 });
 replayButton.addEventListener('click',async()=>{

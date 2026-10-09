@@ -44,6 +44,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
   `not_reached`, so the GUI summary and the saved-case review disagreed about
   the same run. The GUI summary also labels the `act_failed` skip reason
   ("act failed") instead of printing the raw token.
+- The workbench now reports run progress and failures in a visible status line
+  under **Run stack** (`#run-status`, announced by screen readers): running,
+  run not started (including the busy 503 and the `npm run bootstrap` hint
+  when `deps/` is missing), request failed, finished with its flow, finished
+  with a stage failure, and finished without a bundle. Those messages used
+  to go only to the raw report inside a collapsed `<details>`, so a click on
+  **Run stack** before bootstrapping appeared to do nothing. The raw report
+  now holds only the run JSON.
 - Saved-case review now includes persisted stage stderr. `aas inspect` and
   the Markdown review omitted the diagnostic that the run report already
   stored, so a failed act looked like it had no child output.

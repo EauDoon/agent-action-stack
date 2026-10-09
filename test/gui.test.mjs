@@ -321,7 +321,7 @@ function pageScript() {
 
 function stubDocument() {
   const elements = {};
-  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count", "inspect-case", "saved-download", "saved-status", "saved-summary", "saved-bindings", "scenario", "apply-scenario", "scenario-note", "restore-settings", "older-history", "history-page-status", "saved-case-id", "lookup-case", "saved-link", "replay-saved", "saved-review-status", "saved-review-result", "saved-artifacts", "saved-report", "comparison-download"]) {
+  for (const id of ["response", "fault", "dispute", "prove", "run", "run-status", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count", "inspect-case", "saved-download", "saved-status", "saved-summary", "saved-bindings", "scenario", "apply-scenario", "scenario-note", "restore-settings", "older-history", "history-page-status", "saved-case-id", "lookup-case", "saved-link", "replay-saved", "saved-review-status", "saved-review-result", "saved-artifacts", "saved-report", "comparison-download"]) {
     elements[id] = { value: "pass", checked: false, disabled: false, textContent: "", innerHTML: "", href: null, style: {}, listeners: {},
       addEventListener(name, fn) { const prior = this.listeners[name]; this.listeners[name] = prior ? (...args) => { prior(...args); return fn(...args); } : fn; },
       removeAttribute(name) { delete this[name]; } };
@@ -373,9 +373,58 @@ test("page script surfaces request failures without stale exports", async () => 
   const fetch = () => Promise.reject(new Error("boom"));
   const ui = run(document, fetch, globalThis.crypto);
   await ui.click();
-  assert.match(document.elements.output.textContent, /Request failed: boom/);
+  assert.equal(document.elements["run-status"].textContent, "Run request failed: boom");
+  assert.equal(document.elements.output.textContent, "");
   assert.equal(document.elements.download.href, undefined);
   assert.equal(document.elements.run.disabled, false);
+});
+
+test("page script announces run progress, refusals, and outcomes in the visible status", async () => {
+  const script = pageScript();
+  const run = new Function("document", "fetch", "crypto", `${script}; return { click: () => document.getElementById('run').listeners.click() };`);
+  const page = renderPage();
+  // The status sits in the run panel, outside the collapsed raw-report details.
+  assert.match(page, /<button id="run">Run stack<\/button>\s*<p id="run-status" role="status" aria-live="polite"><\/p>/);
+  assert.ok(page.indexOf('id="run-status"') < page.indexOf("<details>"));
+
+  const busy = "Another run or replay is already running; wait for it to finish.";
+  const missingDeps = "Missing deps/constitutional-agent-testbench. Run: npm run bootstrap";
+  for (const error of [busy, missingDeps]) {
+    const document = stubDocument();
+    let release;
+    const fetch = () => new Promise((resolve) => { release = () => resolve({ ok: false, json: async () => ({ error }) }); });
+    const ui = run(document, fetch, globalThis.crypto);
+    const pending = ui.click();
+    assert.equal(document.elements["run-status"].textContent, "Running the synthetic stack...");
+    release();
+    await pending;
+    assert.equal(document.elements["run-status"].textContent, `Run not started: ${error}`);
+    assert.equal(document.elements.run.disabled, false);
+  }
+
+  const bundleFor = (url) => {
+    const id = decodeURIComponent(url.split("/").at(-1));
+    return { report: { run_id: id, stages: {} }, manifest: { run_id: id }, stages: {} };
+  };
+  const completed = stubDocument();
+  await run(completed, async (url) => ({ json: async () => (url.startsWith("/api/run")
+    ? { run_id: "run-ok", exit_code: 0, report: { flow: "decide -> stop (policy failed)", stages: {} } }
+    : bundleFor(url)) }), globalThis.crypto).click();
+  assert.equal(completed.elements["run-status"].textContent, "Run run-ok finished: decide -> stop (policy failed)");
+  assert.match(completed.elements.output.textContent, /"flow": "decide -> stop \(policy failed\)"/);
+
+  const failed = stubDocument();
+  await run(failed, async (url) => ({ json: async () => (url.startsWith("/api/run")
+    ? { run_id: "run-bad", exit_code: 1, report: { flow: "decide -> act error", stages: {} } }
+    : bundleFor(url)) }), globalThis.crypto).click();
+  assert.equal(failed.elements["run-status"].textContent, "Run run-bad finished with a stage failure; see the summary.");
+
+  const unavailable = stubDocument();
+  await run(unavailable, async (url) => (url.startsWith("/api/run")
+    ? { json: async () => ({ run_id: "run-gone", exit_code: 0, report: { flow: "decide -> act", stages: {} } }) }
+    : { ok: false, json: async () => ({ error: "Saved case not found." }) }), globalThis.crypto).click();
+  assert.equal(unavailable.elements["run-status"].textContent, "Run run-gone finished, but its bundle is unavailable.");
+  assert.match(unavailable.elements.bindings.textContent, /Saved case not found/);
 });
 
 test("GUI rail run and CLI agree on the same review binding", async () => {
@@ -811,7 +860,7 @@ test("page reports actionable API failures and refuses mismatched bundle exports
     await run(document, fetch, globalThis.crypto)();
     assert.equal(document.elements.download.href, undefined);
     assert.equal(document.elements.run.disabled, false);
-    assert.match(mismatch ? document.elements.bindings.textContent : document.elements.output.textContent, mismatch ? /identity does not match/ : /Another run is active/);
+    assert.match(mismatch ? document.elements.bindings.textContent : document.elements["run-status"].textContent, mismatch ? /identity does not match/ : /Run not started: Another run is active/);
   }
 });
 
