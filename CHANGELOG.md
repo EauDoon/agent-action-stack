@@ -182,6 +182,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
   it passed even when the page renderer or a route was broken. The rendered
   helper list is now a single `PAGE_HELPERS` constant shared by `renderPage`
   and the smoke check.
+- The connector conformance example now runs rules 2 to 6 on both synthetic
+  connectors and measures the effect itself: active refunds bound to the
+  action, and inventory on hand against the connector's baseline. It used to
+  touch the refund connector only for capability advertisement and checked
+  only call counts and equal return values, so it could not see a second
+  effect or an incomplete reversal. The refund remedy check covers the
+  duplicate fault (only the duplicate is voided, the primary stays active)
+  and a clean refund (`no_change`).
 
 ### Security
 - Every CI checkout now sets `persist-credentials: false`. The integration and

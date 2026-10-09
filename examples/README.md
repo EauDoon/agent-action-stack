@@ -49,12 +49,27 @@ protocol compliance, or that any real-world action is reversible or safe.
 
 ## connector-conformance.mjs
 
-The connector contract, exercised against both real synthetic connectors:
-capability advertisement, recourse reservation refusals (unknown capability,
-undersized scope, cross-domain action), at-most-once execution per
-idempotency key, reconciliation without re-execution, a remedy that reverses
-only the effect bound to the action and only once, and remedy status
-confirmation.
+The connector contract, exercised rule by rule against both synthetic
+connectors (refund and inventory), measuring the effect rather than only the
+return values:
+
+1. capability advertisement: connector, actions, remedies, and custody
+2. recourse reservation: a valid scope is accepted, and an unknown
+   capability, an undersized scope, and a cross-domain action are refused
+3. at-most-once execution: two executes with one idempotency key leave
+   exactly one active refund, and take the allocated quantity off on-hand
+   stock once
+4. reconciliation: `status` returns the recorded result without another
+   execute call or any change to the effect
+5. remedy: the inventory remedy returns on-hand stock exactly to its
+   baseline; the refund remedy voids only the duplicate refund created by
+   the duplicate fault and keeps the primary, and a clean refund remediates
+   to `no_change`. Replaying the same remedy key returns the same result,
+   and a second key is refused with `RECOURSE_NOT_ACTIVE`
+6. remedy status: the recorded remedy result is confirmed, and an unknown
+   key reports `unknown`
+
+Each rule prints `ok <rule> (refund, inventory)`; the first violation exits 1.
 
 It is a synthetic self-check of the shipped connectors. It does not certify
 any real connector, provider, or external effect.
