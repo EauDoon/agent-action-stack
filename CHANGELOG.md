@@ -69,6 +69,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
   half-initialized checkout names the directory to remove; a failed command
   now includes the tool's own error text; and bootstrap errors print
   `bootstrap failed: <reason>` instead of a stack trace.
+- The review-handoff example now gates refunds on the stack's own policy,
+  `fixtures/policy.json` (`aas-refund-gate-v1`, 6 rules), with the stack's
+  response fixtures. It used the testbench checkout's 5-rule example policy,
+  so step 1 did not demonstrate the gate that `aas demo` in step 6 applies.
+  The example now fails if step 1 or the orchestrated run reports a policy
+  other than the domain's gate.
 - Saved-case review now includes persisted stage stderr. `aas inspect` and
   the Markdown review omitted the diagnostic that the run report already
   stored, so a failed act looked like it had no child output.

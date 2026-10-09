@@ -20,7 +20,10 @@ npm run example:connector-conformance
 
 One journey across both synthetic domains (`--domain refund|inventory`):
 
-1. policy evaluation with constitutional-agent-testbench
+1. policy evaluation with constitutional-agent-testbench, against the same
+   gate `aas demo` uses: `fixtures/policy.json` (`aas-refund-gate-v1`) or
+   `fixtures/inventory.policy.json` (`aas-inventory-gate-v1`). The example
+   fails if step 1 or the orchestrated run in step 6 reports another policy.
 2. execution with consequence-rail, which reserves recourse before the
    permit and persists the settlement bundle
 3. evidence inspection: the observed facts and the receipt's digests

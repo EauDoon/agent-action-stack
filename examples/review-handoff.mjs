@@ -30,17 +30,21 @@ const testbenchDir = join(root, "deps", "constitutional-agent-testbench");
 const railDir = join(root, "deps", "consequence-rail");
 const mandateboundDir = join(root, "deps", "mandatebound");
 
+// The same gates `aas demo` applies (runDecide in bin/aas.mjs), so steps 1
+// and 6 evaluate one policy. `policyId` is checked against both outputs.
 const DOMAIN_FIXTURES = {
   refund: {
-    policy: "examples/policy.json",
-    pass: "examples/passing-response.json",
-    fail: "examples/failing-response.json",
+    policy: join(root, "fixtures", "policy.json"),
+    pass: join(root, "fixtures", "response.pass.json"),
+    fail: join(root, "fixtures", "response.fail.json"),
+    policyId: "aas-refund-gate-v1",
     action: "demo.refund.issue/v1",
   },
   inventory: {
     policy: join(root, "fixtures", "inventory.policy.json"),
     pass: join(root, "fixtures", "inventory.response.pass.json"),
     fail: join(root, "fixtures", "inventory.response.fail.json"),
+    policyId: "aas-inventory-gate-v1",
     action: "demo.inventory.allocate/v1",
   },
 };
@@ -116,6 +120,9 @@ function main() {
     ], { cwd: testbenchDir, env: { ...process.env, PYTHONPATH: join(testbenchDir, "src"), PYTHONUTF8: "1" } });
     if (decided.status !== 0) fail(`decide exited ${decided.status}: ${decided.stderr.slice(-300)}`);
     const evaluation = readJson("decide", decided);
+    if (evaluation.policy_id !== fixture.policyId) {
+      fail(`decide evaluated policy ${evaluation.policy_id}, not the stack's ${domain} gate ${fixture.policyId}`);
+    }
     if (evaluation.passed !== true) {
       note("decide: policy refused the response; act and prove are skipped (fail-closed)");
       throw new HandoffExit(1);
@@ -201,8 +208,12 @@ function main() {
       env: { ...process.env, PYTHONPATH: join(testbenchDir, "src"), PYTHONUTF8: "1" },
     });
     if (orchestrated.status !== 0) fail(`orchestrated demo exited ${orchestrated.status}: ${orchestrated.stderr.slice(-300)}`);
-    const runId = readJson("orchestrated demo", orchestrated).run_id;
+    const orchestratedReport = readJson("orchestrated demo", orchestrated);
+    const runId = orchestratedReport.run_id;
     if (typeof runId !== "string") fail("orchestrated demo did not report a run id");
+    if (orchestratedReport.stages?.decide?.policy_id !== fixture.policyId) {
+      fail(`orchestrated demo gated on ${orchestratedReport.stages?.decide?.policy_id}, not ${fixture.policyId} as in step 1`);
+    }
     const casePath = join(scratch, "case.json");
     const exported = run(process.execPath, [join(root, "bin", "aas.mjs"), "export", runId, "--out", casePath], { cwd: root });
     if (exported.status !== 0) fail(`export exited ${exported.status}: ${exported.stderr.slice(-300)}`);
