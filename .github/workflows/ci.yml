@@ -39,6 +39,8 @@ jobs:
         run: npm test
       - name: Check syntax
         run: npm run check:syntax
+      - name: Check version consistency
+        run: npm run check:version
       - name: Smoke test GUI
         run: npm run gui:smoke
   integration:

@@ -56,6 +56,9 @@ the lock on its own.
    `build` only if the sibling's published contract actually changed.
 4. Run `npm run integration` locally on Ubuntu and Windows. The CI
    integration job runs the same proof on every push and pull request.
+5. Update the pin list in `docs/release-readiness.md` in the same pull
+   request. `npm run check:version` fails while that list is missing a
+   locked commit.
 Security fixes follow the same path. The schema version (`schema_version`)
 is bumped only when the shape changes in a way that requires loader
 changes; existing tools keep reading older versions until the bump lands

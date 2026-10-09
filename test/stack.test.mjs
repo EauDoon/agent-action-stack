@@ -9,6 +9,7 @@ import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertFullStackNodeVersion, compareVersionTuples, isEntrypoint, loadComponentLock, inspectDependencyDirectory, MIN_FULL_STACK_NODE, npmInvocation, parseNodeVersion, prepareDependencies } from "../scripts/bootstrap.mjs";
 import { checkSyntax, listSyntaxTargets } from "../scripts/check-syntax.mjs";
+import { checkReleaseConsistency, loadReleaseInputs, parseChangelog, releaseNotes } from "../scripts/check-version.mjs";
 import {
   buildRailReviewRequest,
   CHILD_JSON_LIMIT,
@@ -2272,6 +2273,125 @@ test("workflow actions are pinned by commit and checkouts drop the token", () =>
   for (const action of ["actions/checkout", "actions/setup-node", "actions/setup-python"]) {
     assert.ok(pins.has(action), `${action} is not used by any workflow`);
   }
+});
+
+function releaseFixture({ version = "0.2.5", lockVersion = version, changelog, readiness, tag = null } = {}) {
+  const pins = loadComponentLock(LOCK).map((component) => component.commit);
+  return {
+    pkg: { name: "agent-action-stack", version },
+    lock: { name: "agent-action-stack", version: lockVersion, packages: { "": { name: "agent-action-stack", version: lockVersion } } },
+    changelog: changelog ?? [
+      "# Changelog",
+      "",
+      "## [Unreleased]",
+      "",
+      "### Fixed",
+      "- One fix.",
+      "",
+      "[Unreleased]: https://github.com/EauDoon/agent-action-stack/compare/c9e89c001f51b48f1ebda6716996680546033a8b...HEAD",
+      "",
+    ].join("\n"),
+    readiness: readiness ?? pins.map((sha) => `- pin \`${sha}\``).join("\n"),
+    stackLock: { components: loadComponentLock(LOCK) },
+    tag,
+  };
+}
+
+const RELEASED_CHANGELOG = [
+  "# Changelog",
+  "",
+  "## [Unreleased]",
+  "",
+  "## [0.3.0] - 2026-10-09",
+  "",
+  "### Changed",
+  "- BREAKING: a change.",
+  "",
+  "### Fixed",
+  "- A fix.",
+  "",
+  "## [0.2.0] - 2026-08-03",
+  "",
+  "### Added",
+  "- The GUI.",
+  "",
+  "## [0.1.0] - 2026-07-31",
+  "",
+  "### Added",
+  "- The first demo.",
+  "",
+  "[Unreleased]: https://github.com/EauDoon/agent-action-stack/compare/v0.3.0...HEAD",
+  "[0.3.0]: https://github.com/EauDoon/agent-action-stack/compare/v0.2.0...v0.3.0",
+  "[0.2.0]: https://github.com/EauDoon/agent-action-stack/compare/v0.1.0...v0.2.0",
+  "[0.1.0]: https://github.com/EauDoon/agent-action-stack/releases/tag/v0.1.0",
+  "",
+].join("\n");
+
+test("version check accepts the live repository and a well-formed release", () => {
+  assert.deepEqual(checkReleaseConsistency(loadReleaseInputs(ROOT)), []);
+  assert.deepEqual(checkReleaseConsistency(releaseFixture()), []);
+  assert.deepEqual(checkReleaseConsistency(releaseFixture({ version: "0.3.0", changelog: RELEASED_CHANGELOG, tag: "v0.3.0" })), []);
+});
+
+test("version check flags lock, changelog, pin, and tag drift", () => {
+  const flagged = (inputs, pattern) => {
+    const problems = checkReleaseConsistency(inputs);
+    assert.ok(problems.some((problem) => pattern.test(problem)), `expected ${pattern} in ${JSON.stringify(problems)}`);
+  };
+  flagged(releaseFixture({ lockVersion: "0.2.0" }), /package-lock\.json version "0\.2\.0" does not match package\.json 0\.2\.5/);
+  flagged(releaseFixture({ lockVersion: "0.2.0" }), /packages\[""\]\.version "0\.2\.0"/);
+  flagged(releaseFixture({ version: "0.2" }), /is not X\.Y\.Z/);
+  flagged(releaseFixture({ changelog: "## [Unreleased]\n\n### Changed\n- a\n\n### Changed\n- b\n\n[Unreleased]: https://github.com/EauDoon/agent-action-stack/compare/x...HEAD\n" }),
+    /repeats "### Changed"/);
+  flagged(releaseFixture({ changelog: "## [Unreleased]\n\n### Improved\n- a\n\n[Unreleased]: https://github.com/EauDoon/agent-action-stack/compare/x...HEAD\n" }),
+    /"### Improved" is not one of/);
+  flagged(releaseFixture({ changelog: "## [0.2.5] - 2026-09-28\n\n### Fixed\n- a\n\n[0.2.5]: https://github.com/EauDoon/agent-action-stack/releases/tag/v0.2.5\n" }),
+    /must open with a "## \[Unreleased\]" section/);
+  flagged(releaseFixture({ changelog: "## [Unreleased]\n\n[Unreleased]: https://example.com/compare/x...HEAD\n" }), /must link into/);
+  flagged(releaseFixture({ changelog: "## [Unreleased]\n\n### Fixed\n- a\n" }), /no \[Unreleased\] link definition/);
+
+  const unsorted = RELEASED_CHANGELOG.replace("## [0.2.0] - 2026-08-03", "## [0.4.0] - 2026-08-03");
+  flagged(releaseFixture({ version: "0.3.0", changelog: unsorted }), /0\.4\.0 must be older than 0\.3\.0/);
+  flagged(releaseFixture({ version: "0.3.0", changelog: RELEASED_CHANGELOG.replace("2026-08-03", "2026-02-30") }), /invalid version or date/);
+  flagged(releaseFixture({ version: "0.3.0", changelog: RELEASED_CHANGELOG.replace("## [0.1.0] - 2026-07-31", "## [0.1.0]") }), /is not "## \[X\.Y\.Z\] - YYYY-MM-DD"/);
+  flagged(releaseFixture({ version: "0.3.1", changelog: RELEASED_CHANGELOG }), /newest release 0\.3\.0 does not match package\.json 0\.3\.1/);
+  flagged(releaseFixture({ version: "0.3.0", changelog: RELEASED_CHANGELOG.replace("compare/v0.3.0...HEAD", "compare/main...HEAD") }),
+    /\[Unreleased\] should be https:\/\/github\.com\/EauDoon\/agent-action-stack\/compare\/v0\.3\.0\.\.\.HEAD/);
+  flagged(releaseFixture({ version: "0.3.0", changelog: RELEASED_CHANGELOG.replace("releases/tag/v0.1.0", "releases/tag/v0.0.1") }), /\[0\.1\.0\] should be/);
+
+  flagged(releaseFixture({ tag: "v9.9.9" }), /Tag v9\.9\.9 does not match package\.json version 0\.2\.5/);
+  flagged(releaseFixture({ tag: "v0.2.5" }), /no released "## \[0\.2\.5\] - YYYY-MM-DD" section/);
+  flagged(releaseFixture({ version: "0.3.0", tag: "v0.3.0", changelog: RELEASED_CHANGELOG.replace("- BREAKING: a change.", "").replace("- A fix.", "") }),
+    /section 0\.3\.0 has no entries/);
+
+  const missingPin = loadComponentLock(LOCK)[1].commit;
+  flagged(releaseFixture({ readiness: loadComponentLock(LOCK).filter((component) => component.commit !== missingPin).map((component) => component.commit).join("\n") }),
+    new RegExp(`does not list the consequence-rail pin ${missingPin}`));
+});
+
+test("release notes are exactly one changelog section", () => {
+  const notes = releaseNotes(RELEASED_CHANGELOG, "0.3.0");
+  assert.equal(notes, "### Changed\n- BREAKING: a change.\n\n### Fixed\n- A fix.\n");
+  assert.equal(releaseNotes(RELEASED_CHANGELOG, "0.1.0"), "### Added\n- The first demo.\n");
+  assert.throws(() => releaseNotes(RELEASED_CHANGELOG, "9.9.9"), /no section for 9\.9\.9/);
+  // A heading inside a fenced block is content, not structure.
+  const fenced = parseChangelog("## [Unreleased]\n\n### Added\n- a\n\n```md\n### Added\n```\n");
+  assert.deepEqual(fenced.sections[0].headings.map((heading) => heading.title), ["Added"]);
+});
+
+test("version check CLI reports drift with exit 1 and usage errors with exit 2", () => {
+  const script = join(ROOT, "scripts", "check-version.mjs");
+  const live = spawnSync(process.execPath, [script], { cwd: ROOT, encoding: "utf8" });
+  assert.equal(live.status, 0, live.stderr);
+  assert.match(live.stdout, /^version: \d+\.\d+\.\d+ consistent \(package, lock, changelog, release pins\)\n$/);
+
+  const usage = spawnSync(process.execPath, [script, "--tag"], { cwd: ROOT, encoding: "utf8" });
+  assert.equal(usage.status, 2);
+  assert.match(usage.stderr, /Missing value for --tag/);
+
+  const wrongTag = spawnSync(process.execPath, [script, "--tag", "v0.0.0-not-this"], { cwd: ROOT, encoding: "utf8" });
+  assert.equal(wrongTag.status, 1);
+  assert.match(wrongTag.stderr, /Tag v0\.0\.0-not-this does not match package\.json version/);
 });
 
 test("npm test reports every declared test", () => {

@@ -7,6 +7,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- `npm run check:version` (`scripts/check-version.mjs`), part of
+  `npm run check` and CI's test job. It fails when `package-lock.json`, this
+  changelog, the `docs/release-readiness.md` pin list, or a `--tag` disagree
+  with the `package.json` version, and `--notes` extracts one release's
+  section. It found and this change repairs two drifts: the lock still said
+  0.2.0 after five patch bumps, and `[Unreleased]` carried three separate
+  `### Changed` headings and a `compare/main...HEAD` link that compared
+  nothing. `CONTRIBUTING.md` now describes the versioning and changelog
+  rules.
 - `CONTRIBUTING.md` describing cross-repo coordination and the
   `stack-lock.json` policy.
 - `CHANGELOG.md` (this file).
@@ -115,15 +124,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
   changed the result set. It now reports a missing value and exits 2, matching
   every other value-taking option in the CLI. The `aas cases` usage message
   also lists the `--domain`, `--outcome`, and `--search` filters it accepts.
-
-### Changed
 - `loadComponentLock` now rejects an `install` or `build` value other than the
   supported tokens (`npm-ci`, `npm-run-build`). Those fields are dispatched by
   exact string match, so an unrecognised value was skipped silently and
   `npm run bootstrap` still reported success for a component that had never
   been installed or built. The shipped `stack-lock.json` is unchanged.
-
-### Changed
 - `npm run gui:smoke` now requests `/api/health` and the workbench page over
   loopback HTTP and asserts the response status, the `text/html` content type,
   the content security policy header, and the presence of every embedded page
@@ -137,4 +142,4 @@ project adheres to [Semantic Versioning](https://semver.org/).
   browser jobs run `npm ci` and builds inside the pinned components, and the
   job token used to stay in `.git/config` while that code ran.
 
-[Unreleased]: https://github.com/EauDoon/agent-action-stack/compare/main...HEAD
+[Unreleased]: https://github.com/EauDoon/agent-action-stack/compare/c9e89c001f51b48f1ebda6716996680546033a8b...HEAD

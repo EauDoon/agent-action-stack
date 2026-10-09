@@ -30,6 +30,24 @@ Do not bypass the lockfile. Editing `deps/` directly, swapping a remote URL,
 or relaxing the dirty-checkout rejection are all out of scope for normal
 contributions.
 
+## Versioning and changelog
+
+`package.json` `version` is the single source of truth. `npm run
+check:version` (part of `npm run check` and CI's test job) fails when
+`package-lock.json`, `CHANGELOG.md`, `docs/release-readiness.md`, or a release
+tag disagrees with it.
+
+- Feature and fix pull requests add one bullet under the matching category
+  of the existing `## [Unreleased]` section (Added, Changed, Deprecated,
+  Removed, Fixed, or Security; each at most once per section). They do not
+  bump the version.
+- Prefix a breaking change with `BREAKING:`. The project is pre-1.0, so a
+  breaking change or a new feature takes a minor bump and a fix a patch.
+- A release pull request runs `npm version X.Y.Z --no-git-tag-version
+  --ignore-scripts`, renames `[Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`, opens
+  a new empty `## [Unreleased]` above it, and updates the link definitions at
+  the bottom of the file. After it merges, the merge commit is tagged `vX.Y.Z`.
+
 ## Pull requests
 
 - One branch, one focused change.
