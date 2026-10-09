@@ -81,6 +81,7 @@ function stageHeadline(name, stage) {
     no_dispute: "settled and no dispute requested",
     not_reached: "not reached",
     act_error: "act errored",
+    act_failed: "act failed",
   };
   if (!stage || typeof stage !== "object") return `${name}: unknown`;
   if (stage.status === "skipped") {

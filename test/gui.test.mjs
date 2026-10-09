@@ -216,6 +216,27 @@ test("summary model narrates status, gating reasons, and review results", () => 
   assert.match(rail, /mode rail-review/);
   assert.match(rail, /review recorded/);
   assert.match(rail, /review review-abc/);
+
+  const actErrored = summaryModel({
+    flow: "decide -> act error",
+    stages: {
+      decide: { status: "passed", passed: true },
+      act: { status: "error", reason: "act child process exited with status 7" },
+      prove: { status: "skipped", reason: "act_error" },
+    },
+  });
+  assert.match(actErrored, /prove: skipped \(act errored\)/);
+
+  const actFailed = summaryModel({
+    flow: "decide -> act -> stop (act failed)",
+    stages: {
+      decide: { status: "passed", passed: true },
+      act: { status: "failed" },
+      prove: { status: "skipped", reason: "act_failed" },
+    },
+  });
+  assert.match(actFailed, /prove: skipped \(act failed\)/);
+  assert.doesNotMatch(actFailed, /act_failed/);
 });
 
 test("summary model escapes untrusted values", () => {

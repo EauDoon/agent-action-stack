@@ -766,6 +766,12 @@ test("act and prove child-process errors keep the run isolated", async () => {
   assert.equal(actError.exitCode, 1);
   assert.equal(actError.manifest.stages.act.status, "error");
   assert.equal(actError.manifest.stages.prove.reason, "act_error");
+  // report.json and manifest.json must give the same reason for one run.
+  assert.equal(actError.report.stages.prove.status, "skipped");
+  assert.equal(actError.report.stages.prove.reason, "act_error");
+  const persistedReport = JSON.parse(readFileSync(join(actError.bundleDir, "report.json"), "utf8"));
+  assert.equal(persistedReport.stages.prove.reason, actError.manifest.stages.prove.reason);
+  assert.ok(!("raw" in persistedReport.stages.prove));
 
   const proveOutputRoot = tempRoot();
   const proveError = await runDemo(["--response", "pass", "--dispute"], stubOptions(proveOutputRoot, {

@@ -39,6 +39,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
   inside a case by its case-relative name. They printed the raw `ENOENT`
   error, including the absolute local path. The error code stays `ENOENT`,
   so the GUI's 404 responses are unchanged.
+- After an act-stage error, `report.json` now records prove as skipped with
+  reason `act_error`, matching `manifest.json`. The report kept its initial
+  `not_reached`, so the GUI summary and the saved-case review disagreed about
+  the same run. The GUI summary also labels the `act_failed` skip reason
+  ("act failed") instead of printing the raw token.
 - Saved-case review now includes persisted stage stderr. `aas inspect` and
   the Markdown review omitted the diagnostic that the run report already
   stored, so a failed act looked like it had no child output.

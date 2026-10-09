@@ -1795,7 +1795,12 @@ export async function runDemo(args = [], options = {}) {
       stages.prove = stageRecord("error", stageErrorFields(error));
       report.stages.prove = stages.prove;
     }
-    if (actStarted && !proveStarted) stages.prove = stageRecord("skipped", { reason: "act_error" });
+    if (actStarted && !proveStarted) {
+      // Record the same skip reason the manifest carries; the report used to
+      // keep its initial not_reached here.
+      stages.prove = stageRecord("skipped", { reason: "act_error" });
+      report.stages.prove = stages.prove;
+    }
     if (proveStarted && stages.act.status === "pending") {
       stages.act = stageRecord("skipped", { reason: "prove_error" });
       report.stages.act = stages.act;
