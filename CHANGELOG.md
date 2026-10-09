@@ -67,6 +67,16 @@ included here.
   pinned legacy replay fixture (`fixtures/legacy-rail-review.json`) and a
   component compatibility test in the integration proof (9449bd3, #87). The
   current pins are in `stack-lock.json` and `docs/release-readiness.md`.
+- The pins then moved to the component releases of 2026-10-09, each at its
+  release merge commit: Constitutional Agent Testbench 0.6.0 (`ed46f0c`),
+  Consequence Rail 0.3.0 (`78d6f8a`), and MandateBound 2.0.0 (`32d5256`). No
+  entrypoint, install, or build hook changed, and the orchestrator needed no
+  code change: MandateBound 2.0.0's breaking changes are in commands and APIs
+  the stack does not call, and its `simulate` and `review` behave as before.
+  Cases saved under the previous pins still replay and verify. The component
+  compatibility test now also replays
+  `fixtures/previous-pins-inventory-review.json`, an inventory case saved under
+  the previous pins, against the new Rail verification checks.
 - `npm run check` now runs the unit suite and a syntax gate,
   `npm run check:syntax`, which parses every module `git ls-files` reports
   with `node --check`. CI's test job runs the same gate in place of a

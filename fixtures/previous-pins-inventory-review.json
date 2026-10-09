@@ -1,0 +1,903 @@
+{
+  "manifest": {
+    "schema_version": "agent-action-stack.run/v1",
+    "run_id": "2026-10-09T164607285Z-68259061-687",
+    "created_at": "2026-10-09T16:46:07.851Z",
+    "exit_code": 0,
+    "component_provenance": [
+      {
+        "name": "constitutional-agent-testbench",
+        "repository": "https://github.com/EauDoon/constitutional-agent-testbench.git",
+        "commit": "16b2faa71b0f92b9afa15b13afad8c48da8132f4",
+        "origin": "https://github.com/EauDoon/constitutional-agent-testbench.git",
+        "detached": true,
+        "clean": true,
+        "entrypoints": [
+          "pyproject.toml",
+          "src/constitutional_agent_testbench/cli.py"
+        ]
+      },
+      {
+        "name": "consequence-rail",
+        "repository": "https://github.com/EauDoon/consequence-rail.git",
+        "commit": "c430383c0a0931f0dcf17845d6f0e8ccf328615a",
+        "origin": "https://github.com/EauDoon/consequence-rail.git",
+        "detached": true,
+        "clean": true,
+        "entrypoints": [
+          "package.json",
+          "cmd/crctl.js"
+        ]
+      },
+      {
+        "name": "mandatebound",
+        "repository": "https://github.com/EauDoon/mandatebound.git",
+        "commit": "708256d4e48babeb13079fac7589d172920a5c95",
+        "origin": "https://github.com/EauDoon/mandatebound.git",
+        "detached": true,
+        "clean": true,
+        "entrypoints": [
+          "package.json",
+          "package-lock.json",
+          "src/cli.ts",
+          "dist/cli.js"
+        ]
+      }
+    ],
+    "stages": {
+      "decide": {
+        "status": "passed",
+        "reason": null,
+        "code": null,
+        "stderr": null,
+        "artifact": "stages/decide.json"
+      },
+      "act": {
+        "status": "passed",
+        "reason": null,
+        "code": null,
+        "stderr": null,
+        "artifact": "stages/act.json"
+      },
+      "prove": {
+        "status": "passed",
+        "reason": null,
+        "code": null,
+        "stderr": null,
+        "artifact": "stages/prove.json"
+      }
+    },
+    "report": "report.json"
+  },
+  "report": {
+    "stack": "agent-action-stack",
+    "response": "pass",
+    "requested_options": {
+      "response": "pass",
+      "domain": "inventory",
+      "fault": "duplicate",
+      "prove": "rail",
+      "dispute": false
+    },
+    "domain": "inventory",
+    "flow": "decide -> act -> prove",
+    "run_id": "2026-10-09T164607285Z-68259061-687",
+    "component_provenance": [
+      {
+        "name": "constitutional-agent-testbench",
+        "repository": "https://github.com/EauDoon/constitutional-agent-testbench.git",
+        "commit": "16b2faa71b0f92b9afa15b13afad8c48da8132f4",
+        "origin": "https://github.com/EauDoon/constitutional-agent-testbench.git",
+        "detached": true,
+        "clean": true,
+        "entrypoints": [
+          "pyproject.toml",
+          "src/constitutional_agent_testbench/cli.py"
+        ]
+      },
+      {
+        "name": "consequence-rail",
+        "repository": "https://github.com/EauDoon/consequence-rail.git",
+        "commit": "c430383c0a0931f0dcf17845d6f0e8ccf328615a",
+        "origin": "https://github.com/EauDoon/consequence-rail.git",
+        "detached": true,
+        "clean": true,
+        "entrypoints": [
+          "package.json",
+          "cmd/crctl.js"
+        ]
+      },
+      {
+        "name": "mandatebound",
+        "repository": "https://github.com/EauDoon/mandatebound.git",
+        "commit": "708256d4e48babeb13079fac7589d172920a5c95",
+        "origin": "https://github.com/EauDoon/mandatebound.git",
+        "detached": true,
+        "clean": true,
+        "entrypoints": [
+          "package.json",
+          "package-lock.json",
+          "src/cli.ts",
+          "dist/cli.js"
+        ]
+      }
+    ],
+    "stages": {
+      "decide": {
+        "status": "passed",
+        "passed": true,
+        "policy_id": "aas-inventory-gate-v1",
+        "rule_results": [
+          {
+            "kind": "required_field",
+            "passed": true,
+            "path": "summary",
+            "reason_code": "RULE_SATISFIED",
+            "rule_id": "summary-present"
+          },
+          {
+            "kind": "equals",
+            "passed": true,
+            "path": "decision",
+            "reason_code": "RULE_SATISFIED",
+            "rule_id": "decision-accept"
+          },
+          {
+            "kind": "one_of",
+            "passed": true,
+            "path": "action_type",
+            "reason_code": "RULE_SATISFIED",
+            "rule_id": "action-is-allocation"
+          },
+          {
+            "kind": "one_of",
+            "passed": true,
+            "path": "risk_level",
+            "reason_code": "RULE_SATISFIED",
+            "rule_id": "risk-allowed"
+          },
+          {
+            "kind": "false",
+            "passed": true,
+            "path": "blocked",
+            "reason_code": "RULE_SATISFIED",
+            "rule_id": "blocked-is-false"
+          },
+          {
+            "kind": "equals",
+            "passed": true,
+            "path": "recourse_required",
+            "reason_code": "RULE_SATISFIED",
+            "rule_id": "recourse-required"
+          }
+        ],
+        "error": null
+      },
+      "act": {
+        "status": "passed",
+        "outcome": "compensated",
+        "state": "CLOSED",
+        "fault": "duplicate",
+        "action_id": "act_cCXQJLbHd2WSZuc7htHV",
+        "assurance_mode": "enforced",
+        "bundle_verification": "pass"
+      },
+      "prove": {
+        "status": "passed",
+        "mode": "rail-review",
+        "scenario": null,
+        "triggered_by": "act_outcome=compensated",
+        "ok": true,
+        "result_keys": [
+          "format",
+          "reviewId",
+          "source",
+          "actionId",
+          "evidenceDigest",
+          "receipt",
+          "upstream",
+          "verdict",
+          "legalEffect",
+          "reviewDigest"
+        ],
+        "review_verdict": "recorded",
+        "review_id": "review-26ad562306e55b80",
+        "review_action_id": "act_cCXQJLbHd2WSZuc7htHV"
+      }
+    }
+  },
+  "stages": {
+    "decide": {
+      "passed": true,
+      "policy_id": "aas-inventory-gate-v1",
+      "rule_results": [
+        {
+          "kind": "required_field",
+          "passed": true,
+          "path": "summary",
+          "reason_code": "RULE_SATISFIED",
+          "rule_id": "summary-present"
+        },
+        {
+          "kind": "equals",
+          "passed": true,
+          "path": "decision",
+          "reason_code": "RULE_SATISFIED",
+          "rule_id": "decision-accept"
+        },
+        {
+          "kind": "one_of",
+          "passed": true,
+          "path": "action_type",
+          "reason_code": "RULE_SATISFIED",
+          "rule_id": "action-is-allocation"
+        },
+        {
+          "kind": "one_of",
+          "passed": true,
+          "path": "risk_level",
+          "reason_code": "RULE_SATISFIED",
+          "rule_id": "risk-allowed"
+        },
+        {
+          "kind": "false",
+          "passed": true,
+          "path": "blocked",
+          "reason_code": "RULE_SATISFIED",
+          "rule_id": "blocked-is-false"
+        },
+        {
+          "kind": "equals",
+          "passed": true,
+          "path": "recourse_required",
+          "reason_code": "RULE_SATISFIED",
+          "rule_id": "recourse-required"
+        }
+      ]
+    },
+    "act": {
+      "scenario": "synthetic-inventory-allocation",
+      "fault": "duplicate",
+      "action_id": "act_cCXQJLbHd2WSZuc7htHV",
+      "state": "CLOSED",
+      "outcome": "compensated",
+      "assurance_mode": "enforced",
+      "bypass_possible": false,
+      "execute_calls": 1,
+      "status_calls": 0,
+      "recourse_reservation_calls": 1,
+      "recourse_status_calls": 4,
+      "remedy_calls": 1,
+      "remedy_status_calls": 0,
+      "active_allocations": 1,
+      "allocated_quantity": 4,
+      "inventory_on_hand": 21,
+      "bundle_verification": "pass",
+      "rail_bundle": {
+        "schema_version": "consequence-rail/settlement-bundle/v0.1",
+        "profile": "audit",
+        "action": {
+          "action_id": "act_cCXQJLbHd2WSZuc7htHV",
+          "action_digest": "cCXQJLbHd2WSZuc7htHV-TJKeCNszXIL5ppKZf9x6ag",
+          "action_type": "demo.inventory.allocate/v1",
+          "resource_id_digest": "yVWN8lhWKXC0jsaa3IHbVUgpV3Et_h59j4myGJ5qWTI",
+          "proposal": {
+            "schema_version": "consequence-rail/action-proposal/v0.1",
+            "action_type": "demo.inventory.allocate/v1",
+            "subject": {
+              "type": "service",
+              "id": "allocation-agent-demo"
+            },
+            "target": {
+              "connector": "mock-inventory-service",
+              "resource_type": "order",
+              "resource_id": "ord_inventory_7"
+            },
+            "parameters": {
+              "sku": "sku_demo_1",
+              "quantity": 4
+            },
+            "idempotency_key": "allocate:ord_inventory_7:1",
+            "requested_at": "2035-01-01T00:00:00.000Z",
+            "expires_at": "2035-01-01T00:02:00.000Z",
+            "assurance_mode": "enforced",
+            "postcondition": {
+              "op": "all",
+              "clauses": [
+                {
+                  "path": "allocation_count",
+                  "op": "eq",
+                  "value": 1
+                },
+                {
+                  "path": "allocated_quantity",
+                  "op": "eq",
+                  "value": 4
+                },
+                {
+                  "path": "inventory_on_hand",
+                  "op": "gte",
+                  "value": 0
+                }
+              ]
+            },
+            "evidence_plan": {
+              "source": "mock-inventory-service",
+              "max_age_seconds": 60
+            }
+          }
+        },
+        "recourse_reservation": {
+          "action_digest": "cCXQJLbHd2WSZuc7htHV-TJKeCNszXIL5ppKZf9x6ag",
+          "kind": "reverse",
+          "connector": "mock-inventory-service",
+          "capability": "release-allocation",
+          "capability_reference_digest": "QDJ1_r737ylaZl9B_wpybv0iBRefrzem8viMcfL31g8",
+          "expires_at": "2035-01-01T00:07:00.000Z",
+          "remedy_window_seconds": 120,
+          "max_attempts": 1,
+          "max_quantity": 4,
+          "idempotency_key_digest": "9DFbfgQ6tUK7CneLbAoI5Las3Y0WA3y0DPG_t8QXlHA",
+          "connector_commitment": {
+            "schema_version": "consequence-rail/connector-recourse-commitment/v0.1",
+            "reservation_token": "rsv_rTTWtJ0jZbIA-fw1bgxHTYxo",
+            "action_digest": "cCXQJLbHd2WSZuc7htHV-TJKeCNszXIL5ppKZf9x6ag",
+            "connector": "mock-inventory-service",
+            "capability": "release-allocation",
+            "kind": "reverse",
+            "expires_at": "2035-01-01T00:07:00.000Z",
+            "max_attempts": 1,
+            "max_quantity": 4,
+            "reserved_at": "2035-01-01T00:00:00.000Z",
+            "status": "active",
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-connector-ed25519-VcGmBF_daVE14fDB",
+              "value": "7_ZXfj8cyBTeN0ZRKuGMzYqf5Y72uNzkannymrYCgPCmmc7pvzNNTsGlQDU7rrcJEH9HZrOUyZ_VZuS27mkXDA"
+            }
+          },
+          "schema_version": "consequence-rail/recourse-reservation/v0.1",
+          "reservation_id": "rr_--ffQe_DOGKujeJ13EjE",
+          "reserved_at": "2035-01-01T00:00:00.000Z",
+          "signature": {
+            "algorithm": "Ed25519",
+            "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+            "value": "Stc5Ez6IOf3Q5bJxb95BXGfnFgis4J-BS0F7-yqOcDKqyOsf40XRgS8RMcmx6b93EQRDfPMvOeKExkTGY500DA"
+          }
+        },
+        "action_permit": {
+          "schema_version": "consequence-rail/action-permit/v0.1",
+          "permit_id": "permit_cCXQJLbHd2WSZuc7htHV",
+          "action_id": "act_cCXQJLbHd2WSZuc7htHV",
+          "action_digest": "cCXQJLbHd2WSZuc7htHV-TJKeCNszXIL5ppKZf9x6ag",
+          "recourse_reservation_digest": "iNfN2QlsUzS4XaaksV4wGprizdI56xTspz-Y7orfAm0",
+          "assurance_mode": "enforced",
+          "bypass_possible": false,
+          "gated": true,
+          "jti": "jti_Vse_wEThpzvYFIAEZ1G6",
+          "issued_at": "2035-01-01T00:00:00.000Z",
+          "expires_at": "2035-01-01T00:02:00.000Z",
+          "max_uses": 1,
+          "signature": {
+            "algorithm": "Ed25519",
+            "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+            "value": "KbRfhrTQ9WsK4Ai-m6k1aJQiRbzsPHXPxCETe622dcHREhH3q6jnifFsf2CVsmFXN67B-rFXvm-EA_EEtUKwBw"
+          }
+        },
+        "evidence_manifest": [
+          "tUpVnSAMboHG0SgTLNfGs2xFZ-_sfoXPmmSPSskdTpM",
+          "K-MirEhszUpzrY7wonhzIj8F3sY1Do0oU3pLgjvOT-A"
+        ],
+        "outcome_evidence": [
+          {
+            "schema_version": "consequence-rail/outcome-evidence/v0.1",
+            "action_digest": "cCXQJLbHd2WSZuc7htHV-TJKeCNszXIL5ppKZf9x6ag",
+            "source": "mock-inventory-service",
+            "resource": {
+              "type": "order",
+              "id": "ord_inventory_7"
+            },
+            "observed_at": "2035-01-01T00:00:00.000Z",
+            "facts": {
+              "allocation_count": 2,
+              "allocated_quantity": 8,
+              "inventory_on_hand": 17,
+              "sku": "sku_demo_1"
+            },
+            "evaluation": {
+              "satisfied": false,
+              "evaluations": [
+                {
+                  "path": "allocation_count",
+                  "operator": "eq",
+                  "expected": 1,
+                  "actual": 2,
+                  "satisfied": false
+                },
+                {
+                  "path": "allocated_quantity",
+                  "operator": "eq",
+                  "expected": 4,
+                  "actual": 8,
+                  "satisfied": false
+                },
+                {
+                  "path": "inventory_on_hand",
+                  "operator": "gte",
+                  "expected": 0,
+                  "actual": 17,
+                  "satisfied": true
+                }
+              ]
+            },
+            "captured_by": "consequence-rail",
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "6fhbY0C9fAU8WwzQzNiy_2fM26AqdwNa35Kz4lqk-zHFcT7MtXKCrz205mZ_OTUDbzJ9ax-9eojyrJONG_JtDQ"
+            }
+          },
+          {
+            "schema_version": "consequence-rail/outcome-evidence/v0.1",
+            "action_digest": "cCXQJLbHd2WSZuc7htHV-TJKeCNszXIL5ppKZf9x6ag",
+            "source": "mock-inventory-service",
+            "resource": {
+              "type": "order",
+              "id": "ord_inventory_7"
+            },
+            "observed_at": "2035-01-01T00:00:00.000Z",
+            "facts": {
+              "allocation_count": 1,
+              "allocated_quantity": 4,
+              "inventory_on_hand": 21,
+              "sku": "sku_demo_1"
+            },
+            "evaluation": {
+              "satisfied": true,
+              "evaluations": [
+                {
+                  "path": "allocation_count",
+                  "operator": "eq",
+                  "expected": 1,
+                  "actual": 1,
+                  "satisfied": true
+                },
+                {
+                  "path": "allocated_quantity",
+                  "operator": "eq",
+                  "expected": 4,
+                  "actual": 4,
+                  "satisfied": true
+                },
+                {
+                  "path": "inventory_on_hand",
+                  "operator": "gte",
+                  "expected": 0,
+                  "actual": 21,
+                  "satisfied": true
+                }
+              ]
+            },
+            "captured_by": "consequence-rail",
+            "phase": "post-remedy",
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "mK1WnUyvt_aT4JjcTi9Gz0Ib0Uk4JP-EmA1TvsifNUx1cxvul2rFkDOFvtd1Dz7Bny0KfLkmIRZfZNidmSmqCg"
+            }
+          }
+        ],
+        "settlement_receipt": {
+          "schema_version": "consequence-rail/settlement-receipt/v0.1",
+          "receipt_id": "receipt_vljZ41Zon-V_fm7Sq1HT",
+          "action_id": "act_cCXQJLbHd2WSZuc7htHV",
+          "action_digest": "cCXQJLbHd2WSZuc7htHV-TJKeCNszXIL5ppKZf9x6ag",
+          "recourse_reservation_digest": "iNfN2QlsUzS4XaaksV4wGprizdI56xTspz-Y7orfAm0",
+          "connector_recourse_commitment_digest": "m-u35qlLrk1Hrw7bocEdBlNJ1UKeiBqL6VVG8edexW0",
+          "recourse_final_status": "consumed",
+          "action_permit_digest": "VVhkMAilo4hHNNmNiZrK2lPbQdBGyXm_eQu21CY-teg",
+          "assurance_mode": "enforced",
+          "bypass_possible": false,
+          "gated": true,
+          "outcome": "compensated",
+          "configured_postcondition_result": "satisfied",
+          "evidence_digests": [
+            "tUpVnSAMboHG0SgTLNfGs2xFZ-_sfoXPmmSPSskdTpM",
+            "K-MirEhszUpzrY7wonhzIj8F3sY1Do0oU3pLgjvOT-A"
+          ],
+          "event_chain_head": "n10oj_cedhbzjH101T6XM30pMJMeVRA3-mdrB6euD18",
+          "closed_at": "2035-01-01T00:00:00.000Z",
+          "technical_claim": "The configured postcondition was evaluated against declared evidence sources.",
+          "limitations": [
+            "Signatures establish integrity and provenance, not truth or causality.",
+            "Settlement is a technical protocol status, not a legal or financial determination.",
+            "Recovery is not guaranteed."
+          ],
+          "signature": {
+            "algorithm": "Ed25519",
+            "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+            "value": "0ZoBhD33WnnngnY_4I0X_NJ6AINg9hhjSGlTctFCJcou4edjkpitK5wSOEY2Rgf03ugxiIVcr5agLGhTh8LyAg"
+          }
+        },
+        "events": [
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_cCXQJLbHd2WSZuc7htHV",
+            "sequence": 0,
+            "previous_hash": null,
+            "event_type": "ACTION_PROPOSED",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "state": "PROPOSED",
+              "action_digest": "cCXQJLbHd2WSZuc7htHV-TJKeCNszXIL5ppKZf9x6ag",
+              "action_type": "demo.inventory.allocate/v1",
+              "assurance_mode": "enforced"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "jLCFTjrzJ2gbKaCu9AlgWl6gVAunzsCLdxAfaEj9tcz85mm9o6gZQiduOdrkacJSBSz1ziwZN0gXqrQlfqr8Dw"
+            },
+            "event_hash": "FmzyeQHrD4eM6kYW5mi7QZ6Gnq3VQhpY57URAtP6g64"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_cCXQJLbHd2WSZuc7htHV",
+            "sequence": 1,
+            "previous_hash": "FmzyeQHrD4eM6kYW5mi7QZ6Gnq3VQhpY57URAtP6g64",
+            "event_type": "STATE_TRANSITION",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "from_state": "PROPOSED",
+              "to_state": "AUTHORIZED",
+              "reason_code": "POLICY_ALLOWED",
+              "details_digest": "MovAMuNwTLbw3MC1i2GOjCvu1P_BVBMV2ekvlKuYAEY"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "ZebAbWKjSSvyT5x6I-plIjAm8FcDIl0CA8VeHoy84hsOSizFjcizYh1uDr0npYplkdLA9X3hEeuR10Tjm-NGBw"
+            },
+            "event_hash": "cW-3TPXCSAoPVolLdptY0JHG-Oqj2_20WUnDXCGV_Go"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_cCXQJLbHd2WSZuc7htHV",
+            "sequence": 2,
+            "previous_hash": "cW-3TPXCSAoPVolLdptY0JHG-Oqj2_20WUnDXCGV_Go",
+            "event_type": "STATE_TRANSITION",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "from_state": "AUTHORIZED",
+              "to_state": "RECOURSE_RESERVED",
+              "reason_code": "RECOURSE_VERIFIED",
+              "details_digest": "3uzAHklEdpdUFtLECgYrpao8tt2h_M7cqldVbhAG2_E"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "gTOmLSELb9OYeDpBFnQmm4_WkMi72B7E_HhgDpncwRqLoPI0FWqlWvd0k0DsGDiJWr-UzJ1i-0jswxYwrehzAg"
+            },
+            "event_hash": "n0fTsd2dbOmpF8LADzVsqaqq77G9S44ci9AOmIifpnc"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_cCXQJLbHd2WSZuc7htHV",
+            "sequence": 3,
+            "previous_hash": "n0fTsd2dbOmpF8LADzVsqaqq77G9S44ci9AOmIifpnc",
+            "event_type": "STATE_TRANSITION",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "from_state": "RECOURSE_RESERVED",
+              "to_state": "PERMITTED",
+              "reason_code": "PERMIT_ISSUED",
+              "details_digest": "zphwN733GwpkbLZNknATflHxETaQdJA4Ppr5igisQbQ"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "2a-hXE0QZm3CgVOszCGNW8u0Y7_6Qk79Z-waP3IrPkinR0gVfYSCEJBhox2dXWmWUyy3aw94wQkkgV3hZvQ9DA"
+            },
+            "event_hash": "kId4Vwt96WN15bnnQiHuAdEyegd3lsA2sCFIMGWrCY8"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_cCXQJLbHd2WSZuc7htHV",
+            "sequence": 4,
+            "previous_hash": "kId4Vwt96WN15bnnQiHuAdEyegd3lsA2sCFIMGWrCY8",
+            "event_type": "STATE_TRANSITION",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "from_state": "PERMITTED",
+              "to_state": "EXECUTING",
+              "reason_code": "PERMIT_CONSUMED",
+              "details_digest": "OG7lSAkndS-Y_CrLx4QLKa1B0DBBT1NUJvUrJh0hvso"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "c50Bi5jRqfFzwHjAcg9aF6rUpGWHVejfBuPTATmZ914ttkO7cLLKFMjzzXJnFn1dL_BaiGAudWanrk--76VECA"
+            },
+            "event_hash": "V_g2wxGVTFRRnW5j17OwWzDw-TAA_sq4hTK_nEVjQus"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_cCXQJLbHd2WSZuc7htHV",
+            "sequence": 5,
+            "previous_hash": "V_g2wxGVTFRRnW5j17OwWzDw-TAA_sq4hTK_nEVjQus",
+            "event_type": "STATE_TRANSITION",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "from_state": "EXECUTING",
+              "to_state": "EXECUTED",
+              "reason_code": "CONNECTOR_EXECUTED",
+              "details_digest": "VTp3MUktMzLvVHIwT-IDBC-94WJM9_8j-vwei31DWZE"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "9SLU_pobDIUV8VYWuEuDTzFyjXUYorF-vsecaI-ayTkmNcdVs6ORRcwwflG5RJhfmJx9gXUY9OjyNePmnF_HDA"
+            },
+            "event_hash": "aQB9KiA7WPO3PkfftXSczKcWmzvdMNb_Ld5s9OhGdKo"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_cCXQJLbHd2WSZuc7htHV",
+            "sequence": 6,
+            "previous_hash": "aQB9KiA7WPO3PkfftXSczKcWmzvdMNb_Ld5s9OhGdKo",
+            "event_type": "STATE_TRANSITION",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "from_state": "EXECUTED",
+              "to_state": "VERIFYING",
+              "reason_code": "OUTCOME_VERIFICATION_STARTED",
+              "details_digest": "RBNvo1WzZ4oRRq0W9-hknpT7T8If536DEMBg9hyq_4o"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "I5OV9LtsdWPChXzZ00twKv_QS1jZaSw4hdp-en6Ue8mRTNsf33LIY5fOtuVYU7Ne-Po4AhZyGp7xkRagkI5SBA"
+            },
+            "event_hash": "NxhcAw8PyM4iA3wNu-4Sc8CNmiflKMfLNaR9Nh7lNMI"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_cCXQJLbHd2WSZuc7htHV",
+            "sequence": 7,
+            "previous_hash": "NxhcAw8PyM4iA3wNu-4Sc8CNmiflKMfLNaR9Nh7lNMI",
+            "event_type": "EVIDENCE_ACCEPTED",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "evidence_digest": "tUpVnSAMboHG0SgTLNfGs2xFZ-_sfoXPmmSPSskdTpM",
+              "source": "mock-inventory-service",
+              "satisfied": false
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "LAz_ckSLAfazRa5KN-FxmoHl7HcRvsIPnbybXpHYWWCZzRgx6EVoF3Sq133L6MhYdWpDEU9rE-V0e30MUkWHDQ"
+            },
+            "event_hash": "54Be34hZ7s0-RHmDBRZOsxfsnuoe50EIBBB-g8M12Bw"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_cCXQJLbHd2WSZuc7htHV",
+            "sequence": 8,
+            "previous_hash": "54Be34hZ7s0-RHmDBRZOsxfsnuoe50EIBBB-g8M12Bw",
+            "event_type": "STATE_TRANSITION",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "from_state": "VERIFYING",
+              "to_state": "BREACHED",
+              "reason_code": "POSTCONDITION_BREACHED",
+              "details_digest": "J5IzJWOsNw8WoZWfhtWYJYxgOBgYf-9xY-BJYDItGQo"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "hv9t8t1fWPY_OXjVi10sK4Ju5o6a0dTSQ4sfJEENxnMiD1sdRUXfGPtI_nF3H7-IbyyTjybckHZunorj1z6pCg"
+            },
+            "event_hash": "35udcy03Z87gWUGd9eVYC-JMVACnfCe8XO2eEFQiOuQ"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_cCXQJLbHd2WSZuc7htHV",
+            "sequence": 9,
+            "previous_hash": "35udcy03Z87gWUGd9eVYC-JMVACnfCe8XO2eEFQiOuQ",
+            "event_type": "STATE_TRANSITION",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "from_state": "BREACHED",
+              "to_state": "REMEDY_DUE",
+              "reason_code": "RESERVED_REMEDY_DUE",
+              "details_digest": "L1CghQp1F95AZfJArEZbDbF-n0HXSRNX2jGu0FNrfZc"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "Tf6uW4KnMtv--XzQrthuGFZ8LYWqQnTC7St8Pb47om2t3KykZqJFN6xEQN1wu5i2u4rMTXzrF4UqDnnAePvnBw"
+            },
+            "event_hash": "5AdS-bKDLD4Ik-P-Q77DaCONqKkR10oEKFix-ZCNvHQ"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_cCXQJLbHd2WSZuc7htHV",
+            "sequence": 10,
+            "previous_hash": "5AdS-bKDLD4Ik-P-Q77DaCONqKkR10oEKFix-ZCNvHQ",
+            "event_type": "STATE_TRANSITION",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "from_state": "REMEDY_DUE",
+              "to_state": "REMEDIATING",
+              "reason_code": "REMEDY_STARTED",
+              "details_digest": "ocpE4aTnuC3IcjjNlaE44BAXarB7ctLOksJW5FhiIx8"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "i54Qm4t8lVtLXP5KfSXDu08Gc6uP54DNL-lNPHz-2j-y6WQ7OZF7_nMmp69JcOTomfnBFD0AamrQRidOjKC8Dw"
+            },
+            "event_hash": "pw75sKo1VaB0gLFdnBz2vg2vmPPKg-qyV7j0jRmk0Mo"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_cCXQJLbHd2WSZuc7htHV",
+            "sequence": 11,
+            "previous_hash": "pw75sKo1VaB0gLFdnBz2vg2vmPPKg-qyV7j0jRmk0Mo",
+            "event_type": "STATE_TRANSITION",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "from_state": "REMEDIATING",
+              "to_state": "REMEDY_VERIFYING",
+              "reason_code": "REMEDY_EXECUTION_CONFIRMED",
+              "details_digest": "5g5w5n1AHZ-qVzfjEEFMkWcDNNhssN6MgRjZnu_x09k"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "F94H1RZKytFWTSpdQO00tjaerFCpZFLrPj4AQS2EILZ0RYBx0U1W0FoLRRUZQ5YM6ADsx_vvAnx8gUhXQKbQCg"
+            },
+            "event_hash": "FPORbijbwEDavc-KJBHxhGzC2f9Cgw4z-7CWd0gNbvc"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_cCXQJLbHd2WSZuc7htHV",
+            "sequence": 12,
+            "previous_hash": "FPORbijbwEDavc-KJBHxhGzC2f9Cgw4z-7CWd0gNbvc",
+            "event_type": "REMEDY_EVIDENCE_ACCEPTED",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "evidence_digest": "K-MirEhszUpzrY7wonhzIj8F3sY1Do0oU3pLgjvOT-A",
+              "satisfied": true
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "gP1F20yMM9LBbU6ld2rdWCJAX-2kHZT6gi9ar1SSAFca7N6eDn6kCuGujUxT_y5kzXLcznAqEFYghSyOgntlBg"
+            },
+            "event_hash": "gcqWV9TVytwl6R6pOP9v09uUtVS0kvm_GpwazUfB4zs"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_cCXQJLbHd2WSZuc7htHV",
+            "sequence": 13,
+            "previous_hash": "gcqWV9TVytwl6R6pOP9v09uUtVS0kvm_GpwazUfB4zs",
+            "event_type": "STATE_TRANSITION",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "from_state": "REMEDY_VERIFYING",
+              "to_state": "REMEDIATED",
+              "reason_code": "REMEDY_VERIFIED",
+              "details_digest": "k6XMxN2gHWkGza7SnWCge8-RYwpdYTOy0WJLfbq0o2s"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "izbrqJOVfsQmJ0jfe034kRGRXk6eq3WweoHmrfll-bLGd-N1qU1Q9MlfTFqJr_ybD-lwVeUPyEAalGCM6-XPAA"
+            },
+            "event_hash": "baKF6oZRTz9x0EwIboj5KvniN8dJfxxra0_C3A45Uuc"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_cCXQJLbHd2WSZuc7htHV",
+            "sequence": 14,
+            "previous_hash": "baKF6oZRTz9x0EwIboj5KvniN8dJfxxra0_C3A45Uuc",
+            "event_type": "RECOURSE_FINALIZED",
+            "actor": "connector",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "connector_commitment_digest": "m-u35qlLrk1Hrw7bocEdBlNJ1UKeiBqL6VVG8edexW0",
+              "status": "consumed",
+              "reason": "SETTLEMENT_COMPENSATED"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "sElfeEJj6WuGADJ1DfgeMOmLN7jTh7-H2JLN4gvLtDT4yDrMdQgQq1h27dvTVQyY0BkfBO6Aay8jbII1RsCzDg"
+            },
+            "event_hash": "HpLZIp-R0V2rTUI1JdhptHC-GjLvkLdHUWY1TM-nmaI"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_cCXQJLbHd2WSZuc7htHV",
+            "sequence": 15,
+            "previous_hash": "HpLZIp-R0V2rTUI1JdhptHC-GjLvkLdHUWY1TM-nmaI",
+            "event_type": "STATE_TRANSITION",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "from_state": "REMEDIATED",
+              "to_state": "CLOSED",
+              "reason_code": "SETTLEMENT_COMPENSATED",
+              "details_digest": "aJIn0P4iVTpBbGIALYsfE7wTKWLhRbuVUNXTRy_1TlI"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "hwl3LifrT8jmQ1hgFvNbdiDbOnTdvofAhF9gsCPB9vygOUB36wivKjcUYX5i1kMBG-BK51evsd12r0RP6LTJDw"
+            },
+            "event_hash": "n10oj_cedhbzjH101T6XM30pMJMeVRA3-mdrB6euD18"
+          }
+        ],
+        "trust_hint": {
+          "rail": {
+            "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+            "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAnRbxWLLLgUyGwA8UdJVAsb12PzYDjv5C3+wE5abhq5Y=\n-----END PUBLIC KEY-----\n"
+          },
+          "connector": {
+            "key_id": "demo-connector-ed25519-VcGmBF_daVE14fDB",
+            "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAaT5lZhTYJhmk7hzLG+me9Zs4cARL14Wa3xx+G3a74+4=\n-----END PUBLIC KEY-----\n"
+          },
+          "warning": "An embedded key is not trusted automatically."
+        }
+      }
+    },
+    "prove": {
+      "ok": true,
+      "result": {
+        "format": "MandateBoundExternalEvidenceReview/v1",
+        "reviewId": "review-26ad562306e55b80",
+        "source": {
+          "sourceId": "consequence-rail",
+          "eventClass": "settlement"
+        },
+        "actionId": "act_cCXQJLbHd2WSZuc7htHV",
+        "evidenceDigest": "sha256:368c67f15e922f675c0cfe738411fbbb99210783f440c6a2a5f9e2eb681d7634",
+        "receipt": {
+          "receiptId": "receipt_vljZ41Zon-V_fm7Sq1HT",
+          "outcome": "compensated",
+          "recourseStatus": "consumed",
+          "eventChainHead": "n10oj_cedhbzjH101T6XM30pMJMeVRA3-mdrB6euD18",
+          "actionDigest": "cCXQJLbHd2WSZuc7htHV-TJKeCNszXIL5ppKZf9x6ag"
+        },
+        "upstream": {
+          "verifier": "consequence-rail:bundle-verify",
+          "valid": true,
+          "actionId": "act_cCXQJLbHd2WSZuc7htHV",
+          "outcome": "compensated",
+          "trustedKeyIds": [
+            "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+            "demo-connector-ed25519-VcGmBF_daVE14fDB"
+          ]
+        },
+        "verdict": "recorded",
+        "legalEffect": "not-determined",
+        "reviewDigest": "sha256:a275267936553f6cff6469c1a32e5ac764630283c18d6b4488b23c0ce83a0a36"
+      }
+    }
+  }
+}

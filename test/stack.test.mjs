@@ -54,7 +54,7 @@ const PROVENANCE = [
   {
     name: "constitutional-agent-testbench",
     repository: "https://github.com/EauDoon/constitutional-agent-testbench.git",
-    commit: "16b2faa71b0f92b9afa15b13afad8c48da8132f4",
+    commit: "ed46f0cb9af400560aa9a9e73bbb9864ed5678a0",
     origin: "https://github.com/EauDoon/constitutional-agent-testbench.git",
     detached: true,
     clean: true,
@@ -63,7 +63,7 @@ const PROVENANCE = [
   {
     name: "consequence-rail",
     repository: "https://github.com/EauDoon/consequence-rail.git",
-    commit: "c430383c0a0931f0dcf17845d6f0e8ccf328615a",
+    commit: "78d6f8a23dbce69bb443b453c8d471645f67daac",
     origin: "https://github.com/EauDoon/consequence-rail.git",
     detached: true,
     clean: true,
@@ -72,7 +72,7 @@ const PROVENANCE = [
   {
     name: "mandatebound",
     repository: "https://github.com/EauDoon/mandatebound.git",
-    commit: "708256d4e48babeb13079fac7589d172920a5c95",
+    commit: "32d525618e23678f86c754e4a536e4d094988a1b",
     origin: "https://github.com/EauDoon/mandatebound.git",
     detached: true,
     clean: true,

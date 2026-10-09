@@ -64,6 +64,21 @@ test("ordinary synthetic case exported by the previous pins still replays", () =
   assert.ok(result.checks.every((check) => check.passed));
 });
 
+test("inventory case saved under the pins before the 0.3.0 refresh still replays", () => {
+  // Exported by main at 8179e59 with Rail 0.2.20 (c430383) and MandateBound
+  // 1.2.0 (708256d). Rail 0.3.0 adds receipt-outcome and evidence-fact checks
+  // to verification; a case already in a user's case store must still pass.
+  const saved = JSON.parse(readFileSync(new URL("../fixtures/previous-pins-inventory-review.json", import.meta.url), "utf8"));
+  const previous = Object.fromEntries(saved.manifest.component_provenance.map((entry) => [entry.name, entry.commit]));
+  assert.equal(previous["consequence-rail"], "c430383c0a0931f0dcf17845d6f0e8ccf328615a");
+  assert.equal(previous.mandatebound, "708256d4e48babeb13079fac7589d172920a5c95");
+  assert.equal(saved.report.domain, "inventory");
+  assert.equal(saved.stages.act.outcome, "compensated");
+  const result = replayBundle(saved);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.ok(result.checks.every((check) => check.passed));
+});
+
 test("moving-clock rail evidence survives the same-case handoff and replay", async () => {
   let tick = Date.parse("2035-01-01T00:00:00.000Z");
   const runtime = createDemoRuntime({ clock: { now: () => new Date(tick++).toISOString() } });
