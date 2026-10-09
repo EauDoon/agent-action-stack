@@ -44,6 +44,10 @@ npm run bootstrap
 node ./bin/aas.mjs demo --fault duplicate --prove rail
 ```
 
+`node ./bin/aas.mjs --version` prints the orchestrator version. Every run
+records it as `stack_version` in its report and manifest, and
+`GET /api/health` on the local GUI returns it as `version`.
+
 This primary demonstration compensates a duplicate synthetic refund, verifies
 its rail receipt, and records a MandateBound review of those same bytes. Expect
 `act_outcome: compensated`, `prove_mode: rail-review`, and

@@ -90,8 +90,10 @@ below 3.11 fails with an actionable message.
 
 Each invocation writes one atomic bundle under `.out/runs/<run-id>/`:
 
-- `manifest.json`: stage status and component provenance
-- `report.json`: user-facing run report
+- `manifest.json`: stage status, component provenance, and the orchestrator
+  version that wrote it (`stack_version`, null in bundles that predate it)
+- `report.json`: user-facing run report, which carries the same
+  `stack_version`
 - `stages/<stage>.json`: captured output from each stage that ran
 
 `.out/latest.json` is an atomic pointer to the most recent complete bundle.

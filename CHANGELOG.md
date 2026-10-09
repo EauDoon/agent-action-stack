@@ -7,6 +7,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- `aas --version` (also `aas version`, with `--json`) prints the orchestrator
+  version from `package.json`. New runs record it as `stack_version` in
+  `report.json` and `manifest.json`; `aas cases --json`, `aas inspect`, and
+  the Markdown case review show it ("Orchestrator version"); and the GUI's
+  `GET /api/health` returns it as `version`. The field is additive within the
+  `agent-action-stack.run/v1` schema: cases saved before it was added load
+  and verify unchanged and report it as unavailable. It is informational and
+  is not one of the fields `aas compare` compares.
 - `npm run check:version` (`scripts/check-version.mjs`), part of
   `npm run check` and CI's test job. It fails when `package-lock.json`, this
   changelog, the `docs/release-readiness.md` pin list, or a `--tag` disagree

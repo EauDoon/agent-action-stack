@@ -63,7 +63,9 @@ export function inspectCase(runId, options = {}) {
   return {
     verification_readiness: readiness,
     schema_version: 'agent-action-stack.case-review/v1', run_id: runId,
-    created_at: bundle.manifest.created_at ?? null, domain: report.domain ?? null,
+    created_at: bundle.manifest.created_at ?? null,
+    stack_version: typeof bundle.manifest.stack_version === 'string' ? bundle.manifest.stack_version : null,
+    domain: report.domain ?? null,
     requested_options: report.requested_options ?? null,
     policy_failures: policyFailures,
     stages: ['decide','act','prove'].map(name => ({ name, status: bundle.manifest.stages[name]?.status ?? 'unknown', reason: bundle.manifest.stages[name]?.reason ?? null, code: bundle.manifest.stages[name]?.code ?? null, stderr: clipChildStderr(bundle.manifest.stages[name]?.stderr) || null, artifact_available: Object.hasOwn(bundle.stages,name) })),
@@ -90,7 +92,8 @@ export function markdownText(value) {
 
 export function renderCaseMarkdown(review) {
   const lines = ['# Saved case review', '', 'Read-only summary of persisted synthetic evidence. This export performs no receipt verification.', '',
-    '- Run ID: '+markdownText(review.run_id), '- Created: '+markdownText(review.created_at), '- Domain: '+markdownText(review.domain),
+    '- Run ID: '+markdownText(review.run_id), '- Created: '+markdownText(review.created_at),
+    '- Orchestrator version: '+markdownText(review.stack_version), '- Domain: '+markdownText(review.domain),
     '- Policy: '+markdownText(review.policy_id), '- Action: '+markdownText(review.action_id), '- Outcome: '+markdownText(review.outcome),
     '- Recorded review verdict: '+markdownText(review.review_verdict), '', '## Stage record', ''];
   const stageHeading = lines.splice(-2);

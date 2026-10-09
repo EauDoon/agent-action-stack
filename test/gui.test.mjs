@@ -59,7 +59,8 @@ test("GUI exposes a guided page and uses the orchestrator run bundle", async () 
   try {
     const health = await requestServer(server, "/api/health");
     assert.equal(health.status, 200);
-    assert.equal(JSON.parse(health.body).ok, true);
+    const packageVersion = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8")).version;
+    assert.deepEqual(JSON.parse(health.body), { ok: true, stack: "agent-action-stack", version: packageVersion });
     const address = server.address();
     const run = await requestServer(server, "/api/run?response=pass&fault=none", {
       method: "POST",

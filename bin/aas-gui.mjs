@@ -16,6 +16,7 @@ import {
   resolveGuiPort,
   runCapture,
   selectPython,
+  stackVersion,
 } from "./aas.mjs";
 import { assertFullStackNodeVersion, isEntrypoint } from "../scripts/bootstrap.mjs";
 
@@ -711,7 +712,7 @@ export function createGuiServer({
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/health") {
-        sendJson(response, 200, { ok: true, stack: "agent-action-stack" });
+        sendJson(response, 200, { ok: true, stack: "agent-action-stack", version: stackVersion() });
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/run") {

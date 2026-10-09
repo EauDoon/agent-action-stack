@@ -38,6 +38,7 @@ import {
   runProve,
   runProveRail,
   selectPython,
+  stackVersion,
   compareRuns,
   listRunSummaries,
   listRuns,
@@ -2581,6 +2582,89 @@ test("version check CLI reports drift with exit 1 and usage errors with exit 2",
   const wrongTag = spawnSync(process.execPath, [script, "--tag", "v0.0.0-not-this"], { cwd: ROOT, encoding: "utf8" });
   assert.equal(wrongTag.status, 1);
   assert.match(wrongTag.stderr, /Tag v0\.0\.0-not-this does not match package\.json version/);
+});
+
+test("aas --version prints the package.json version and rejects extra arguments", async () => {
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+  assert.equal(stackVersion(), pkg.version);
+  for (const argv of [["--version"], ["version"]]) {
+    const plain = await captureMain(argv);
+    assert.equal(plain.exitCode, 0);
+    assert.equal(plain.stdout, `agent-action-stack ${pkg.version}\n`);
+    assert.equal(plain.stderr, "");
+    const json = await captureMain([...argv, "--json"]);
+    assert.equal(json.exitCode, 0);
+    assert.deepEqual(JSON.parse(json.stdout), { ok: true, name: "agent-action-stack", version: pkg.version });
+  }
+  for (const argv of [["version", "extra"], ["--version", "--bogus"], ["--version", "--json", "--json"]]) {
+    const bad = await captureMain(argv);
+    assert.equal(bad.exitCode, 2, JSON.stringify(argv));
+    assert.match(bad.stderr, /Usage: aas --version \[--json\]/);
+  }
+  const help = helpText();
+  assert.match(help, /^ {2}aas --version \[--json\]$/m);
+  assert.match(help, /^ {2}version +Print the orchestrator version \(also --version\)$/m);
+  assert.match(help.split("Options:")[1], /^ {2}--version +\S/m);
+});
+
+test("runs record stack_version, and cases saved without it still load", async () => {
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+  const outputRoot = tempRoot();
+  const result = await runDemo(["--response", "pass"], stubOptions(outputRoot, { runId: "versioned-run" }));
+  assert.equal(result.report.stack_version, pkg.version);
+  assert.equal(result.manifest.stack_version, pkg.version);
+  assert.equal(result.manifest.schema_version, "agent-action-stack.run/v1");
+  const saved = exportRunBundle("versioned-run", { outputRoot });
+  assert.equal(saved.manifest.stack_version, pkg.version);
+  assert.equal(saved.report.stack_version, pkg.version);
+  assert.equal(summarizeRun("versioned-run", { outputRoot }).stack_version, pkg.version);
+
+  // A case written before the field existed: summaries, comparison, and the
+  // case review report it as unavailable instead of rejecting the case.
+  const legacyRoot = tempRoot();
+  writeCase(legacyRoot, "2026-09-06T050000000Z-legacy");
+  writeCase(legacyRoot, "2026-09-06T050000000Z-legacy2");
+  const legacy = summarizeRun("2026-09-06T050000000Z-legacy", { outputRoot: legacyRoot });
+  assert.equal(legacy.stack_version, null);
+  assert.notEqual(compareRuns("2026-09-06T050000000Z-legacy", "2026-09-06T050000000Z-legacy2", { outputRoot: legacyRoot }).classification, "not-comparable");
+
+  // stack_version is informational: two cases that differ only in it compare
+  // as identical.
+  const mixedRoot = tempRoot();
+  await runDemo(["--response", "pass"], stubOptions(mixedRoot, { runId: "mixed-a" }));
+  await runDemo(["--response", "pass"], stubOptions(mixedRoot, { runId: "mixed-b" }));
+  const manifestPath = join(mixedRoot, "runs", "mixed-b", "manifest.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  delete manifest.stack_version;
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  const mixed = compareRuns("mixed-a", "mixed-b", { outputRoot: mixedRoot });
+  assert.equal(mixed.classification, "identical");
+  assert.ok(!mixed.differences.some((difference) => difference.field === "stack_version"));
+  assert.equal(mixed.left.stack_version, pkg.version);
+  assert.equal(mixed.right.stack_version, null);
+
+  const { inspectCase, renderCaseMarkdown } = await import("../bin/case-review.mjs");
+  const current = inspectCase("versioned-run", { outputRoot });
+  assert.equal(current.stack_version, pkg.version);
+  assert.match(renderCaseMarkdown(current), new RegExp(`^- Orchestrator version: ${pkg.version.replace(/\./g, "\\\\\\.")}$`, "m"));
+  const older = inspectCase("mixed-b", { outputRoot: mixedRoot });
+  assert.equal(older.stack_version, null);
+  assert.match(renderCaseMarkdown(older), /^- Orchestrator version: unavailable$/m);
+});
+
+test("stackVersion reads package.json lazily so a copy without it still imports", () => {
+  // The integration proof's offline replay copies bin/aas.mjs and
+  // scripts/bootstrap.mjs without package.json and runs `aas replay`.
+  const isolated = tempRoot();
+  for (const path of ["bin/aas.mjs", "scripts/bootstrap.mjs", "stack-lock.json"]) {
+    mkdirSync(join(isolated, path, ".."), { recursive: true });
+    writeFileSync(join(isolated, path), readFileSync(join(ROOT, path)));
+  }
+  const listed = spawnSync(process.execPath, [join(isolated, "bin", "aas.mjs"), "runs", "--json"], { cwd: isolated, encoding: "utf8" });
+  assert.equal(listed.status, 0, listed.stderr);
+  const version = spawnSync(process.execPath, [join(isolated, "bin", "aas.mjs"), "--version", "--json"], { cwd: isolated, encoding: "utf8" });
+  assert.equal(version.status, 1);
+  assert.deepEqual(JSON.parse(version.stderr), { error: { message: "Orchestrator version unavailable: package.json is missing or unreadable." } });
 });
 
 test("npm test reports every declared test", () => {

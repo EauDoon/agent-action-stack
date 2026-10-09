@@ -110,6 +110,31 @@ export const DEFAULT_PATHS = Object.freeze({
   lock: join(root, "stack-lock.json"),
 });
 
+let cachedStackVersion;
+
+/**
+ * The orchestrator version, read from this package's package.json, which is
+ * the single source of truth for it. Read lazily and cached: the integration
+ * proof's offline replay copies bin/aas.mjs without package.json, so an
+ * import-time read would break every command there. Returns null when the
+ * file is missing, unreadable, or not this package's manifest.
+ *
+ * @returns {string|null}
+ */
+export function stackVersion() {
+  if (cachedStackVersion === undefined) {
+    try {
+      const pkg = JSON.parse(readFileSync(join(DEFAULT_PATHS.root, "package.json"), "utf8"));
+      cachedStackVersion = pkg?.name === "agent-action-stack" && typeof pkg.version === "string" && pkg.version !== ""
+        ? pkg.version
+        : null;
+    } catch {
+      cachedStackVersion = null;
+    }
+  }
+  return cachedStackVersion;
+}
+
 const STAGE_NAMES = ["decide", "act", "prove"];
 const DEMO_FLAG_OPTIONS = new Set(["--dispute", "--json"]);
 const DEMO_VALUE_OPTIONS = new Set(["--response", "--fault", "--prove", "--domain"]);
@@ -252,6 +277,7 @@ Usage:
   aas cases [--root output-dir] [--before run-id] [--limit 1..50] [--domain refund|inventory|unknown] [--outcome settled|compensated|none] [--search text] [--json]
   aas compare <run-id> <run-id> [--root output-dir] [--json|--markdown]
   aas prune --keep <n> [--root output-dir] [--dry-run] [--json]
+  aas --version [--json]
   aas help
 
 Commands:
@@ -264,6 +290,7 @@ Commands:
   cases   List bounded case summaries (outcome, policy, review, digest)
   compare Compare two cases and classify identical, different, or not comparable
   prune   Remove oldest runs beyond --keep (latest stays; --dry-run previews)
+  version Print the orchestrator version (also --version)
   help    Show this help (also -h or --help)
 
 Options:
@@ -286,6 +313,7 @@ Options:
   --dry-run                prune: report what would be removed without deleting
   --markdown               Print the readable Markdown form (compare, inspect)
   --json                   Print machine-readable JSON
+  --version                Print the orchestrator version
   -h, --help               Show this help
 
 Flow:
@@ -1315,6 +1343,8 @@ export function summarizeRun(runId, { outputRoot = DEFAULT_PATHS.outputRoot } = 
     run_id: runId,
     created_at: typeof manifest.created_at === "string" ? manifest.created_at : null,
     schema_version: manifest.schema_version,
+    // Informational only, never compared: a release changes it on every case.
+    stack_version: typeof manifest.stack_version === "string" ? manifest.stack_version : null,
     domain: typeof report.domain === "string" ? report.domain : null,
     exit_code: manifest.exit_code ?? null,
     flow: typeof report.flow === "string" ? report.flow : null,
@@ -1492,6 +1522,7 @@ export function persistRunBundle({
   componentProvenance,
   exitCode,
   now = new Date().toISOString(),
+  orchestratorVersion = stackVersion(),
 }) {
   // The same rule as readers. The regex alone accepts ".", "..", and "...",
   // and `RegExp.test` stringifies non-strings, so ".." was a path escape.
@@ -1525,6 +1556,8 @@ export function persistRunBundle({
       run_id: runId,
       created_at: now,
       exit_code: exitCode,
+      // Additive within run/v1: readers treat a missing field as null.
+      stack_version: orchestratorVersion,
       component_provenance: componentProvenance,
       stages: stageManifest,
       report: "report.json",
@@ -1650,6 +1683,7 @@ export async function runDemo(args = [], options = {}) {
   let exitCode = 0;
   const report = {
     stack: "agent-action-stack",
+    stack_version: stackVersion(),
     response: responseName,
     requested_options: { response: responseName, domain, fault, prove: proveMode, dispute: forceDispute },
     domain,
@@ -1674,6 +1708,7 @@ export async function runDemo(args = [], options = {}) {
       stages,
       componentProvenance,
       exitCode,
+      orchestratorVersion: report.stack_version,
     });
     return { report, manifest: persisted.manifest, bundleDir: persisted.bundleDir, exitCode, asJson };
   };
@@ -2121,6 +2156,23 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   if (isHelpToken(command) || (command === "demo" && demoRequestsHelp(argv.slice(1)))) {
     printHelp();
     process.exitCode = 0;
+    return;
+  }
+  if (command === "--version" || command === "version") {
+    try {
+      const rest = argv.slice(1);
+      if (rest.length > 1 || rest.some((token) => token !== "--json")) throw new UsageError("Usage: aas --version [--json]");
+      const version = stackVersion();
+      if (version === null) throw new Error("Orchestrator version unavailable: package.json is missing or unreadable.");
+      process.stdout.write(asJson
+        ? `${JSON.stringify({ ok: true, name: "agent-action-stack", version })}\n`
+        : `agent-action-stack ${version}\n`);
+      process.exitCode = 0;
+    } catch (error) {
+      const usage = error instanceof UsageError;
+      writeCliError(error, { asJson, usage });
+      process.exitCode = usage ? 2 : 1;
+    }
     return;
   }
   if (command === "latest") {
