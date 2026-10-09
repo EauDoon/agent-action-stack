@@ -24,6 +24,8 @@ Local checks may install dependencies and write caches or temporary files; see
 - [ ] `npm ci --ignore-scripts` completes on Windows and Ubuntu.
 - [ ] `npm test` passes with lock mismatch, stale dependency, stage, child-process, and atomic-write coverage.
 - [ ] `npm run gui:smoke` passes.
+- [ ] `npm run check` passes (unit suite, syntax gate, version consistency), and
+  `node scripts/check-version.mjs --tag vX.Y.Z` reports the release tag consistent.
 - [ ] `npm run integration` passes on Ubuntu and Windows (Node.js 22.12.0 and 24 with Python 3.13, plus Python 3.11 on Ubuntu with Node.js 22.12.0).
 - [ ] The public-copy scanner reports no punctuation or secret findings.
 - [ ] The final tree contains no placeholders or generated dependency directories.
@@ -225,6 +227,34 @@ tests, on Ubuntu and Windows with Node.js 22.12.0 and 24 and Python 3.13.
 Browser tests are a distinct category from component and orchestrator unit
 tests: they drive real clicks, file selection, and asynchronous responses
 against the pinned components, and are the only evidence for UI behaviour.
+
+## Release 0.3.0
+
+Version 0.3.0 (tag `v0.3.0`, created after the release pull request merges).
+The component pins are unchanged from the source gate above:
+
+- Constitutional Agent Testbench: `16b2faa71b0f92b9afa15b13afad8c48da8132f4`
+- Consequence Rail: `c430383c0a0931f0dcf17845d6f0e8ccf328615a`
+- MandateBound: `708256d4e48babeb13079fac7589d172920a5c95`
+
+Measured on the release branch head, Windows 11, Node.js v24.18.0, Python
+3.12.10 (and the decide stage on CPython 3.11.15 through `AAS_PYTHON`):
+
+- `npm test`: 208 tests, 202 passed, 0 failed, 6 skipped (five symlink cases
+  where Windows refuses symlink creation, and the FIFO case on win32).
+- `npm run check:syntax`: 15 modules parsed. `npm run check:version`:
+  0.3.0 consistent, including `--tag v0.3.0`.
+- `npm run gui:smoke`: passed.
+- `npm run integration`: passed from a fresh clone with network clones of the
+  three pins (pass, refusal, dispute, settled-review, rail-review, and
+  inventory paths, export/replay, the GUI replay, and the offline replay).
+- `test/component-compatibility.test.mjs`: 5 of 5.
+- Integrator examples: review handoff pass, inventory, and refusal (exit 1)
+  paths; connector conformance 6 of 6 rules on both connectors.
+- `npm run test:browser`: 14 of 14 real Chromium workflow tests.
+
+CI on the pull request runs the same gates on Ubuntu and Windows with Node.js
+22.12.0 and 24, plus the Python 3.11 integration leg and the browser job.
 
 ## Publication boundary
 

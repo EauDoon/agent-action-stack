@@ -6,7 +6,28 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-09
+
+The first tagged release since 0.2.0. `package.json` carried 0.2.1 to 0.2.5
+during this cycle without tags or changelog sections; those changes are
+included here.
+
 ### Added
+- Since 0.2.0, before this changelog existed: same-case review
+  (`--prove rail`), which verifies the act stage's rail bundle with the rail's
+  own verifier and records a MandateBound review of the same bytes (#20);
+  portable `aas export` and offline `aas replay` (#27); `aas runs` and
+  `aas prune` (#32); `aas cases` and `aas compare` (#35); `aas inspect`,
+  `aas verify`, and `aas latest` for saved cases, and `--root` for an
+  alternate case store (#40, #41); the inventory allocation domain,
+  `--domain inventory` (#36); and Python 3.11+ interpreter selection with
+  `AAS_PYTHON` (#16).
+- Since 0.2.0, the local GUI grew into a case workbench: same-case review,
+  imported-case replay, guided scenarios, paged and searchable case history,
+  comparison, and saved-case inspection, verification, and Markdown review
+  downloads (#26, #34, #35, #39, #40). The integrator examples
+  `review-handoff` (#28) and `connector-conformance` (#37) and the Playwright
+  real-browser tests (#34) arrived in the same period.
 - `aas --version` (also `aas version`, with `--json`) prints the orchestrator
   version from `package.json`. New runs record it as `stack_version` in
   `report.json` and `manifest.json`; `aas cases --json`, `aas inspect`, and
@@ -37,6 +58,71 @@ project adheres to [Semantic Versioning](https://semver.org/).
   `stack-lock.json` policy.
 - `CHANGELOG.md` (this file).
 - Playwright setup note in the Quick start section of `README.md`.
+
+### Changed
+- BREAKING: requires Node.js 22.12.0 or newer (was 20 in 0.2.0); see #18.
+  Bootstrap, `aas demo`, `aas replay`, `aas verify`, and GUI runs refuse an
+  older runtime before any side effect. Python stays at 3.11 or newer.
+- The three component pins were refreshed to reviewed revisions, with a
+  pinned legacy replay fixture (`fixtures/legacy-rail-review.json`) and a
+  component compatibility test in the integration proof (9449bd3, #87). The
+  current pins are in `stack-lock.json` and `docs/release-readiness.md`.
+- `npm run check` now runs the unit suite and a syntax gate,
+  `npm run check:syntax`, which parses every module `git ls-files` reports
+  with `node --check`. CI's test job runs the same gate in place of a
+  hand-written list of nine files, which had already drifted once. A new
+  `.gitattributes` pins LF line endings, so a Windows checkout no longer
+  turns every tracked file into a CRLF modification.
+- CI now tests the documented Python 3.11 floor: the integration matrix adds
+  a fifth leg on Ubuntu with Node.js 22.12.0 and Python 3.11, next to the four
+  Python 3.13 legs. The pinned workflow actions move to their current
+  releases (checkout v7.0.1, setup-node v7.0.0, setup-python v7.0.0), still
+  pinned by commit SHA, and `.github/dependabot.yml` proposes weekly grouped
+  updates for GitHub Actions and npm. A test fails if any workflow step uses
+  an action without a full commit SHA and version comment. The browser job's
+  install step no longer claims a cache it does not have.
+- `aas help` now documents the whole CLI surface. The usage block listed
+  neither `aas runs` nor `aas prune` although both are dispatched, the command
+  list omitted `help`, and the option reference omitted nine accepted flags:
+  `--out`, `--overwrite`, `--before`, `--limit`, `--outcome`, `--search`,
+  `--keep`, `--dry-run`, and `--markdown`.
+- `aas cases --search` no longer accepts a value that begins with `-`.
+  `aas cases --search --json` used to consume `--json` as the search term and
+  exit 0 with an unfiltered listing, so a mistyped or reordered flag silently
+  changed the result set. It now reports a missing value and exits 2, matching
+  every other value-taking option in the CLI. The `aas cases` usage message
+  also lists the `--domain`, `--outcome`, and `--search` filters it accepts.
+- `loadComponentLock` now rejects an `install` or `build` value other than the
+  supported tokens (`npm-ci`, `npm-run-build`). Those fields are dispatched by
+  exact string match, so an unrecognised value was skipped silently and
+  `npm run bootstrap` still reported success for a component that had never
+  been installed or built. The shipped `stack-lock.json` is unchanged.
+- `npm run gui:smoke` now requests `/api/health` and the workbench page over
+  loopback HTTP and asserts the response status, the `text/html` content type,
+  the content security policy header, and the presence of every embedded page
+  helper. It previously started the server, closed it, and asserted nothing, so
+  it passed even when the page renderer or a route was broken. The rendered
+  helper list is now a single `PAGE_HELPERS` constant shared by `renderPage`
+  and the smoke check.
+- The connector conformance example now runs rules 2 to 6 on both synthetic
+  connectors and measures the effect itself: active refunds bound to the
+  action, and inventory on hand against the connector's baseline. It used to
+  touch the refund connector only for capability advertisement and checked
+  only call counts and equal return values, so it could not see a second
+  effect or an incomplete reversal. The refund remedy check covers the
+  duplicate fault (only the duplicate is voided, the primary stays active)
+  and a clean refund (`no_change`).
+- Documentation now matches the code. `aas help` and the export and prune
+  usage errors list the `--root` option both commands accept, the `--root`
+  reference names every command that takes it, and the flow line says
+  `consequence-rail demo <domain>` rather than always `refund`.
+  `docs/stack-lock.md` now says a lock mismatch stops the run before any
+  stage and writes no bundle; it claimed the mismatch was recorded in the
+  manifest. The examples README uses the direct `node` invocation CI uses and
+  says the conformance example drives rail modules in-process. The pull
+  request template drops issue-form front matter that rendered as text, and
+  its checklist now follows `CONTRIBUTING.md` instead of forbidding the
+  changelog and CI edits this repository requires.
 
 ### Fixed
 - `aas`, `aas-gui`, and `bootstrap` now run when launched through a link: an
@@ -161,64 +247,6 @@ project adheres to [Semantic Versioning](https://semver.org/).
   and from `aas runs`/`aas cases`/`aas compare` summaries for any run whose
   proof failed. Only the raw child payload is stripped now.
 
-### Changed
-- `npm run check` now runs the unit suite and a syntax gate,
-  `npm run check:syntax`, which parses every module `git ls-files` reports
-  with `node --check`. CI's test job runs the same gate in place of a
-  hand-written list of nine files, which had already drifted once. A new
-  `.gitattributes` pins LF line endings, so a Windows checkout no longer
-  turns every tracked file into a CRLF modification.
-- CI now tests the documented Python 3.11 floor: the integration matrix adds
-  a fifth leg on Ubuntu with Node.js 22.12.0 and Python 3.11, next to the four
-  Python 3.13 legs. The pinned workflow actions move to their current
-  releases (checkout v7.0.1, setup-node v7.0.0, setup-python v7.0.0), still
-  pinned by commit SHA, and `.github/dependabot.yml` proposes weekly grouped
-  updates for GitHub Actions and npm. A test fails if any workflow step uses
-  an action without a full commit SHA and version comment. The browser job's
-  install step no longer claims a cache it does not have.
-- `aas help` now documents the whole CLI surface. The usage block listed
-  neither `aas runs` nor `aas prune` although both are dispatched, the command
-  list omitted `help`, and the option reference omitted nine accepted flags:
-  `--out`, `--overwrite`, `--before`, `--limit`, `--outcome`, `--search`,
-  `--keep`, `--dry-run`, and `--markdown`.
-- `aas cases --search` no longer accepts a value that begins with `-`.
-  `aas cases --search --json` used to consume `--json` as the search term and
-  exit 0 with an unfiltered listing, so a mistyped or reordered flag silently
-  changed the result set. It now reports a missing value and exits 2, matching
-  every other value-taking option in the CLI. The `aas cases` usage message
-  also lists the `--domain`, `--outcome`, and `--search` filters it accepts.
-- `loadComponentLock` now rejects an `install` or `build` value other than the
-  supported tokens (`npm-ci`, `npm-run-build`). Those fields are dispatched by
-  exact string match, so an unrecognised value was skipped silently and
-  `npm run bootstrap` still reported success for a component that had never
-  been installed or built. The shipped `stack-lock.json` is unchanged.
-- `npm run gui:smoke` now requests `/api/health` and the workbench page over
-  loopback HTTP and asserts the response status, the `text/html` content type,
-  the content security policy header, and the presence of every embedded page
-  helper. It previously started the server, closed it, and asserted nothing, so
-  it passed even when the page renderer or a route was broken. The rendered
-  helper list is now a single `PAGE_HELPERS` constant shared by `renderPage`
-  and the smoke check.
-- The connector conformance example now runs rules 2 to 6 on both synthetic
-  connectors and measures the effect itself: active refunds bound to the
-  action, and inventory on hand against the connector's baseline. It used to
-  touch the refund connector only for capability advertisement and checked
-  only call counts and equal return values, so it could not see a second
-  effect or an incomplete reversal. The refund remedy check covers the
-  duplicate fault (only the duplicate is voided, the primary stays active)
-  and a clean refund (`no_change`).
-- Documentation now matches the code. `aas help` and the export and prune
-  usage errors list the `--root` option both commands accept, the `--root`
-  reference names every command that takes it, and the flow line says
-  `consequence-rail demo <domain>` rather than always `refund`.
-  `docs/stack-lock.md` now says a lock mismatch stops the run before any
-  stage and writes no bundle; it claimed the mismatch was recorded in the
-  manifest. The examples README uses the direct `node` invocation CI uses and
-  says the conformance example drives rail modules in-process. The pull
-  request template drops issue-form front matter that rendered as text, and
-  its checklist now follows `CONTRIBUTING.md` instead of forbidding the
-  changelog and CI edits this repository requires.
-
 ### Security
 - Every CI checkout now sets `persist-credentials: false`. The integration and
   browser jobs run `npm ci` and builds inside the pinned components, and the
@@ -232,4 +260,38 @@ project adheres to [Semantic Versioning](https://semver.org/).
   normalized to LF, so a Windows checkout serves a matching hash, and
   `npm run gui:smoke` checks the served policy against the page content.
 
-[Unreleased]: https://github.com/EauDoon/agent-action-stack/compare/c9e89c001f51b48f1ebda6716996680546033a8b...HEAD
+## [0.2.0] - 2026-08-03
+
+Requires Node.js 20+ and Python 3.11+.
+
+### Added
+- A loopback-only local GUI (`npm run gui`, `npm run gui:smoke`). It binds
+  to `127.0.0.1`, requires the exact loopback Host and same-origin
+  boundary, runs the same orchestrator, and downloads the selected run
+  bundle.
+- `stack-lock.json`, which pins the three public components by commit.
+  `npm run bootstrap` checks out those exact commits and refuses a
+  pre-existing checkout that is substituted, not detached at the pin, or
+  dirty.
+- Isolated run bundles: each run is written atomically under
+  `.out/runs/<run-id>` with its manifest, report, and stage artifacts, and
+  `.out/latest.json` points at the newest complete bundle.
+- GitHub Actions CI, the release readiness checklist
+  (`docs/release-readiness.md`), unit tests, and `package-lock.json`.
+
+## [0.1.0] - 2026-07-31
+
+Requires Node.js 20+ and Python 3.11+.
+
+### Added
+- The initial `aas demo` orchestrator: decide with Constitutional Agent
+  Testbench, act with the Consequence Rail synthetic refund demo, and prove
+  with a MandateBound simulation, with `--response`, `--fault`,
+  `--dispute`, and `--json`.
+- A refund policy fixture with passing and failing responses, and a
+  bootstrap script that clones the three public components into `deps/`.
+
+[Unreleased]: https://github.com/EauDoon/agent-action-stack/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/EauDoon/agent-action-stack/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/EauDoon/agent-action-stack/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/EauDoon/agent-action-stack/releases/tag/v0.1.0

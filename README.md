@@ -1,6 +1,7 @@
 # Agent Action Stack
 
 [![build](https://img.shields.io/github/actions/workflow/status/EauDoon/agent-action-stack/ci.yml?branch=main)](https://github.com/EauDoon/agent-action-stack/actions)
+[![release](https://img.shields.io/github/v/release/EauDoon/agent-action-stack)](https://github.com/EauDoon/agent-action-stack/releases)
 [![license](https://img.shields.io/github/license/EauDoon/agent-action-stack)](https://github.com/EauDoon/agent-action-stack/blob/main/LICENSE)
 [![last commit](https://img.shields.io/github/last-commit/EauDoon/agent-action-stack)](https://github.com/EauDoon/agent-action-stack)
 
@@ -213,6 +214,9 @@ starts the synthetic action.
 npm test
 npm run check
 ```
+
+`npm run check` mirrors the CI test job: the unit suite, the syntax gate, and
+the version consistency check (`npm run check:version`).
 
 `npm test` is the unit suite (orchestrator and GUI models). `npm run check`
 runs the unit suite and then the syntax gate, which parses every tracked
