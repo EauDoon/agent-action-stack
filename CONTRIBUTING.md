@@ -48,6 +48,20 @@ tag disagrees with it.
   a new empty `## [Unreleased]` above it, and updates the link definitions at
   the bottom of the file. After it merges, the merge commit is tagged `vX.Y.Z`.
 
+Cutting a release after the release pull request merges (with a merge
+commit, so the reviewed commits stay on `main`):
+
+1. `git fetch origin && git checkout main && git pull --ff-only`.
+2. `node scripts/check-version.mjs --tag vX.Y.Z` must print `consistent`.
+3. `git tag -a vX.Y.Z -m "Agent Action Stack X.Y.Z"` and
+   `git push origin vX.Y.Z`.
+4. The tag push runs `.github/workflows/release.yml`, which re-verifies the
+   tagged commit and publishes the GitHub Release from the CHANGELOG section.
+   Confirm with `gh run list -w release.yml -L 1` and `gh release view vX.Y.Z`.
+
+Never move or delete a pushed tag. If a release is wrong, fix it forward in
+the next patch version. Nothing is published to npm.
+
 ## Pull requests
 
 - One branch, one focused change.

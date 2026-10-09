@@ -15,6 +15,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
   `agent-action-stack.run/v1` schema: cases saved before it was added load
   and verify unchanged and report it as unavailable. It is informational and
   is not one of the fields `aas compare` compares.
+- `.github/workflows/release.yml` publishes a GitHub Release when a `vX.Y.Z`
+  tag is pushed. It re-runs `npm run check` and the integration proof on the
+  tagged commit, requires the tag to match `package.json`, the lock, and this
+  changelog, and uses the version's changelog section as the release notes.
+  Only that job can write, and only to create the release; `ci.yml` stays
+  read-only. `package.json` is now `"private": true`: the package works from a
+  checkout, not as an installed dependency (it clones into `deps/` beside
+  itself), so `npm publish` now refuses it. `npm link` and the `aas` bin are
+  unaffected.
 - `npm run check:version` (`scripts/check-version.mjs`), part of
   `npm run check` and CI's test job. It fails when `package-lock.json`, this
   changelog, the `docs/release-readiness.md` pin list, or a `--tag` disagree

@@ -2667,6 +2667,43 @@ test("stackVersion reads package.json lazily so a copy without it still imports"
   assert.deepEqual(JSON.parse(version.stderr), { error: { message: "Orchestrator version unavailable: package.json is missing or unreadable." } });
 });
 
+test("release workflow runs only on version tags with write access scoped to its job", () => {
+  const text = readFileSync(join(ROOT, ".github", "workflows", "release.yml"), "utf8");
+  const lines = text.split(/\r?\n/);
+  const block = (key, indent) => {
+    const start = lines.findIndex((line) => line === `${" ".repeat(indent)}${key}:`);
+    assert.ok(start >= 0, `release.yml has no ${key}: block at indent ${indent}`);
+    const body = [];
+    for (const line of lines.slice(start + 1)) {
+      if (line.trim() !== "" && line.length - line.trimStart().length <= indent) break;
+      if (line.trim() !== "" && !line.trim().startsWith("#")) body.push(line.trim());
+    }
+    return body;
+  };
+  // Tags only: no branch push, pull_request, schedule, or manual trigger.
+  assert.deepEqual(block("on", 0), ["push:", 'tags: ["v*.*.*"]']);
+  assert.deepEqual(block("permissions", 0), ["contents: read"]);
+  assert.deepEqual(block("permissions", 4), ["contents: write"]);
+  assert.equal(lines.filter((line) => /^\s*permissions:/.test(line)).length, 2);
+  // A write-permission job must not restore a cache, and the tag reaches the
+  // shell through env, never through an inline expression.
+  assert.doesNotMatch(text, /^\s*cache:/m);
+  assert.match(text, /package-manager-cache: false/);
+  // Step keys sit at 8 spaces and their mappings at 10, so anything deeper
+  // is the body of a `run: |` script.
+  for (const line of lines.filter((entry) => /^\s*run:/.test(entry) || /^ {12,}\S/.test(entry))) {
+    assert.doesNotMatch(line, /\$\{\{/, `inline expression in a run step: ${line.trim()}`);
+  }
+  assert.match(text, /TAG: \$\{\{ github\.ref_name \}\}/);
+  assert.match(text, /node scripts\/check-version\.mjs --tag "\$TAG" --notes "\$RUNNER_TEMP\/release-notes\.md"/);
+  assert.match(text, /gh release create "\$TAG" --repo "\$GITHUB_REPOSITORY" --verify-tag/);
+  assert.doesNotMatch(text, /npm publish/);
+
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+  assert.equal(pkg.private, true, "package.json must stay private: it cannot work as an installed dependency");
+  assert.equal(pkg.bin.aas, "./bin/aas.mjs");
+});
+
 test("npm test reports every declared test", () => {
   // Process isolation ships test events on stdout. This file also writes
   // captured CLI output there, which drops events. The parent then reports a

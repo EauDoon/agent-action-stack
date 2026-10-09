@@ -1,7 +1,7 @@
 {
   "name": "agent-action-stack",
   "version": "0.2.5",
-  "private": false,
+  "private": true,
   "description": "Reference demo: decide with Constitutional Agent Testbench, act with Consequence Rail, prove disputes with MandateBound.",
   "type": "module",
   "bin": {
