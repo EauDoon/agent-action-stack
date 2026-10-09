@@ -31,8 +31,15 @@ and prepares each dependency under `deps/`:
    is a regular directory, detached (`HEAD` matches the pinned commit
    exactly), clean, and contains every expected entrypoint. Substituted or
    dirty pre-existing directories are rejected.
-2. If absent, bootstrap clones the public URL at the pinned commit, checks
-   out detached, and verifies the entrypoints.
+2. If absent, bootstrap clones the public URL at the pinned commit into a
+   hidden staging directory beside it (`deps/.tmp-` plus six characters,
+   shorter than any component name so Windows path limits are no tighter than
+   for the final checkout), checks out detached, and only then moves it to
+   `deps/<component>` and verifies the entrypoints. A failed fetch removes the
+   staging directory, so a network error never leaves a half-initialized
+   repository that the next bootstrap would refuse. A process killed mid-clone
+   can leave only a hidden staging directory, which is safe to delete and does
+   not block the next run.
 3. For components with an `install` hook, bootstrap runs the declared
    step (`npm-ci`, which runs `npm ci --ignore-scripts`, for MandateBound).
 4. For components with a `build` hook, bootstrap runs the declared step

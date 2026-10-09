@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { assertFullStackNodeVersion, compareVersionTuples, isEntrypoint, loadComponentLock, inspectDependencyDirectory, MIN_FULL_STACK_NODE, npmInvocation, parseNodeVersion, prepareDependencies } from "../scripts/bootstrap.mjs";
+import { assertFullStackNodeVersion, compareVersionTuples, isEntrypoint, loadComponentLock, inspectDependencyDirectory, main as bootstrapMain, MIN_FULL_STACK_NODE, moveIntoPlace, npmInvocation, parseNodeVersion, prepareDependencies } from "../scripts/bootstrap.mjs";
 import { checkSyntax, listSyntaxTargets } from "../scripts/check-syntax.mjs";
 import { checkReleaseConsistency, loadReleaseInputs, parseChangelog, releaseNotes } from "../scripts/check-version.mjs";
 import {
@@ -153,6 +153,117 @@ test("lock mismatch rejects substituted or stale pre-existing dependencies", () 
       /lock|detached|changes|origin|commit/i,
     );
   }
+});
+
+/**
+ * A fake git that clones into whatever directory `init` names. `failOn` makes
+ * that subcommand exit 128, as a dropped network or Ctrl+C during fetch would.
+ */
+function fakeGit(component, { failOn = null } = {}) {
+  const calls = [];
+  const command = (name, args) => {
+    calls.push([name, ...args]);
+    assert.equal(name, "git", `bootstrap must not spawn ${name} for a component without install or build`);
+    const sub = args[0] === "-C" ? args[2] : args[0];
+    if (sub === failOn) return { status: 128, stdout: "", stderr: "fatal: unable to access", error: null };
+    if (sub === "init") {
+      mkdirSync(join(args.at(-1), ".git"), { recursive: true });
+      return { status: 0, stdout: "", stderr: "", error: null };
+    }
+    if (sub === "remote" || sub === "fetch") return { status: 0, stdout: "", stderr: "", error: null };
+    if (sub === "checkout") {
+      for (const entrypoint of component.expected_entrypoints) {
+        mkdirSync(join(args[1], entrypoint, ".."), { recursive: true });
+        writeFileSync(join(args[1], entrypoint), "fixture\n");
+      }
+      return { status: 0, stdout: "", stderr: "", error: null };
+    }
+    if (sub === "config") return { status: 0, stdout: `${component.repository}\n`, stderr: "", error: null };
+    if (sub === "rev-parse") return { status: 0, stdout: `${component.commit}\n`, stderr: "", error: null };
+    if (sub === "symbolic-ref") return { status: 1, stdout: "", stderr: "", error: null };
+    if (sub === "status") return { status: 0, stdout: "", stderr: "", error: null };
+    throw new Error(`unexpected git command: ${args.join(" ")}`);
+  };
+  return { command, calls };
+}
+
+test("bootstrap stages a clone so a failed fetch leaves nothing in deps", () => {
+  // The testbench has no install or build step, so no npm runs.
+  const component = loadComponentLock(LOCK).find((entry) => entry.name === "constitutional-agent-testbench");
+  const deps = tempRoot();
+  const failing = fakeGit(component, { failOn: "fetch" });
+  assert.throws(
+    () => prepareDependencies({ deps, components: [component], command: failing.command }),
+    new RegExp(`^Error: Could not prepare constitutional-agent-testbench at ${component.commit}: Command failed: git .* fetch .*\\(exit 128\\): fatal: unable to access\\. Nothing was left in deps/; rerun npm run bootstrap\\.$`),
+  );
+  assert.equal(existsSync(join(deps, component.name)), false);
+  assert.deepEqual(readdirSync(deps), []);
+  // The clone ran in a hidden staging directory, never in the final target.
+  // Its name is shorter than every component name, so the clone never needs
+  // a longer path than the final checkout (Git for Windows stops at 260).
+  const init = failing.calls.find((call) => call[1] === "init");
+  assert.match(init.at(-1), /[\\/]\.tmp-[A-Za-z0-9]{6}$/);
+  const stagingName = init.at(-1).split(/[\\/]/).at(-1);
+  for (const entry of loadComponentLock(LOCK)) assert.ok(stagingName.length < entry.name.length, entry.name);
+
+  // The next run is not wedged by the failure.
+  const working = fakeGit(component);
+  const prepared = prepareDependencies({ deps, components: [component], command: working.command });
+  assert.equal(prepared.length, 1);
+  assert.equal(prepared[0].commit, component.commit);
+  assert.equal(prepared[0].detached, true);
+  assert.equal(prepared[0].clean, true);
+  assert.ok(existsSync(join(deps, component.name, ".git")));
+  assert.ok(existsSync(join(deps, component.name, "src", "constitutional_agent_testbench", "cli.py")));
+  assert.deepEqual(readdirSync(deps), [component.name]);
+});
+
+test("bootstrap retries a briefly locked rename and reports failures without a stack trace", () => {
+  let attempts = 0;
+  moveIntoPlace("staging", "target", {
+    delayMs: 1,
+    rename: () => {
+      attempts += 1;
+      if (attempts < 3) throw Object.assign(new Error("resource busy"), { code: "EBUSY" });
+    },
+  });
+  assert.equal(attempts, 3);
+  attempts = 0;
+  assert.throws(() => moveIntoPlace("staging", "target", {
+    delayMs: 1,
+    rename: () => { attempts += 1; throw Object.assign(new Error("denied"), { code: "EPERM" }); },
+  }), /denied/);
+  assert.equal(attempts, 4, "one attempt plus three retries");
+  attempts = 0;
+  assert.throws(() => moveIntoPlace("staging", "target", {
+    rename: () => { attempts += 1; throw Object.assign(new Error("not empty"), { code: "ENOTEMPTY" }); },
+  }), /not empty/);
+  assert.equal(attempts, 1, "other errors are not retried");
+
+  // A half-initialized checkout left by an older bootstrap names the fix.
+  const component = loadComponentLock(LOCK)[0];
+  const target = join(tempRoot(), component.name);
+  mkdirSync(join(target, ".git"), { recursive: true });
+  const broken = () => ({ status: 128, stdout: "", stderr: "fatal: not a git repository", error: null });
+  assert.throws(() => inspectDependencyDirectory(target, component, { command: broken }),
+    new RegExp(`Refusing unusable pre-existing dependency: ${component.name}\\. Remove deps/${component.name} and rerun npm run bootstrap\\.`));
+
+  const stderr = [];
+  const originalStderr = process.stderr.write;
+  const originalExitCode = process.exitCode;
+  process.stderr.write = (chunk) => { stderr.push(String(chunk)); return true; };
+  let exitCode;
+  try {
+    bootstrapMain({ deps: tempRoot(), components: [component], command: fakeGit(component, { failOn: "fetch" }).command });
+    exitCode = process.exitCode;
+  } finally {
+    process.stderr.write = originalStderr;
+    process.exitCode = originalExitCode;
+  }
+  assert.equal(exitCode, 1);
+  assert.equal(stderr.length, 1);
+  assert.match(stderr[0], /^bootstrap failed: Could not prepare constitutional-agent-testbench at [0-9a-f]{40}: .*rerun npm run bootstrap\.\n$/);
+  assert.doesNotMatch(stderr[0], /\n\s+at /);
 });
 
 // Windows only permits symlink creation for elevated or Developer Mode

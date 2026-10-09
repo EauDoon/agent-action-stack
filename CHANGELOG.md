@@ -60,6 +60,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
   a worker failure with HTTP 500 `History could not be loaded.` instead of
   the generic `Request failed`. Its busy 503 now sends `Retry-After: 1`, like
   the run and replay routes.
+- `npm run bootstrap` now clones each missing component into a hidden staging
+  directory and moves it into `deps/<component>` only after checkout. A failed
+  or interrupted first fetch used to leave a `.git` with an origin and no
+  `HEAD` in the final directory, and every later bootstrap refused it with no
+  way forward except deleting it by hand. A failure now removes the staging
+  directory and says nothing was left; the refusal for an older
+  half-initialized checkout names the directory to remove; a failed command
+  now includes the tool's own error text; and bootstrap errors print
+  `bootstrap failed: <reason>` instead of a stack trace.
 - Saved-case review now includes persisted stage stderr. `aas inspect` and
   the Markdown review omitted the diagnostic that the run report already
   stored, so a failed act looked like it had no child output.
