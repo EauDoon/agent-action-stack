@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** Lightweight local GUI for the Agent Action Stack orchestrator. */
 import { inspectCase, renderCaseMarkdown, renderComparisonMarkdown } from "./case-review.mjs";
+import { createHash } from "node:crypto";
 import { createServer, request } from "node:http";
 import { runGuiTask } from "./aas-gui-worker.mjs";
 import {
@@ -312,58 +313,14 @@ export function scenarioPreset(name) {
  */
 const PAGE_HELPERS = [stageDetailsModel, isReviewRunId, validatedRunSettings, scenarioPreset, filterHistory, validateRunBundle, escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, compareModel, historyModel, renderCaseOptions, sha256HexText];
 
-export function renderPage() {
-  const embedded = PAGE_HELPERS.map((fn) => fn.toString()).join("\n");
-  return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Agent Action Stack</title>
-<style>html{color-scheme:light}body{font:16px/1.55 system-ui,sans-serif;max-width:1000px;margin:32px auto;padding:0 20px;color:#17202a;background:#f7f9fc}h1{font-size:2.2rem;line-height:1.2}h2{font-size:1.35rem}.state,.panel{background:white;border:1px solid #d7e0ea;border-radius:12px;padding:20px}label{display:inline-block;margin:6px 12px 6px 0}input[type=search]{padding:9px;max-width:100%;box-sizing:border-box}button{background:#183f71;color:white;border:1px solid #183f71;border-radius:6px}a{color:#164d8e}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #b46b00;outline-offset:3px}.boundary{border-left:4px solid #183f71;padding:12px 16px;background:#eaf1fa}select,input[type=file]{max-width:100%;box-sizing:border-box}.panel,.boundary{overflow-wrap:anywhere}@media(max-width:600px){body{margin:16px auto;padding:0 12px}.state,.panel{padding:14px}label{display:block}button{min-height:44px}pre{font-size:13px}}button{padding:10px 14px;margin:4px 0;cursor:pointer}button:disabled{cursor:wait;opacity:.6}select{padding:9px;margin:4px}pre{background:#f3f5f7;padding:16px;overflow:auto;border-radius:6px}.state{margin:16px 0}.download{display:none}.panel{margin:16px 0}.error{color:#7a1f1f}</style></head>
-<body><main><h1>Agent Action Stack</h1><p>Run the local decide, act, and prove flow using the reviewed component lock.</p>
-<p class="boundary">Synthetic local demo only. No real account operations. The testbench response check gates the run; it is not a signed authorization over the rail proposal. Rail receipt verification and MandateBound recording remain separate authorities. Source truth is unknown; legal effect is not determined.</p>
-<div class="state"><label>Scenario <select id="scenario"><option value="settled">Clean settlement</option><option value="refusal">Policy refusal</option><option value="compensated">Duplicate compensation and review</option><option value="review">Settled action review</option></select></label> <button id="apply-scenario">Apply scenario</button>
-<p id="scenario-note">Choose a scenario or configure the options below. Applying a scenario only changes controls.</p>
-<label>Response <select id="response"><option value="pass">pass</option><option value="fail">fail</option></select></label>
-<label>Fault <select id="fault"><option value="none">none</option><option value="duplicate">duplicate</option></select></label>
-<label>Domain <select id="domain"><option value="refund">refund</option><option value="inventory">inventory allocation</option></select></label>
-<label><input id="dispute" type="checkbox"> force dispute proof</label>
-<label>Prove <select id="prove"><option value="simulate">separate canned simulation</option><option value="rail">same-case rail review</option></select></label>
-<br><button id="run">Run stack</button>
-<p id="run-status" role="status" aria-live="polite"></p>
-<a id="download" class="download" download="agent-action-stack-run.json">Download run bundle</a></div>
-<div class="panel" id="summary" aria-live="polite"></div>
-<div class="panel" id="bindings"></div>
-<details><summary>Raw current run report</summary><pre id="output">Ready.</pre></details>
-<div class="panel"><h2>Replay an imported case</h2>
-<p>Import an exported case to inspect and re-verify it. Verification only: no action runs and no remedy is attempted. The imported case is reported separately from any live run above.</p>
-<label for="case-file">Exported case JSON</label>
-<input id="case-file" type="file" accept="application/json,.json"> <button id="replay">Replay imported case</button>
-<div id="import-status" role="status" aria-live="polite"></div>
-<div id="import-result"></div></div>
-<div class="panel"><h2>Case history and comparison</h2>
-<p>Compare two persisted cases by identity, policy reference, component revisions, outcome, evidence digest, and review result. This view loads summaries only, never raw evidence, and never modifies or deletes a case.</p>
-<button id="load-history">Load history</button>
-<button id="older-history" disabled>Load older cases</button><p id="history-page-status" role="status"></p>
-<label>Search loaded cases <input id="history-search" type="search" placeholder="Run, policy, domain, review"></label>
-<label>Outcome <select id="history-outcome"><option value="">all</option><option value="settled">settled</option><option value="compensated">compensated</option></select></label>
-<p id="history-count" role="status" aria-live="polite">Load recent cases to search. The bounded history may omit older or unreadable cases.</p>
-<label>Left <select id="left-case"><option value="">(select a case)</option></select></label>
-<label>Right <select id="right-case"><option value="">(select a case)</option></select></label>
-<button id="compare">Compare selected cases</button>
-<a id="comparison-download" class="download" download>Download comparison review</a>
-<button id="inspect-case">Inspect left case</button>
-<label>Saved run ID <input id="saved-case-id" type="text" maxlength="200" placeholder="Enter an exact saved run ID"></label><button id="lookup-case">Inspect by ID</button>
-<a id="saved-link" class="download">Bookmark this local case</a>
-<a id="saved-report" class="download" download>Download case review</a>
-<button id="restore-settings" disabled>Use saved settings</button>
-<button id="replay-saved" disabled>Verify saved case</button><div id="saved-review-status" role="status"></div><div id="saved-review-result"></div>
-<a id="saved-download" class="download" download>Download selected saved case</a>
-<div id="saved-status" role="status" aria-live="polite"></div><div id="saved-summary"></div><div id="saved-bindings"></div><div id="saved-artifacts"></div>
-<div id="history-list"></div>
-<div id="compare-status" role="status" aria-live="polite"></div>
-<div id="compare-result"></div></div>
-</main><script>
-${embedded}
-document.getElementById('apply-scenario').addEventListener('click',()=>{
+function normalizeNewlines(text) {
+  return text.replace(/\r\n?/g, "\n");
+}
+
+/** The workbench stylesheet, emitted verbatim as the page's only <style>. */
+export const PAGE_STYLE = "html{color-scheme:light}body{font:16px/1.55 system-ui,sans-serif;max-width:1000px;margin:32px auto;padding:0 20px;color:#17202a;background:#f7f9fc}h1{font-size:2.2rem;line-height:1.2}h2{font-size:1.35rem}.state,.panel{background:white;border:1px solid #d7e0ea;border-radius:12px;padding:20px}label{display:inline-block;margin:6px 12px 6px 0}input[type=search]{padding:9px;max-width:100%;box-sizing:border-box}button{background:#183f71;color:white;border:1px solid #183f71;border-radius:6px}a{color:#164d8e}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #b46b00;outline-offset:3px}.boundary{border-left:4px solid #183f71;padding:12px 16px;background:#eaf1fa}select,input[type=file]{max-width:100%;box-sizing:border-box}.panel,.boundary{overflow-wrap:anywhere}@media(max-width:600px){body{margin:16px auto;padding:0 12px}.state,.panel{padding:14px}label{display:block}button{min-height:44px}pre{font-size:13px}}button{padding:10px 14px;margin:4px 0;cursor:pointer}button:disabled{cursor:wait;opacity:.6}select{padding:9px;margin:4px}pre{background:#f3f5f7;padding:16px;overflow:auto;border-radius:6px}.state{margin:16px 0}.download{display:none}.panel{margin:16px 0}.error{color:#7a1f1f}";
+
+const PAGE_CONTROLLER = `document.getElementById('apply-scenario').addEventListener('click',()=>{
   const preset=scenarioPreset(document.getElementById('scenario').value);
   if(!preset) return;
   for(const name of ['response','fault','prove']) document.getElementById(name).value=preset[name];
@@ -583,7 +540,76 @@ compareButton.addEventListener('click',async()=>{
   compareStatus.textContent='';
   compareButton.disabled=false;
 });
-</script></body></html>`;
+`;
+
+/**
+ * The page's only script: the embedded helpers, then the controller. Built
+ * once, with line endings normalized: fn.toString() returns CRLF source on a
+ * CRLF checkout, while the browser hashes the script after the HTML parser
+ * has turned CRLF into LF.
+ */
+export const PAGE_SCRIPT = normalizeNewlines(`\n${PAGE_HELPERS.map((fn) => fn.toString()).join("\n")}\n${PAGE_CONTROLLER}`);
+
+function cspHash(text) {
+  return `'sha256-${createHash("sha256").update(text, "utf8").digest("base64")}'`;
+}
+
+/**
+ * The page content is static per process, so the policy pins the exact
+ * script and style by hash. Case data reaches the DOM only through
+ * escapeHtml, and no other inline script or style can run.
+ */
+export const PAGE_CSP = `default-src 'self'; script-src ${cspHash(PAGE_SCRIPT)}; style-src ${cspHash(PAGE_STYLE)}; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
+
+export function renderPage() {
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent Action Stack</title>
+<style>${PAGE_STYLE}</style></head>
+<body><main><h1>Agent Action Stack</h1><p>Run the local decide, act, and prove flow using the reviewed component lock.</p>
+<p class="boundary">Synthetic local demo only. No real account operations. The testbench response check gates the run; it is not a signed authorization over the rail proposal. Rail receipt verification and MandateBound recording remain separate authorities. Source truth is unknown; legal effect is not determined.</p>
+<div class="state"><label>Scenario <select id="scenario"><option value="settled">Clean settlement</option><option value="refusal">Policy refusal</option><option value="compensated">Duplicate compensation and review</option><option value="review">Settled action review</option></select></label> <button id="apply-scenario">Apply scenario</button>
+<p id="scenario-note">Choose a scenario or configure the options below. Applying a scenario only changes controls.</p>
+<label>Response <select id="response"><option value="pass">pass</option><option value="fail">fail</option></select></label>
+<label>Fault <select id="fault"><option value="none">none</option><option value="duplicate">duplicate</option></select></label>
+<label>Domain <select id="domain"><option value="refund">refund</option><option value="inventory">inventory allocation</option></select></label>
+<label><input id="dispute" type="checkbox"> force dispute proof</label>
+<label>Prove <select id="prove"><option value="simulate">separate canned simulation</option><option value="rail">same-case rail review</option></select></label>
+<br><button id="run">Run stack</button>
+<p id="run-status" role="status" aria-live="polite"></p>
+<a id="download" class="download" download="agent-action-stack-run.json">Download run bundle</a></div>
+<div class="panel" id="summary" aria-live="polite"></div>
+<div class="panel" id="bindings"></div>
+<details><summary>Raw current run report</summary><pre id="output">Ready.</pre></details>
+<div class="panel"><h2>Replay an imported case</h2>
+<p>Import an exported case to inspect and re-verify it. Verification only: no action runs and no remedy is attempted. The imported case is reported separately from any live run above.</p>
+<label for="case-file">Exported case JSON</label>
+<input id="case-file" type="file" accept="application/json,.json"> <button id="replay">Replay imported case</button>
+<div id="import-status" role="status" aria-live="polite"></div>
+<div id="import-result"></div></div>
+<div class="panel"><h2>Case history and comparison</h2>
+<p>Compare two persisted cases by identity, policy reference, component revisions, outcome, evidence digest, and review result. This view loads summaries only, never raw evidence, and never modifies or deletes a case.</p>
+<button id="load-history">Load history</button>
+<button id="older-history" disabled>Load older cases</button><p id="history-page-status" role="status"></p>
+<label>Search loaded cases <input id="history-search" type="search" placeholder="Run, policy, domain, review"></label>
+<label>Outcome <select id="history-outcome"><option value="">all</option><option value="settled">settled</option><option value="compensated">compensated</option></select></label>
+<p id="history-count" role="status" aria-live="polite">Load recent cases to search. The bounded history may omit older or unreadable cases.</p>
+<label>Left <select id="left-case"><option value="">(select a case)</option></select></label>
+<label>Right <select id="right-case"><option value="">(select a case)</option></select></label>
+<button id="compare">Compare selected cases</button>
+<a id="comparison-download" class="download" download>Download comparison review</a>
+<button id="inspect-case">Inspect left case</button>
+<label>Saved run ID <input id="saved-case-id" type="text" maxlength="200" placeholder="Enter an exact saved run ID"></label><button id="lookup-case">Inspect by ID</button>
+<a id="saved-link" class="download">Bookmark this local case</a>
+<a id="saved-report" class="download" download>Download case review</a>
+<button id="restore-settings" disabled>Use saved settings</button>
+<button id="replay-saved" disabled>Verify saved case</button><div id="saved-review-status" role="status"></div><div id="saved-review-result"></div>
+<a id="saved-download" class="download" download>Download selected saved case</a>
+<div id="saved-status" role="status" aria-live="polite"></div><div id="saved-summary"></div><div id="saved-bindings"></div><div id="saved-artifacts"></div>
+<div id="history-list"></div>
+<div id="compare-status" role="status" aria-live="polite"></div>
+<div id="compare-result"></div></div>
+</main><script>${PAGE_SCRIPT}</script></body></html>`;
 }
 
 function savedPathId(pathname, prefix) {
@@ -676,7 +702,7 @@ export function createGuiServer({
       if (request.method === "GET" && url.pathname === "/") {
         response.writeHead(200, {
           "cache-control": "no-store",
-          "content-security-policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+          "content-security-policy": PAGE_CSP,
           "content-type": "text/html; charset=utf-8",
           "x-content-type-options": "nosniff",
           "x-frame-options": "DENY",
@@ -933,12 +959,18 @@ async function main() {
       if (page.status !== 200 || !/text\/html/.test(page.headers["content-type"] ?? "")) {
         throw new Error(`GUI page request failed: ${page.status}`);
       }
-      if (!page.headers["content-security-policy"]) throw new Error("GUI page is missing its content security policy.");
+      const policy = page.headers["content-security-policy"];
+      if (policy !== PAGE_CSP || policy.includes("unsafe-inline")) {
+        throw new Error("GUI page does not send the hash-pinned content security policy.");
+      }
       if (!page.body.includes("<script>") || !page.body.includes("</html>")) {
         throw new Error("GUI page body is truncated.");
       }
+      if (!page.body.includes(`<script>${PAGE_SCRIPT}</script>`) || !page.body.includes(`<style>${PAGE_STYLE}</style>`)) {
+        throw new Error("GUI page script or style differs from the hashed content.");
+      }
       for (const fn of PAGE_HELPERS) {
-        if (!page.body.includes(fn.toString())) throw new Error(`GUI page is missing embedded helper ${fn.name}.`);
+        if (!page.body.includes(normalizeNewlines(fn.toString()))) throw new Error(`GUI page is missing embedded helper ${fn.name}.`);
       }
     } finally {
       await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));

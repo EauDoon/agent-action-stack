@@ -776,6 +776,37 @@ test("malformed percent-encoding in a saved-case path is a client error", async 
   }
 });
 
+test("GUI content security policy pins the page script and style by hash", async () => {
+  const page = renderPage();
+  const scripts = [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
+  const styles = [...page.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((match) => match[1]);
+  assert.equal(scripts.length, 1);
+  assert.equal(styles.length, 1);
+  // No other way to run inline code or style: no attributes on the two
+  // elements, no inline handlers, no style attributes.
+  assert.doesNotMatch(page, /<script\s[^>]*>|<style\s[^>]*>/);
+  assert.doesNotMatch(page, /\son[a-z]+=|\sstyle=/i);
+  assert.ok(!scripts[0].includes("\r"), "the hashed script must be LF-only");
+  const sha = (text) => `'sha256-${createHash("sha256").update(text, "utf8").digest("base64")}'`;
+
+  const server = createGuiServer({ outputRoot: mkdtempSync(join(tmpdir(), "aas-gui-csp-")) });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const served = await requestServer(server, "/");
+    assert.equal(served.status, 200);
+    assert.equal(served.body, page);
+    const policy = served.headers["content-security-policy"];
+    assert.ok(policy.includes(`script-src ${sha(scripts[0])}`), policy);
+    assert.ok(policy.includes(`style-src ${sha(styles[0])}`), policy);
+    assert.doesNotMatch(policy, /unsafe-inline|unsafe-eval/);
+    for (const directive of ["default-src 'self'", "object-src 'none'", "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'"]) {
+      assert.ok(policy.includes(directive), `policy is missing ${directive}`);
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("GUI exposes a domain selector defaulting to refund", () => {
   const page = renderPage();
   assert.match(page, /<select id="domain">/);

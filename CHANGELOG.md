@@ -172,5 +172,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Every CI checkout now sets `persist-credentials: false`. The integration and
   browser jobs run `npm ci` and builds inside the pinned components, and the
   job token used to stay in `.git/config` while that code ran.
+- The workbench content security policy no longer allows `'unsafe-inline'`
+  script or style. The page's one script and one stylesheet are static per
+  process, so `script-src` and `style-src` now pin their SHA-256 hashes, and
+  the policy adds `object-src 'none'`. Imported and saved case data still
+  reaches the page only through `escapeHtml`; an injected inline script would
+  now also be refused by the browser. The script is hashed after CRLF is
+  normalized to LF, so a Windows checkout serves a matching hash, and
+  `npm run gui:smoke` checks the served policy against the page content.
 
 [Unreleased]: https://github.com/EauDoon/agent-action-stack/compare/c9e89c001f51b48f1ebda6716996680546033a8b...HEAD
