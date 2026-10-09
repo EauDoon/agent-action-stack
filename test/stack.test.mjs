@@ -1390,7 +1390,11 @@ test("export reads the persisted run bundle", async () => {
   const exported = exportRunBundle("export-run", { outputRoot });
   assert.equal(exported.report.run_id, "export-run");
   assert.deepEqual(Object.keys(exported.stages).sort(), ["act", "decide"]);
-  assert.throws(() => exportRunBundle("no-such-run", { outputRoot }), /Invalid run id|ENOENT/);
+  assert.throws(() => exportRunBundle("no-such-run", { outputRoot }), (error) => {
+    assert.equal(error.message, "Saved case not found: no-such-run");
+    assert.equal(error.code, "ENOENT");
+    return true;
+  });
   assert.throws(() => exportRunBundle("../escape", { outputRoot }), /Invalid run id/);
 });
 
@@ -1536,6 +1540,53 @@ test("export and replay CLI validate arguments and missing files", async () => {
   assert.equal(noSource.exitCode, 2);
   const extra = await captureMain(["replay", "a", "b"]);
   assert.equal(extra.exitCode, 2);
+});
+
+test("demo usage errors exit 2 before any runtime probing", async () => {
+  // A broken interpreter override used to win: main probed Node.js and every
+  // Python candidate first, so a typo exited 1 with an AAS_PYTHON message.
+  await withEnv("AAS_PYTHON", "aas-synthetic-missing-python", async () => {
+    const bogus = await captureMain(["demo", "--bogus"]);
+    assert.equal(bogus.exitCode, 2);
+    assert.match(bogus.stderr, /Unsupported demo option: --bogus/);
+    assert.doesNotMatch(bogus.stderr, /AAS_PYTHON/);
+
+    const value = await captureMain(["demo", "--response", "maybe"]);
+    assert.equal(value.exitCode, 2);
+    assert.match(value.stderr, /--response must be pass or fail/);
+    assert.doesNotMatch(value.stderr, /AAS_PYTHON/);
+
+    const domain = await captureMain(["demo", "--domain", "payroll", "--json"]);
+    assert.equal(domain.exitCode, 2);
+    assert.deepEqual(JSON.parse(domain.stderr), { error: { message: "--domain must be refund or inventory" } });
+
+    // Valid arguments still reach the interpreter check and fail there.
+    const valid = await captureMain(["demo", "--response", "fail"]);
+    assert.equal(valid.exitCode, 1);
+    assert.match(valid.stderr, /AAS_PYTHON \(aas-synthetic-missing-python\)/);
+  });
+});
+
+test("saved-case commands name a missing case without the local path", async () => {
+  const outputRoot = tempRoot();
+  mkdirSync(join(outputRoot, "runs"));
+  for (const argv of [
+    ["export", "missing-id", "--json", "--root", outputRoot],
+    ["verify", "missing-id", "--json", "--root", outputRoot],
+    ["inspect", "missing-id", "--json", "--root", outputRoot],
+  ]) {
+    const result = await captureMain(argv);
+    assert.equal(result.exitCode, 1, `${argv[0]} exit code`);
+    assert.deepEqual(JSON.parse(result.stderr), { error: { message: "Saved case not found: missing-id", code: "ENOENT" } }, argv[0]);
+    assert.ok(!result.stderr.includes(outputRoot), `${argv[0]} printed the local path`);
+  }
+
+  // A case directory that lost its manifest is reported by name, not by path.
+  mkdirSync(join(outputRoot, "runs", "torn-run"));
+  const torn = await captureMain(["export", "torn-run", "--root", outputRoot]);
+  assert.equal(torn.exitCode, 1);
+  assert.match(torn.stderr, /^Saved case torn-run is missing manifest\.json\.\ncode: ENOENT\n$/);
+  assert.ok(!torn.stderr.includes(outputRoot));
 });
 
 async function makeRuns(outputRoot, count) {

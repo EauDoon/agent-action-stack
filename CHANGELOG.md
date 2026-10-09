@@ -29,6 +29,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
   `npm run gui:smoke` through a link reported success without checking. The
   six scripts with a `#!/usr/bin/env node` line are now tracked as
   executable, so `./bin/aas.mjs` runs on a POSIX checkout.
+- `aas demo` validates its options before it checks the runtime. With a broken
+  `AAS_PYTHON`, a usage error such as `aas demo --bogus` exited 1 with the
+  interpreter message, after up to seven interpreter probes, instead of the
+  documented exit 2. `parseDemoOptions` now runs first, and `runDemo` uses
+  the same parser, so the messages are unchanged.
+- `aas export`, `verify`, `inspect`, and `latest` now report a missing saved
+  case as `Saved case not found: <run-id>`, and a missing or unreadable file
+  inside a case by its case-relative name. They printed the raw `ENOENT`
+  error, including the absolute local path. The error code stays `ENOENT`,
+  so the GUI's 404 responses are unchanged.
 - Saved-case review now includes persisted stage stderr. `aas inspect` and
   the Markdown review omitted the diagnostic that the run report already
   stored, so a failed act looked like it had no child output.

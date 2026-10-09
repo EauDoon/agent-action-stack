@@ -1105,19 +1105,45 @@ export function readRunBundle(outputRoot, runId) {
   }
 }
 
+/**
+ * Replace a filesystem error from a saved-case read with one that names the
+ * case instead of the absolute local path. The code is kept, so callers that
+ * map ENOENT to "not found" (the GUI's 404s) behave exactly as before.
+ */
+function caseReadError(error, runId, file) {
+  if (!error || typeof error.syscall !== "string") return error;
+  const message = error.code === "ENOENT"
+    ? (file === null ? `Saved case not found: ${runId}` : `Saved case ${runId} is missing ${file}.`)
+    : `Saved case ${runId} could not be read${file === null ? "" : ` (${file})`}: ${error.code ?? "filesystem error"}.`;
+  return Object.assign(new Error(message), { code: error.code });
+}
+
 function readRunBundleBody(outputRoot, runId) {
   if (!isValidRunId(runId)) throw new Error("Invalid run id.");
   assertRunsDirectory(outputRoot);
   const bundleDir = join(outputRoot, "runs", runId);
-  const directory = lstatSync(bundleDir);
+  let directory;
+  try {
+    directory = lstatSync(bundleDir);
+  } catch (error) {
+    throw caseReadError(error, runId, null);
+  }
   if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error("Case directory must be a regular directory.");
-  const manifest = readBoundedCaseJson(join(bundleDir, "manifest.json"));
+  // `file` is the manifest-relative name, already restricted by safeBundleFile.
+  const readCaseFile = (path, file) => {
+    try {
+      return readBoundedCaseJson(path);
+    } catch (error) {
+      throw caseReadError(error, runId, file);
+    }
+  };
+  const manifest = readCaseFile(join(bundleDir, "manifest.json"), "manifest.json");
   validateSavedManifest(manifest, bundleDir);
-  const report = readBoundedCaseJson(safeBundleFile(bundleDir, manifest.report, "report path"));
+  const report = readCaseFile(safeBundleFile(bundleDir, manifest.report, "report path"), manifest.report);
   if (manifest.run_id !== runId || report?.run_id !== runId) throw new Error("Case identity does not match its directory.");
   const stages = {};
   for (const [name, stage] of Object.entries(manifest.stages)) {
-    if (stage.artifact) stages[name] = readBoundedCaseJson(safeBundleFile(bundleDir, stage.artifact, "stage artifact path"));
+    if (stage.artifact) stages[name] = readCaseFile(safeBundleFile(bundleDir, stage.artifact, "stage artifact path"), stage.artifact);
   }
   const bundle = { manifest, report, stages };
   if (Buffer.byteLength(JSON.stringify(bundle, null, 2) + "\n") > CHILD_JSON_LIMIT) throw new Error("Exported case exceeds the replay byte limit.");
@@ -1559,21 +1585,15 @@ export function printHuman(report, bundleDir = null) {
 }
 
 /**
- * Run decide → act → prove and persist an isolated bundle.
+ * Validate demo flags and their values without touching the environment.
+ * `main` calls this before probing Node.js and Python, so a usage error
+ * exits 2 even when the runtime is broken, and costs no interpreter spawns.
  *
- * @param {string[]} [args] Demo flags: --response, --fault, --dispute, --json.
- * @param {object} [options]
- * @returns {Promise<DemoResult>}
+ * @param {string[]} args
+ * @returns {{responseName: "pass"|"fail", fault: string, forceDispute: boolean, asJson: boolean, proveMode: string, domain: string}}
  */
-export async function runDemo(args = [], options = {}) {
+export function parseDemoOptions(args) {
   validateDemoArgs(args);
-  const childTimeoutMs = options.childTimeoutMs ?? resolveChildTimeoutMs();
-  const runner = options.runner ?? ((command, args, opts = {}) =>
-    runCapture(command, args, { timeout: childTimeoutMs, ...opts }));
-  const paths = {
-    ...DEFAULT_PATHS,
-    ...(options.paths ?? {}),
-  };
   const responseName = option(args, "--response", "pass");
   if (responseName !== "pass" && responseName !== "fail") {
     throw new UsageError("--response must be pass or fail");
@@ -1592,6 +1612,25 @@ export async function runDemo(args = [], options = {}) {
   if (!DEMO_DOMAINS.has(domain)) {
     throw new UsageError("--domain must be refund or inventory");
   }
+  return { responseName, fault, forceDispute, asJson, proveMode, domain };
+}
+
+/**
+ * Run decide → act → prove and persist an isolated bundle.
+ *
+ * @param {string[]} [args] Demo flags: --response, --fault, --dispute, --json.
+ * @param {object} [options]
+ * @returns {Promise<DemoResult>}
+ */
+export async function runDemo(args = [], options = {}) {
+  const { responseName, fault, forceDispute, asJson, proveMode, domain } = parseDemoOptions(args);
+  const childTimeoutMs = options.childTimeoutMs ?? resolveChildTimeoutMs();
+  const runner = options.runner ?? ((command, args, opts = {}) =>
+    runCapture(command, args, { timeout: childTimeoutMs, ...opts }));
+  const paths = {
+    ...DEFAULT_PATHS,
+    ...(options.paths ?? {}),
+  };
   const responseFile =
     domain === "inventory"
       ? `inventory.response.${responseName}.json`
@@ -2162,6 +2201,7 @@ export async function main(argv = process.argv.slice(2), options = {}) {
     return;
   }
   try {
+    parseDemoOptions(argv.slice(1));
     assertFullStackNodeVersion(
       options.nodeVersion === undefined ? {} : { version: options.nodeVersion },
     );
