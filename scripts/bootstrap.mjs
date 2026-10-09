@@ -4,12 +4,35 @@
  * This script never accesses private repositories.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const lockPath = join(root, "stack-lock.json");
+
+/**
+ * True when the module at `metaUrl` is the script Node was asked to run.
+ *
+ * Node realpaths the main module before it builds `import.meta.url`, but
+ * `process.argv[1]` keeps the path as typed. Comparing the two directly fails
+ * whenever the script is reached through a link (an npm bin symlink, `npm
+ * link`, a macOS /tmp checkout, a Windows junction), and the entrypoint then
+ * exits 0 without running. Both sides are resolved with `realpathSync.native`
+ * so Windows short names and drive-letter case compare equal too.
+ *
+ * @param {string} metaUrl The caller's `import.meta.url`.
+ * @param {string|undefined} [argv1] The script path Node received.
+ * @returns {boolean}
+ */
+export function isEntrypoint(metaUrl, argv1 = process.argv[1]) {
+  if (!argv1) return false;
+  try {
+    return realpathSync.native(argv1) === realpathSync.native(fileURLToPath(metaUrl));
+  } catch {
+    return false;
+  }
+}
 
 /** Full-stack floor: the pinned MandateBound package declares engines >=22.12.0. */
 export const MIN_FULL_STACK_NODE = Object.freeze([22, 12, 0]);
@@ -247,4 +270,4 @@ export function main() {
   process.stdout.write("Bootstrap complete.\n");
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
+if (isEntrypoint(import.meta.url)) main();

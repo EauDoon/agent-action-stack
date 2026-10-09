@@ -25,12 +25,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import {
   assertDependencyDirectory,
   assertFullStackNodeVersion,
   inspectDependencyDirectory,
+  isEntrypoint,
   loadComponentLock,
 } from "../scripts/bootstrap.mjs";
 
@@ -2176,7 +2177,7 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isEntrypoint(import.meta.url)) {
   main().catch((error) => {
     process.stderr.write(`${JSON.stringify({ error: { message: error.message } })}\n`);
     process.exitCode = 1;

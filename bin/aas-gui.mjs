@@ -3,7 +3,6 @@
 import { inspectCase, renderCaseMarkdown, renderComparisonMarkdown } from "./case-review.mjs";
 import { createServer, request } from "node:http";
 import { runGuiTask } from "./aas-gui-worker.mjs";
-import { pathToFileURL } from "node:url";
 import {
   CHILD_JSON_LIMIT,
   DEFAULT_GUI_PORT,
@@ -17,7 +16,7 @@ import {
   runCapture,
   selectPython,
 } from "./aas.mjs";
-import { assertFullStackNodeVersion } from "../scripts/bootstrap.mjs";
+import { assertFullStackNodeVersion, isEntrypoint } from "../scripts/bootstrap.mjs";
 
 /** Bounded, strict JSON request body. The cap is enforced here regardless of any client-side check. */
 async function readJsonRequest(request, { maxBytes = CHILD_JSON_LIMIT } = {}) {
@@ -911,7 +910,7 @@ async function main() {
   await startGui({ port: resolveGuiPort() });
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isEntrypoint(import.meta.url)) {
   main().catch((error) => {
     process.stderr.write(`${JSON.stringify({ error: { message: error.message } })}\n`);
     process.exitCode = 1;

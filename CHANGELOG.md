@@ -13,6 +13,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Playwright setup note in the Quick start section of `README.md`.
 
 ### Fixed
+- `aas`, `aas-gui`, and `bootstrap` now run when launched through a link: an
+  npm bin symlink, `npm link`, a macOS /tmp checkout, or a Windows junction.
+  The entrypoint guard compared the realpathed module URL with the unresolved
+  `process.argv[1]`, so a linked launch exited 0 without doing anything, and
+  `npm run gui:smoke` through a link reported success without checking. The
+  six scripts with a `#!/usr/bin/env node` line are now tracked as
+  executable, so `./bin/aas.mjs` runs on a POSIX checkout.
 - Saved-case review now includes persisted stage stderr. `aas inspect` and
   the Markdown review omitted the diagnostic that the run report already
   stored, so a failed act looked like it had no child output.

@@ -6,8 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
-import { assertFullStackNodeVersion, compareVersionTuples, loadComponentLock, inspectDependencyDirectory, MIN_FULL_STACK_NODE, npmInvocation, parseNodeVersion, prepareDependencies } from "../scripts/bootstrap.mjs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { assertFullStackNodeVersion, compareVersionTuples, isEntrypoint, loadComponentLock, inspectDependencyDirectory, MIN_FULL_STACK_NODE, npmInvocation, parseNodeVersion, prepareDependencies } from "../scripts/bootstrap.mjs";
 import {
   buildRailReviewRequest,
   CHILD_JSON_LIMIT,
@@ -915,6 +915,38 @@ test("CLI prints help for help tokens and demo --help", async () => {
     assert.equal(result.stdout, helpText());
     assert.equal(result.stderr, "");
   }
+});
+
+test("entrypoints run when launched through a linked directory", (t) => {
+  // npm installs `bin.aas` as a symlink, and `npm link`, a macOS /tmp checkout,
+  // or a Windows junction all reach the scripts through a link. A junction
+  // needs no privilege on Windows; POSIX ignores the type and makes a
+  // directory symlink.
+  const link = join(tempRoot(), "linked-bin");
+  if (!linkOrSkip(t, join(ROOT, "bin"), link, "junction")) return;
+  const run = (args) => spawnSync(process.execPath, args, { cwd: ROOT, encoding: "utf8" });
+
+  const help = run([join(link, "aas.mjs"), "help"]);
+  assert.equal(help.status, 0, help.stderr);
+  assert.equal(help.stdout, helpText());
+
+  const unknown = run([join(link, "aas.mjs"), "no-such-command"]);
+  assert.equal(unknown.status, 2, unknown.stderr);
+  assert.match(unknown.stderr, /Unknown command: no-such-command/);
+
+  const smoke = run([join(link, "aas-gui.mjs"), "--smoke-test"]);
+  assert.equal(smoke.status, 0, smoke.stderr);
+  assert.match(smoke.stdout, /GUI smoke test passed/);
+});
+
+test("isEntrypoint compares resolved paths and fails closed", () => {
+  const script = join(ROOT, "bin", "aas.mjs");
+  const url = pathToFileURL(script).href;
+  assert.equal(isEntrypoint(url, script), true);
+  assert.equal(isEntrypoint(url, undefined), false);
+  assert.equal(isEntrypoint(url, ""), false);
+  assert.equal(isEntrypoint(url, join(ROOT, "package.json")), false);
+  assert.equal(isEntrypoint(url, join(tempRoot(), "missing.mjs")), false);
 });
 
 test("CLI reports unknown commands, flags, and empty values as usage errors", async () => {
