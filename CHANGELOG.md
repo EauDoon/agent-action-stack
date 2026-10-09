@@ -96,6 +96,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
   hand-written list of nine files, which had already drifted once. A new
   `.gitattributes` pins LF line endings, so a Windows checkout no longer
   turns every tracked file into a CRLF modification.
+- CI now tests the documented Python 3.11 floor: the integration matrix adds
+  a fifth leg on Ubuntu with Node.js 22.12.0 and Python 3.11, next to the four
+  Python 3.13 legs. The pinned workflow actions move to their current
+  releases (checkout v7.0.1, setup-node v7.0.0, setup-python v7.0.0), still
+  pinned by commit SHA, and `.github/dependabot.yml` proposes weekly grouped
+  updates for GitHub Actions and npm. A test fails if any workflow step uses
+  an action without a full commit SHA and version comment. The browser job's
+  install step no longer claims a cache it does not have.
 - `aas help` now documents the whole CLI surface. The usage block listed
   neither `aas runs` nor `aas prune` although both are dispatched, the command
   list omitted `help`, and the option reference omitted nine accepted flags:
@@ -123,5 +131,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
   it passed even when the page renderer or a route was broken. The rendered
   helper list is now a single `PAGE_HELPERS` constant shared by `renderPage`
   and the smoke check.
+
+### Security
+- Every CI checkout now sets `persist-credentials: false`. The integration and
+  browser jobs run `npm ci` and builds inside the pinned components, and the
+  job token used to stay in `.git/config` while that code ran.
 
 [Unreleased]: https://github.com/EauDoon/agent-action-stack/compare/main...HEAD

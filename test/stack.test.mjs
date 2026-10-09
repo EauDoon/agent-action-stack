@@ -2232,6 +2232,48 @@ test("syntax gate lists every tracked module and reports a parse failure", () =>
   assert.match(failures[0].detail, /SyntaxError/);
 });
 
+test("workflow actions are pinned by commit and checkouts drop the token", () => {
+  const workflows = join(ROOT, ".github", "workflows");
+  const files = readdirSync(workflows).filter((name) => /\.ya?ml$/.test(name)).sort();
+  assert.ok(files.includes("ci.yml"), "ci.yml is missing");
+  const pins = new Map();
+  let checkouts = 0;
+  for (const name of files) {
+    const lines = readFileSync(join(workflows, name), "utf8").split(/\r?\n/);
+    lines.forEach((line, index) => {
+      const uses = /^(\s*(?:-\s+)?)uses:\s*(\S+)/.exec(line);
+      if (!uses) return;
+      const where = `${name}:${index + 1}`;
+      const pinned = /^\s*(?:-\s+)?uses:\s*([\w.-]+\/[\w./-]+)@([0-9a-f]{40})\s+#\s*(v\d+\.\d+\.\d+)\s*$/.exec(line);
+      assert.ok(pinned, `${where} must pin a 40-character commit SHA with a # vX.Y.Z comment: ${line.trim()}`);
+      const [, action, sha, tag] = pinned;
+      const known = pins.get(action);
+      if (known) {
+        assert.equal(sha, known.sha, `${where} pins ${action} to a different SHA than ${known.where}`);
+        assert.equal(tag, known.tag, `${where} labels ${action} differently than ${known.where}`);
+      } else {
+        pins.set(action, { sha, tag, where });
+      }
+      if (action !== "actions/checkout") return;
+      checkouts += 1;
+      // The step's keys sit at the column of `uses:`; the step ends at the
+      // first non-blank line indented less than that.
+      const keyIndent = uses[1].length;
+      const block = [];
+      for (const next of lines.slice(index + 1)) {
+        if (next.trim() === "") continue;
+        if (next.length - next.trimStart().length < keyIndent) break;
+        block.push(next.trim());
+      }
+      assert.ok(block.includes("persist-credentials: false"), `${where} checkout must set persist-credentials: false`);
+    });
+  }
+  assert.ok(checkouts >= 3, `expected every job to check out the repository, found ${checkouts}`);
+  for (const action of ["actions/checkout", "actions/setup-node", "actions/setup-python"]) {
+    assert.ok(pins.has(action), `${action} is not used by any workflow`);
+  }
+});
+
 test("npm test reports every declared test", () => {
   // Process isolation ships test events on stdout. This file also writes
   // captured CLI output there, which drops events. The parent then reports a

@@ -24,7 +24,7 @@ Local checks may install dependencies and write caches or temporary files; see
 - [ ] `npm ci --ignore-scripts` completes on Windows and Ubuntu.
 - [ ] `npm test` passes with lock mismatch, stale dependency, stage, child-process, and atomic-write coverage.
 - [ ] `npm run gui:smoke` passes.
-- [ ] `npm run integration` passes on Ubuntu and Windows (Node.js 22.12.0 and 24, Python 3.13).
+- [ ] `npm run integration` passes on Ubuntu and Windows (Node.js 22.12.0 and 24 with Python 3.13, plus Python 3.11 on Ubuntu with Node.js 22.12.0).
 - [ ] The public-copy scanner reports no punctuation or secret findings.
 - [ ] The final tree contains no placeholders or generated dependency directories.
 
