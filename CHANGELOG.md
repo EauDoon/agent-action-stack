@@ -190,6 +190,17 @@ project adheres to [Semantic Versioning](https://semver.org/).
   effect or an incomplete reversal. The refund remedy check covers the
   duplicate fault (only the duplicate is voided, the primary stays active)
   and a clean refund (`no_change`).
+- Documentation now matches the code. `aas help` and the export and prune
+  usage errors list the `--root` option both commands accept, the `--root`
+  reference names every command that takes it, and the flow line says
+  `consequence-rail demo <domain>` rather than always `refund`.
+  `docs/stack-lock.md` now says a lock mismatch stops the run before any
+  stage and writes no bundle; it claimed the mismatch was recorded in the
+  manifest. The examples README uses the direct `node` invocation CI uses and
+  says the conformance example drives rail modules in-process. The pull
+  request template drops issue-form front matter that rendered as text, and
+  its checklist now follows `CONTRIBUTING.md` instead of forbidding the
+  changelog and CI edits this repository requires.
 
 ### Security
 - Every CI checkout now sets `persist-credentials: false`. The integration and

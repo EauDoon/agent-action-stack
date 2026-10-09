@@ -243,7 +243,7 @@ export function helpText() {
 
 Usage:
   aas demo [--response pass|fail] [--fault none|duplicate] [--dispute] [--prove simulate|rail] [--domain refund|inventory] [--json]
-  aas export <run-id> [--out <path>] [--overwrite] [--json]
+  aas export <run-id> [--root output-dir] [--out <path>] [--overwrite] [--json]
   aas replay <bundle-file|-> [--json]
   aas latest [--root output-dir] [--json]
   aas verify <run-id> [--root output-dir] [--json]
@@ -251,7 +251,7 @@ Usage:
   aas runs [--root output-dir] [--json]
   aas cases [--root output-dir] [--before run-id] [--limit 1..50] [--domain refund|inventory|unknown] [--outcome settled|compensated|none] [--search text] [--json]
   aas compare <run-id> <run-id> [--root output-dir] [--json|--markdown]
-  aas prune --keep <n> [--dry-run] [--json]
+  aas prune --keep <n> [--root output-dir] [--dry-run] [--json]
   aas help
 
 Commands:
@@ -273,7 +273,8 @@ Options:
   --prove simulate|rail    Prove path: canned operator simulation (default)
                            or review of the same-case rail bundle
   --domain refund|inventory  Synthetic action domain (default: refund)
-  --root output-dir        Select saved-case storage for inspect/runs/cases/compare/export/prune
+  --root output-dir        Saved-case storage for latest, verify, inspect, runs, cases,
+                           compare, export, and prune (default: .out)
   --out <path>             Write an export to this file (refuses to replace; see --overwrite)
   --overwrite              Allow --out to replace an existing file
   --before run-id          Start a cases page older than this run id
@@ -289,7 +290,7 @@ Options:
 
 Flow:
   decide -> constitutional-agent-testbench evaluate
-  on pass -> consequence-rail demo refund
+  on pass -> consequence-rail demo <domain>
   on dispute -> mandatebound simulate --scenario operator
   on dispute --prove rail -> rail bundle verify + mandatebound review
 
@@ -1973,10 +1974,10 @@ function runPruneCommand(args, { asJson, outputRoot = DEFAULT_PATHS.outputRoot }
     } else if (token === "--dry-run") {
       dryRun = true;
     } else if (token !== "--json") {
-      throw new UsageError(`Unsupported prune option: ${token} (expected --keep <n> [--dry-run] [--json])`);
+      throw new UsageError(`Unsupported prune option: ${token} (expected --keep <n> [--root output-dir] [--dry-run] [--json])`);
     }
   }
-  if (keep === null) throw new UsageError("Usage: aas prune --keep <positive integer> [--dry-run] [--json]");
+  if (keep === null) throw new UsageError("Usage: aas prune --keep <positive integer> [--root output-dir] [--dry-run] [--json]");
   const result = pruneRuns({ keep, dryRun, outputRoot });
   if (asJson) {
     process.stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`);
@@ -2037,7 +2038,7 @@ function runExportCommand(args, { asJson, outputRoot = DEFAULT_PATHS.outputRoot 
       runId = token;
     }
   }
-  if (runId === null) throw new UsageError("Usage: aas export <run-id> [--out <path>] [--overwrite] [--json]");
+  if (runId === null) throw new UsageError("Usage: aas export <run-id> [--root output-dir] [--out <path>] [--overwrite] [--json]");
   if (overwrite && out === null) throw new UsageError("--overwrite requires --out");
   let bundle;
   try {

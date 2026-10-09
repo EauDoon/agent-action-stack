@@ -1025,6 +1025,27 @@ test("CLI help documents every command and every option the usage block names", 
   for (const [, option] of usage.matchAll(/(--[a-z][a-z-]*)/g)) {
     assert.ok(options.includes(option), `option block does not document ${option}`);
   }
+  // Every saved-case command accepts --root through parseRootArgs or
+  // parseInspectArgs, so its usage line and the --root reference say so.
+  const rootReference = options.split("--root output-dir")[1].split(/\n {2}--/)[0];
+  for (const command of ["latest", "verify", "inspect", "runs", "cases", "compare", "export", "prune"]) {
+    assert.match(usage, new RegExp(`^ {2}aas ${command} .*\\[--root output-dir\\]`, "m"), `${command} usage omits --root`);
+    assert.match(rootReference, new RegExp(`\\b${command}\\b`), `--root reference omits ${command}`);
+  }
+  const flow = text.split("Flow:")[1].split("First-time setup:")[0];
+  assert.match(flow, /on pass -> consequence-rail demo <domain>/);
+});
+
+test("export and prune usage errors name the --root option", async () => {
+  const exportUsage = await captureMain(["export"]);
+  assert.equal(exportUsage.exitCode, 2);
+  assert.match(exportUsage.stderr, /Usage: aas export <run-id> \[--root output-dir\]/);
+  const pruneUsage = await captureMain(["prune"]);
+  assert.equal(pruneUsage.exitCode, 2);
+  assert.match(pruneUsage.stderr, /Usage: aas prune --keep <positive integer> \[--root output-dir\]/);
+  const pruneOption = await captureMain(["prune", "--keep", "1", "--bogus"]);
+  assert.equal(pruneOption.exitCode, 2);
+  assert.match(pruneOption.stderr, /expected --keep <n> \[--root output-dir\] \[--dry-run\] \[--json\]/);
 });
 
 test("CLI prints help for help tokens and demo --help", async () => {

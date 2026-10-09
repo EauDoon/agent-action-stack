@@ -1,20 +1,28 @@
 # Integrator examples
 
-Runnable scripts that connect the pinned components through their supported
-public interfaces. They transport bytes between component CLIs and check the
+Runnable scripts that connect the pinned components. `review-handoff.mjs`
+spawns the real component CLIs, transports bytes between them, and checks the
 bindings between outputs; policy semantics stay in the testbench, execution
-semantics in the rail, and review semantics in MandateBound. Nothing is
-mocked: every step spawns the real component CLI.
+semantics in the rail, and review semantics in MandateBound. Nothing in it is
+mocked. `connector-conformance.mjs` instead drives the rail's synthetic
+connector modules in-process (`src/mock-refund-connector.js` and
+`src/mock-inventory-connector.js` in the pinned checkout); those are rail
+internals, not a supported public interface, and the example moves with the
+rail pin.
 
 Prerequisites: Node.js 22.12+, Python 3.11+ on `PATH`, and a bootstrapped
 checkout (`npm run bootstrap`).
 
 ```bash
 npm run example:review-handoff
-npm run example:review-handoff -- --domain inventory
-npm run example:review-handoff -- --response fail   # exits 1, refusing
+node examples/review-handoff.mjs --domain inventory
+node examples/review-handoff.mjs --response fail   # exits 1, refusing
 npm run example:connector-conformance
 ```
+
+The options are passed to `node` directly: forwarding them through
+`npm run ... -- --flag value` is unreliable on the Windows shell, which is
+why CI invokes the script the same way.
 
 ## review-handoff.mjs
 

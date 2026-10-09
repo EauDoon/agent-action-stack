@@ -53,6 +53,8 @@ tag disagrees with it.
 - One branch, one focused change.
 - Branch names: `imp/<short-topic>-<date>`.
 - Ship via a pull request; do not push to `main` directly.
+- Work through the checklist in `.github/PULL_REQUEST_TEMPLATE.md`, which
+  GitHub fills into every new pull request.
 - Keep the orchestrator thin. If a change adds real behavior, it usually
   belongs in one of the three sibling repos, not here.
 

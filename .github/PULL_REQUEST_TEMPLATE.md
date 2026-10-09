@@ -1,11 +1,3 @@
----
-name: Pull Request
-about: Open a change for review
-title: ""
-labels: ""
-assignees: ""
----
-
 ## Description
 
 What does this PR do and why?
@@ -20,9 +12,9 @@ How did you verify this? Commands run, scenarios exercised, evidence captured.
 
 ## Checklist
 
-- [ ] Branch name follows the repo convention
-- [ ] No edits to main
-- [ ] No edits to LICENSE, CODEOWNERS, CHANGELOG, SECURITY, CONTRIBUTING
-- [ ] No edits to existing CI workflows
-- [ ] Linked issue or rationale included
-- [ ] Validation commands and outputs attached or referenced
+- [ ] Branch is named `imp/<topic>-<date>` (see `CONTRIBUTING.md`)
+- [ ] `npm run check` passes (unit suite, syntax gate, version consistency)
+- [ ] `npm run integration` passes, if orchestration, bootstrap, or lock files changed
+- [ ] `CHANGELOG.md` has a bullet under `## [Unreleased]` in the right category
+- [ ] A `stack-lock.json` change cites the sibling PR and merge SHA and updates `docs/release-readiness.md`
+- [ ] No private data, real credentials, or production endpoints

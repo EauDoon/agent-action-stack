@@ -48,8 +48,9 @@ and prepares each dependency under `deps/`:
    any other value rather than skipping the step, because a silently ignored
    hook would report a successful bootstrap for an unprepared component.
 The orchestrator records each component's provenance on every run bundle. A
-run resolving components whose checkout disagrees with the lock surfaces the
-disagreement in its manifest.
+checkout that disagrees with the lock (origin, commit, detached state, local
+changes, or entrypoints) stops the run before any stage and writes no bundle,
+so recorded provenance always shows detached, clean, pinned checkouts.
 
 ## When to update
 
