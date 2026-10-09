@@ -1,6 +1,7 @@
 # Agent Action Stack
 
 [![build](https://img.shields.io/github/actions/workflow/status/EauDoon/agent-action-stack/ci.yml?branch=main)](https://github.com/EauDoon/agent-action-stack/actions)
+[![release](https://img.shields.io/github/v/release/EauDoon/agent-action-stack)](https://github.com/EauDoon/agent-action-stack/releases)
 [![license](https://img.shields.io/github/license/EauDoon/agent-action-stack)](https://github.com/EauDoon/agent-action-stack/blob/main/LICENSE)
 [![last commit](https://img.shields.io/github/last-commit/EauDoon/agent-action-stack)](https://github.com/EauDoon/agent-action-stack)
 
@@ -43,6 +44,10 @@ Private repositories are never cloned or modified.
 npm run bootstrap
 node ./bin/aas.mjs demo --fault duplicate --prove rail
 ```
+
+`node ./bin/aas.mjs --version` prints the orchestrator version. Every run
+records it as `stack_version` in its report and manifest, and
+`GET /api/health` on the local GUI returns it as `version`.
 
 This primary demonstration compensates a duplicate synthetic refund, verifies
 its rail receipt, and records a MandateBound review of those same bytes. Expect
@@ -210,7 +215,13 @@ npm test
 npm run check
 ```
 
-`npm test` is the unit suite (orchestrator and GUI models). `npm run
+`npm run check` mirrors the CI test job: the unit suite, the syntax gate, and
+the version consistency check (`npm run check:version`).
+
+`npm test` is the unit suite (orchestrator and GUI models). `npm run check`
+runs the unit suite and then the syntax gate, which parses every tracked
+JavaScript module with `node --check`; the module list comes from
+`git ls-files`, so a new script is covered without editing CI. `npm run
 integration` proves the pinned components from a clean checkout, and
 `npm run example:review-handoff` runs the integrator example.
 Installation, bootstrap, tests, and replay can write dependencies, caches, or

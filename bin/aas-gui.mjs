@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /** Lightweight local GUI for the Agent Action Stack orchestrator. */
 import { inspectCase, renderCaseMarkdown, renderComparisonMarkdown } from "./case-review.mjs";
+import { createHash } from "node:crypto";
 import { createServer, request } from "node:http";
 import { runGuiTask } from "./aas-gui-worker.mjs";
-import { pathToFileURL } from "node:url";
 import {
   CHILD_JSON_LIMIT,
   DEFAULT_GUI_PORT,
@@ -16,8 +16,9 @@ import {
   resolveGuiPort,
   runCapture,
   selectPython,
+  stackVersion,
 } from "./aas.mjs";
-import { assertFullStackNodeVersion } from "../scripts/bootstrap.mjs";
+import { assertFullStackNodeVersion, isEntrypoint } from "../scripts/bootstrap.mjs";
 
 /** Bounded, strict JSON request body. The cap is enforced here regardless of any client-side check. */
 async function readJsonRequest(request, { maxBytes = CHILD_JSON_LIMIT } = {}) {
@@ -82,6 +83,7 @@ function stageHeadline(name, stage) {
     no_dispute: "settled and no dispute requested",
     not_reached: "not reached",
     act_error: "act errored",
+    act_failed: "act failed",
   };
   if (!stage || typeof stage !== "object") return `${name}: unknown`;
   if (stage.status === "skipped") {
@@ -312,57 +314,14 @@ export function scenarioPreset(name) {
  */
 const PAGE_HELPERS = [stageDetailsModel, isReviewRunId, validatedRunSettings, scenarioPreset, filterHistory, validateRunBundle, escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, compareModel, historyModel, renderCaseOptions, sha256HexText];
 
-export function renderPage() {
-  const embedded = PAGE_HELPERS.map((fn) => fn.toString()).join("\n");
-  return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Agent Action Stack</title>
-<style>html{color-scheme:light}body{font:16px/1.55 system-ui,sans-serif;max-width:1000px;margin:32px auto;padding:0 20px;color:#17202a;background:#f7f9fc}h1{font-size:2.2rem;line-height:1.2}h2{font-size:1.35rem}.state,.panel{background:white;border:1px solid #d7e0ea;border-radius:12px;padding:20px}label{display:inline-block;margin:6px 12px 6px 0}input[type=search]{padding:9px;max-width:100%;box-sizing:border-box}button{background:#183f71;color:white;border:1px solid #183f71;border-radius:6px}a{color:#164d8e}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #b46b00;outline-offset:3px}.boundary{border-left:4px solid #183f71;padding:12px 16px;background:#eaf1fa}select,input[type=file]{max-width:100%;box-sizing:border-box}.panel,.boundary{overflow-wrap:anywhere}@media(max-width:600px){body{margin:16px auto;padding:0 12px}.state,.panel{padding:14px}label{display:block}button{min-height:44px}pre{font-size:13px}}button{padding:10px 14px;margin:4px 0;cursor:pointer}button:disabled{cursor:wait;opacity:.6}select{padding:9px;margin:4px}pre{background:#f3f5f7;padding:16px;overflow:auto;border-radius:6px}.state{margin:16px 0}.download{display:none}.panel{margin:16px 0}.error{color:#7a1f1f}</style></head>
-<body><main><h1>Agent Action Stack</h1><p>Run the local decide, act, and prove flow using the reviewed component lock.</p>
-<p class="boundary">Synthetic local demo only. No real account operations. The testbench response check gates the run; it is not a signed authorization over the rail proposal. Rail receipt verification and MandateBound recording remain separate authorities. Source truth is unknown; legal effect is not determined.</p>
-<div class="state"><label>Scenario <select id="scenario"><option value="settled">Clean settlement</option><option value="refusal">Policy refusal</option><option value="compensated">Duplicate compensation and review</option><option value="review">Settled action review</option></select></label> <button id="apply-scenario">Apply scenario</button>
-<p id="scenario-note">Choose a scenario or configure the options below. Applying a scenario only changes controls.</p>
-<label>Response <select id="response"><option value="pass">pass</option><option value="fail">fail</option></select></label>
-<label>Fault <select id="fault"><option value="none">none</option><option value="duplicate">duplicate</option></select></label>
-<label>Domain <select id="domain"><option value="refund">refund</option><option value="inventory">inventory allocation</option></select></label>
-<label><input id="dispute" type="checkbox"> force dispute proof</label>
-<label>Prove <select id="prove"><option value="simulate">separate canned simulation</option><option value="rail">same-case rail review</option></select></label>
-<br><button id="run">Run stack</button>
-<a id="download" class="download" download="agent-action-stack-run.json">Download run bundle</a></div>
-<div class="panel" id="summary" aria-live="polite"></div>
-<div class="panel" id="bindings"></div>
-<details><summary>Raw current run report</summary><pre id="output">Ready.</pre></details>
-<div class="panel"><h2>Replay an imported case</h2>
-<p>Import an exported case to inspect and re-verify it. Verification only: no action runs and no remedy is attempted. The imported case is reported separately from any live run above.</p>
-<label for="case-file">Exported case JSON</label>
-<input id="case-file" type="file" accept="application/json,.json"> <button id="replay">Replay imported case</button>
-<div id="import-status" role="status" aria-live="polite"></div>
-<div id="import-result"></div></div>
-<div class="panel"><h2>Case history and comparison</h2>
-<p>Compare two persisted cases by identity, policy reference, component revisions, outcome, evidence digest, and review result. This view loads summaries only, never raw evidence, and never modifies or deletes a case.</p>
-<button id="load-history">Load history</button>
-<button id="older-history" disabled>Load older cases</button><p id="history-page-status" role="status"></p>
-<label>Search loaded cases <input id="history-search" type="search" placeholder="Run, policy, domain, review"></label>
-<label>Outcome <select id="history-outcome"><option value="">all</option><option value="settled">settled</option><option value="compensated">compensated</option></select></label>
-<p id="history-count" role="status" aria-live="polite">Load recent cases to search. The bounded history may omit older or unreadable cases.</p>
-<label>Left <select id="left-case"><option value="">(select a case)</option></select></label>
-<label>Right <select id="right-case"><option value="">(select a case)</option></select></label>
-<button id="compare">Compare selected cases</button>
-<a id="comparison-download" class="download" download>Download comparison review</a>
-<button id="inspect-case">Inspect left case</button>
-<label>Saved run ID <input id="saved-case-id" type="text" maxlength="200" placeholder="Enter an exact saved run ID"></label><button id="lookup-case">Inspect by ID</button>
-<a id="saved-link" class="download">Bookmark this local case</a>
-<a id="saved-report" class="download" download>Download case review</a>
-<button id="restore-settings" disabled>Use saved settings</button>
-<button id="replay-saved" disabled>Verify saved case</button><div id="saved-review-status" role="status"></div><div id="saved-review-result"></div>
-<a id="saved-download" class="download" download>Download selected saved case</a>
-<div id="saved-status" role="status" aria-live="polite"></div><div id="saved-summary"></div><div id="saved-bindings"></div><div id="saved-artifacts"></div>
-<div id="history-list"></div>
-<div id="compare-status" role="status" aria-live="polite"></div>
-<div id="compare-result"></div></div>
-</main><script>
-${embedded}
-document.getElementById('apply-scenario').addEventListener('click',()=>{
+function normalizeNewlines(text) {
+  return text.replace(/\r\n?/g, "\n");
+}
+
+/** The workbench stylesheet, emitted verbatim as the page's only <style>. */
+export const PAGE_STYLE = "html{color-scheme:light}body{font:16px/1.55 system-ui,sans-serif;max-width:1000px;margin:32px auto;padding:0 20px;color:#17202a;background:#f7f9fc}h1{font-size:2.2rem;line-height:1.2}h2{font-size:1.35rem}.state,.panel{background:white;border:1px solid #d7e0ea;border-radius:12px;padding:20px}label{display:inline-block;margin:6px 12px 6px 0}input[type=search]{padding:9px;max-width:100%;box-sizing:border-box}button{background:#183f71;color:white;border:1px solid #183f71;border-radius:6px}a{color:#164d8e}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #b46b00;outline-offset:3px}.boundary{border-left:4px solid #183f71;padding:12px 16px;background:#eaf1fa}select,input[type=file]{max-width:100%;box-sizing:border-box}.panel,.boundary{overflow-wrap:anywhere}@media(max-width:600px){body{margin:16px auto;padding:0 12px}.state,.panel{padding:14px}label{display:block}button{min-height:44px}pre{font-size:13px}}button{padding:10px 14px;margin:4px 0;cursor:pointer}button:disabled{cursor:wait;opacity:.6}select{padding:9px;margin:4px}pre{background:#f3f5f7;padding:16px;overflow:auto;border-radius:6px}.state{margin:16px 0}.download{display:none}.panel{margin:16px 0}.error{color:#7a1f1f}";
+
+const PAGE_CONTROLLER = `document.getElementById('apply-scenario').addEventListener('click',()=>{
   const preset=scenarioPreset(document.getElementById('scenario').value);
   if(!preset) return;
   for(const name of ['response','fault','prove']) document.getElementById(name).value=preset[name];
@@ -371,6 +330,7 @@ document.getElementById('apply-scenario').addEventListener('click',()=>{
 });
 for(const name of ['response','fault','prove','dispute']) document.getElementById(name).addEventListener('change',()=>{ document.getElementById('scenario-note').textContent='Custom options selected. Review the controls before running.'; });
 const output=document.getElementById('output');
+const runStatus=document.getElementById('run-status');
 const summary=document.getElementById('summary');
 const bindings=document.getElementById('bindings');
 const runButton=document.getElementById('run');
@@ -477,17 +437,23 @@ runButton.addEventListener('click',async()=>{
   summary.innerHTML='';
   bindings.innerHTML='';
   clearImported();
-  output.textContent='Running...';
+  // Progress and failures go to the visible status line, which screen
+  // readers announce; #output under the collapsed details holds raw JSON only.
+  runStatus.textContent='Running the synthetic stack...';
+  output.textContent='';
   const query=new URLSearchParams({response:document.getElementById('response').value,fault:document.getElementById('fault').value,prove:document.getElementById('prove').value,domain:document.getElementById('domain').value});
   if(document.getElementById('dispute').checked) query.set('dispute','1');
   let runBody;
   try {
     const response=await fetch('/api/run?'+query,{method:'POST'});
     runBody=await response.json();
-  } catch(error) { if(token!==latestToken) return; output.textContent='Request failed: '+error.message; runButton.disabled=false; return; }
+  } catch(error) { if(token!==latestToken) return; runStatus.textContent='Run request failed: '+error.message; runButton.disabled=false; return; }
   if(token!==latestToken) return;
-  if(!runBody || typeof runBody.run_id!=='string') { output.textContent='Request failed: '+(runBody?.error ?? 'No run identity returned.'); runButton.disabled=false; return; }
+  if(!runBody || typeof runBody.run_id!=='string') { runStatus.textContent='Run not started: '+(runBody?.error ?? 'No run identity returned.'); runButton.disabled=false; return; }
   const runId=runBody.run_id;
+  const finished=runBody.exit_code!==0
+    ? 'Run '+runId+' finished with a stage failure; see the summary.'
+    : 'Run '+runId+' finished: '+(typeof runBody.report?.flow==='string'?runBody.report.flow:'flow unavailable');
   output.textContent=JSON.stringify(runBody.report ?? runBody,null,2);
   try { summary.innerHTML=summaryModel(runBody.report ?? {}); } catch(error) { summary.innerHTML='<p class="error">Summary unavailable.</p>'; }
   let bundle;
@@ -496,7 +462,7 @@ runButton.addEventListener('click',async()=>{
     bundle=await bundleResponse.json();
     if(bundleResponse.ok===false) throw new Error(bundle?.error ?? 'Bundle request failed.');
     validateRunBundle(bundle,runId);
-  } catch(error) { if(token!==latestToken) return; bindings.textContent='Bundle unavailable: '+error.message; runButton.disabled=false; return; }
+  } catch(error) { if(token!==latestToken) return; bindings.textContent='Bundle unavailable: '+error.message; runStatus.textContent='Run '+runId+' finished, but its bundle is unavailable.'; runButton.disabled=false; return; }
   if(token!==latestToken) return;
   let bindingHtml;
   try { bindingHtml=await bindingsModel(bundle); } catch(error) { bindingHtml='<p class="error">Bindings unavailable.</p>'; }
@@ -505,6 +471,7 @@ runButton.addEventListener('click',async()=>{
   if(token!==latestToken) return;
   download.href='/api/bundle/'+encodeURIComponent(runId);
   download.style.display='inline-block';
+  runStatus.textContent=finished;
   runButton.disabled=false;
 });
 replayButton.addEventListener('click',async()=>{
@@ -574,7 +541,76 @@ compareButton.addEventListener('click',async()=>{
   compareStatus.textContent='';
   compareButton.disabled=false;
 });
-</script></body></html>`;
+`;
+
+/**
+ * The page's only script: the embedded helpers, then the controller. Built
+ * once, with line endings normalized: fn.toString() returns CRLF source on a
+ * CRLF checkout, while the browser hashes the script after the HTML parser
+ * has turned CRLF into LF.
+ */
+export const PAGE_SCRIPT = normalizeNewlines(`\n${PAGE_HELPERS.map((fn) => fn.toString()).join("\n")}\n${PAGE_CONTROLLER}`);
+
+function cspHash(text) {
+  return `'sha256-${createHash("sha256").update(text, "utf8").digest("base64")}'`;
+}
+
+/**
+ * The page content is static per process, so the policy pins the exact
+ * script and style by hash. Case data reaches the DOM only through
+ * escapeHtml, and no other inline script or style can run.
+ */
+export const PAGE_CSP = `default-src 'self'; script-src ${cspHash(PAGE_SCRIPT)}; style-src ${cspHash(PAGE_STYLE)}; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
+
+export function renderPage() {
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent Action Stack</title>
+<style>${PAGE_STYLE}</style></head>
+<body><main><h1>Agent Action Stack</h1><p>Run the local decide, act, and prove flow using the reviewed component lock.</p>
+<p class="boundary">Synthetic local demo only. No real account operations. The testbench response check gates the run; it is not a signed authorization over the rail proposal. Rail receipt verification and MandateBound recording remain separate authorities. Source truth is unknown; legal effect is not determined.</p>
+<div class="state"><label>Scenario <select id="scenario"><option value="settled">Clean settlement</option><option value="refusal">Policy refusal</option><option value="compensated">Duplicate compensation and review</option><option value="review">Settled action review</option></select></label> <button id="apply-scenario">Apply scenario</button>
+<p id="scenario-note">Choose a scenario or configure the options below. Applying a scenario only changes controls.</p>
+<label>Response <select id="response"><option value="pass">pass</option><option value="fail">fail</option></select></label>
+<label>Fault <select id="fault"><option value="none">none</option><option value="duplicate">duplicate</option></select></label>
+<label>Domain <select id="domain"><option value="refund">refund</option><option value="inventory">inventory allocation</option></select></label>
+<label><input id="dispute" type="checkbox"> force dispute proof</label>
+<label>Prove <select id="prove"><option value="simulate">separate canned simulation</option><option value="rail">same-case rail review</option></select></label>
+<br><button id="run">Run stack</button>
+<p id="run-status" role="status" aria-live="polite"></p>
+<a id="download" class="download" download="agent-action-stack-run.json">Download run bundle</a></div>
+<div class="panel" id="summary" aria-live="polite"></div>
+<div class="panel" id="bindings"></div>
+<details><summary>Raw current run report</summary><pre id="output">Ready.</pre></details>
+<div class="panel"><h2>Replay an imported case</h2>
+<p>Import an exported case to inspect and re-verify it. Verification only: no action runs and no remedy is attempted. The imported case is reported separately from any live run above.</p>
+<label for="case-file">Exported case JSON</label>
+<input id="case-file" type="file" accept="application/json,.json"> <button id="replay">Replay imported case</button>
+<div id="import-status" role="status" aria-live="polite"></div>
+<div id="import-result"></div></div>
+<div class="panel"><h2>Case history and comparison</h2>
+<p>Compare two persisted cases by identity, policy reference, component revisions, outcome, evidence digest, and review result. This view loads summaries only, never raw evidence, and never modifies or deletes a case.</p>
+<button id="load-history">Load history</button>
+<button id="older-history" disabled>Load older cases</button><p id="history-page-status" role="status"></p>
+<label>Search loaded cases <input id="history-search" type="search" placeholder="Run, policy, domain, review"></label>
+<label>Outcome <select id="history-outcome"><option value="">all</option><option value="settled">settled</option><option value="compensated">compensated</option></select></label>
+<p id="history-count" role="status" aria-live="polite">Load recent cases to search. The bounded history may omit older or unreadable cases.</p>
+<label>Left <select id="left-case"><option value="">(select a case)</option></select></label>
+<label>Right <select id="right-case"><option value="">(select a case)</option></select></label>
+<button id="compare">Compare selected cases</button>
+<a id="comparison-download" class="download" download>Download comparison review</a>
+<button id="inspect-case">Inspect left case</button>
+<label>Saved run ID <input id="saved-case-id" type="text" maxlength="200" placeholder="Enter an exact saved run ID"></label><button id="lookup-case">Inspect by ID</button>
+<a id="saved-link" class="download">Bookmark this local case</a>
+<a id="saved-report" class="download" download>Download case review</a>
+<button id="restore-settings" disabled>Use saved settings</button>
+<button id="replay-saved" disabled>Verify saved case</button><div id="saved-review-status" role="status"></div><div id="saved-review-result"></div>
+<a id="saved-download" class="download" download>Download selected saved case</a>
+<div id="saved-status" role="status" aria-live="polite"></div><div id="saved-summary"></div><div id="saved-bindings"></div><div id="saved-artifacts"></div>
+<div id="history-list"></div>
+<div id="compare-status" role="status" aria-live="polite"></div>
+<div id="compare-result"></div></div>
+</main><script>${PAGE_SCRIPT}</script></body></html>`;
 }
 
 function savedPathId(pathname, prefix) {
@@ -614,14 +650,19 @@ function requestBoundaryFailure(request) {
   if (hostHeaders.length !== 1 || request.headers.host !== expectedHost) return "host";
   const origin = request.headers.origin;
   // Distinguish a missing-Origin POST (caller forgot to identify itself) from
-  // a wrong-Origin POST (caller is some other origin). The first is a 400
-  // ("you forgot to send Origin"), the second is a 403 ("Origin does not
-  // match this server"). Both still return 403 today; the missing-Origin
-  // case is the surprising one for programmatic local clients.
+  // a wrong-Origin POST (caller is some other origin). The first answers 400
+  // ("Origin header required for POST"), the second 403 ("Forbidden").
   if (request.method === "POST" && origin === undefined) return "missing-origin";
   if (request.method === "POST" && origin !== `http://${expectedHost}`) return "origin";
   if (origin !== undefined && origin !== `http://${expectedHost}`) return "origin";
   return null;
+}
+
+const RUNS_DIRECTORY_REFUSAL = "Runs directory must be a regular directory.";
+
+/** 422 for a case store the orchestrator refuses to read; anything else is a 500. */
+function storeErrorStatus(error) {
+  return /Runs directory must be a regular directory/.test(error?.message ?? "") ? 422 : 500;
 }
 
 export function createGuiServer({
@@ -630,6 +671,9 @@ export function createGuiServer({
   runOptions = {},
   replayRunner,
   depsDir,
+  // Injectable so tests can hold a history page open; production pages are
+  // read in the worker like every other case-store scan.
+  historyTask = (options) => runGuiTask({ operation: "history", options }),
 } = {}) {
   let activeWork = false;
   let historyInFlight = false;
@@ -659,7 +703,7 @@ export function createGuiServer({
       if (request.method === "GET" && url.pathname === "/") {
         response.writeHead(200, {
           "cache-control": "no-store",
-          "content-security-policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+          "content-security-policy": PAGE_CSP,
           "content-type": "text/html; charset=utf-8",
           "x-content-type-options": "nosniff",
           "x-frame-options": "DENY",
@@ -668,7 +712,7 @@ export function createGuiServer({
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/health") {
-        sendJson(response, 200, { ok: true, stack: "agent-action-stack" });
+        sendJson(response, 200, { ok: true, stack: "agent-action-stack", version: stackVersion() });
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/run") {
@@ -796,10 +840,18 @@ export function createGuiServer({
           || (url.searchParams.has("limit") && !/^(?:[1-9]|[1-4][0-9]|50)$/.test(url.searchParams.get("limit")))) {
           sendJson(response, 400, { error: "Invalid history page options." }); return;
         }
-        if (historyInFlight) { sendJson(response, 503, { error: "A history page is already loading." }); return; }
+        if (historyInFlight) { sendJson(response, 503, { error: "A history page is already loading." }, { "retry-after": "1" }); return; }
         historyInFlight = true;
         let page;
-        try { page = await runGuiTask({ operation: "history", options: { outputRoot, before: url.searchParams.get("before"), limit: Number(url.searchParams.get("limit") ?? 25) } }); } finally { historyInFlight = false; }
+        try {
+          page = await historyTask({ outputRoot, before: url.searchParams.get("before"), limit: Number(url.searchParams.get("limit") ?? 25) });
+        } catch (error) {
+          const status = storeErrorStatus(error);
+          sendJson(response, status, { error: status === 422 ? RUNS_DIRECTORY_REFUSAL : "History could not be loaded." });
+          return;
+        } finally {
+          historyInFlight = false;
+        }
         sendJson(response, 200, { ok: true, ...page });
         return;
       }
@@ -815,8 +867,8 @@ export function createGuiServer({
         try {
           comparison = compareRuns(left, right, { outputRoot });
         } catch (error) {
-          if (/regular directory/.test(error?.message ?? "")) {
-            sendJson(response, 422, { error: "Runs directory must be a regular directory." });
+          if (storeErrorStatus(error) === 422) {
+            sendJson(response, 422, { error: RUNS_DIRECTORY_REFUSAL });
             return;
           }
           throw error;
@@ -860,7 +912,20 @@ export function createGuiServer({
 export async function startGui({ port = DEFAULT_GUI_PORT, host = "127.0.0.1", ...options } = {}) {
   if (host !== "127.0.0.1") throw new TypeError("GUI host must be 127.0.0.1.");
   const server = createGuiServer(options);
-  await new Promise((resolve) => server.listen(port, host, resolve));
+  await new Promise((resolve, reject) => {
+    // Without a listener a taken port is an unhandled 'error' event and a
+    // stack trace. The server never bound, so there is nothing to close.
+    const onError = (error) => {
+      reject(error?.code === "EADDRINUSE" || error?.code === "EACCES"
+        ? new Error(`Cannot listen on ${host}:${port} (${error.code}). Set AAS_GUI_PORT to a free loopback port.`)
+        : error);
+    };
+    server.once("error", onError);
+    server.listen(port, host, () => {
+      server.off("error", onError);
+      resolve();
+    });
+  });
   const address = server.address();
   const actualPort = typeof address === "object" && address ? address.port : port;
   process.stdout.write(`Agent Action Stack GUI: http://${host}:${actualPort}\n`);
@@ -895,12 +960,18 @@ async function main() {
       if (page.status !== 200 || !/text\/html/.test(page.headers["content-type"] ?? "")) {
         throw new Error(`GUI page request failed: ${page.status}`);
       }
-      if (!page.headers["content-security-policy"]) throw new Error("GUI page is missing its content security policy.");
+      const policy = page.headers["content-security-policy"];
+      if (policy !== PAGE_CSP || policy.includes("unsafe-inline")) {
+        throw new Error("GUI page does not send the hash-pinned content security policy.");
+      }
       if (!page.body.includes("<script>") || !page.body.includes("</html>")) {
         throw new Error("GUI page body is truncated.");
       }
+      if (!page.body.includes(`<script>${PAGE_SCRIPT}</script>`) || !page.body.includes(`<style>${PAGE_STYLE}</style>`)) {
+        throw new Error("GUI page script or style differs from the hashed content.");
+      }
       for (const fn of PAGE_HELPERS) {
-        if (!page.body.includes(fn.toString())) throw new Error(`GUI page is missing embedded helper ${fn.name}.`);
+        if (!page.body.includes(normalizeNewlines(fn.toString()))) throw new Error(`GUI page is missing embedded helper ${fn.name}.`);
       }
     } finally {
       await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
@@ -911,7 +982,7 @@ async function main() {
   await startGui({ port: resolveGuiPort() });
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isEntrypoint(import.meta.url)) {
   main().catch((error) => {
     process.stderr.write(`${JSON.stringify({ error: { message: error.message } })}\n`);
     process.exitCode = 1;

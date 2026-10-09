@@ -60,6 +60,28 @@ test("run, inspect, export, import, and replay through the real UI", async ({ pa
   await expect(page.locator("#import-result")).toContainText("no action execution or remediation runs");
 });
 
+test("the page script and stylesheet run under the hash-pinned policy", async ({ page }) => {
+  const violations = [];
+  page.on("console", (message) => {
+    if (/Content Security Policy/i.test(message.text())) violations.push(message.text());
+  });
+  await page.addInitScript(() => {
+    document.addEventListener("securitypolicyviolation", (event) => {
+      window.__cspViolations = [...(window.__cspViolations ?? []), event.violatedDirective];
+    });
+  });
+  const response = await page.goto("/");
+  expect(response.headers()["content-security-policy"]).not.toContain("unsafe-inline");
+  // The stylesheet applied (body background #f7f9fc) and the script ran
+  // (applying a scenario rewrites the note).
+  await expect(page.locator("body")).toHaveCSS("background-color", "rgb(247, 249, 252)");
+  await page.selectOption("#scenario", "refusal");
+  await page.click("#apply-scenario");
+  await expect(page.locator("#scenario-note")).toContainText("Expected: policy refusal");
+  expect(await page.evaluate(() => window.__cspViolations ?? [])).toEqual([]);
+  expect(violations).toEqual([]);
+});
+
 test("refusal shows policy refusal and skips act and prove", async ({ page }) => {
   await page.goto("/");
   await runStack(page, { response: "fail" });
@@ -67,6 +89,11 @@ test("refusal shows policy refusal and skips act and prove", async ({ page }) =>
   await expect(page.locator("#summary")).toContainText("act: skipped");
   await expect(page.locator("#summary")).toContainText("prove: skipped");
   await expect(page.locator("#bindings")).toContainText("action: none");
+  // The outcome is announced in the visible status, not only in the
+  // collapsed raw report.
+  await expect(page.locator("#run-status")).toBeVisible();
+  await expect(page.locator("#run-status")).toContainText("finished");
+  await expect(page.locator("#run-status")).toContainText("decide -> stop (policy failed)");
 });
 
 test("repeated runs replace the previous summary instead of stacking", async ({ page }) => {

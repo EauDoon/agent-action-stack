@@ -4,12 +4,35 @@
  * This script never accesses private repositories.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const lockPath = join(root, "stack-lock.json");
+
+/**
+ * True when the module at `metaUrl` is the script Node was asked to run.
+ *
+ * Node realpaths the main module before it builds `import.meta.url`, but
+ * `process.argv[1]` keeps the path as typed. Comparing the two directly fails
+ * whenever the script is reached through a link (an npm bin symlink, `npm
+ * link`, a macOS /tmp checkout, a Windows junction), and the entrypoint then
+ * exits 0 without running. Both sides are resolved with `realpathSync.native`
+ * so Windows short names and drive-letter case compare equal too.
+ *
+ * @param {string} metaUrl The caller's `import.meta.url`.
+ * @param {string|undefined} [argv1] The script path Node received.
+ * @returns {boolean}
+ */
+export function isEntrypoint(metaUrl, argv1 = process.argv[1]) {
+  if (!argv1) return false;
+  try {
+    return realpathSync.native(argv1) === realpathSync.native(fileURLToPath(metaUrl));
+  } catch {
+    return false;
+  }
+}
 
 /** Full-stack floor: the pinned MandateBound package declares engines >=22.12.0. */
 export const MIN_FULL_STACK_NODE = Object.freeze([22, 12, 0]);
@@ -82,11 +105,14 @@ export function exec(command, args, opts = {}) {
   });
 }
 
-function requireCommand(command, args, opts = {}) {
-  const result = exec(command, args, opts);
+function requireCommand(command, args, opts = {}, run = exec) {
+  const result = run(command, args, opts);
   if (result.error || result.status !== 0) {
     const detail = result.error?.code ?? `exit ${result.status ?? "unknown"}`;
-    throw new Error(`Command failed: ${command} ${args.join(" ")} (${detail})`);
+    // Keep the tool's own explanation; "exit 128" alone does not say whether
+    // the network, a path length, or permissions failed.
+    const said = typeof result.stderr === "string" ? result.stderr.replace(/\s+/g, " ").trim().slice(0, 300) : "";
+    throw new Error(`Command failed: ${command} ${args.join(" ")} (${detail})${said ? `: ${said}` : ""}`);
   }
   return result;
 }
@@ -158,7 +184,7 @@ export function inspectDependencyDirectory(target, component, { command = exec }
   const symbolic = command("git", ["-C", target, "symbolic-ref", "--quiet", "--short", "HEAD"]);
   const status = command("git", ["-C", target, "status", "--porcelain"]);
   if (origin.error || origin.status !== 0 || head.error || head.status !== 0 || status.error || status.status !== 0) {
-    throw new Error(`Refusing unusable pre-existing dependency: ${component.name}`);
+    throw new Error(`Refusing unusable pre-existing dependency: ${component.name}. Remove deps/${component.name} and rerun npm run bootstrap.`);
   }
   const actualOrigin = origin.stdout.trim();
   const actualHead = head.stdout.trim();
@@ -191,12 +217,54 @@ export function inspectDependencyDirectory(target, component, { command = exec }
   };
 }
 
-function cloneAtCommit(target, component) {
-  mkdirSync(dirname(target), { recursive: true });
-  requireCommand("git", ["init", "--quiet", target]);
-  requireCommand("git", ["-C", target, "remote", "add", "origin", component.repository]);
-  requireCommand("git", ["-C", target, "fetch", "--depth", "1", "origin", component.commit]);
-  requireCommand("git", ["-C", target, "checkout", "--detach", "--quiet", component.commit]);
+const RENAME_RETRY_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
+
+function sleepSync(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+/**
+ * Move a finished staging checkout into place. On Windows a freshly written
+ * .git can be held briefly by antivirus or the search indexer, so a rename
+ * that fails with EPERM, EBUSY, or EACCES is retried up to three times.
+ */
+export function moveIntoPlace(staging, target, { rename = renameSync, retries = 3, delayMs = 100 } = {}) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      rename(staging, target);
+      return;
+    } catch (error) {
+      if (attempt >= retries || !RENAME_RETRY_CODES.has(error?.code)) throw error;
+      sleepSync(delayMs);
+    }
+  }
+}
+
+/**
+ * Clone one component at its pinned commit. The clone is built in a hidden
+ * sibling directory and moved to `target` only after checkout succeeds, so a
+ * failed or interrupted fetch can never leave a half-initialized repository
+ * where the next bootstrap would refuse it.
+ *
+ * The staging name (`.tmp-` plus six characters) is shorter than every
+ * component name. Git for Windows refuses object paths over 260 characters,
+ * so a longer staging path would make the clone fail in a deep checkout
+ * where cloning straight into `target` succeeds.
+ */
+function cloneAtCommit(target, component, { command = exec } = {}) {
+  const parent = dirname(target);
+  mkdirSync(parent, { recursive: true });
+  const staging = mkdtempSync(join(parent, ".tmp-"));
+  try {
+    requireCommand("git", ["init", "--quiet", staging], {}, command);
+    requireCommand("git", ["-C", staging, "remote", "add", "origin", component.repository], {}, command);
+    requireCommand("git", ["-C", staging, "fetch", "--depth", "1", "origin", component.commit], {}, command);
+    requireCommand("git", ["-C", staging, "checkout", "--detach", "--quiet", component.commit], {}, command);
+    moveIntoPlace(staging, target);
+  } catch (error) {
+    rmSync(staging, { recursive: true, force: true });
+    throw new Error(`Could not prepare ${component.name} at ${component.commit}: ${error.message}. Nothing was left in deps/; rerun npm run bootstrap.`);
+  }
 }
 
 export function npmInvocation(args, { platform = process.platform, npmExecPath = process.env.npm_execpath, nodeExecPath = process.execPath } = {}) {
@@ -209,42 +277,49 @@ export function npmInvocation(args, { platform = process.platform, npmExecPath =
   return { command: "npm", args };
 }
 
-function runNpm(target, args) {
+function runNpm(target, args, command = exec) {
   const invocation = npmInvocation(args);
-  requireCommand(invocation.command, invocation.args, { cwd: target, stdio: "inherit" });
+  requireCommand(invocation.command, invocation.args, { cwd: target, stdio: "inherit" }, command);
 }
 
-export function prepareDependencies({ root: projectRoot = root, deps = join(projectRoot, "deps"), components = loadComponentLock(join(projectRoot, "stack-lock.json")), nodeVersion } = {}) {
+export function prepareDependencies({ root: projectRoot = root, deps = join(projectRoot, "deps"), components = loadComponentLock(join(projectRoot, "stack-lock.json")), nodeVersion, command = exec } = {}) {
   assertFullStackNodeVersion(nodeVersion === undefined ? {} : { version: nodeVersion });
   mkdirSync(deps, { recursive: true });
   assertDependencyDirectory(deps);
   const prepared = [];
   for (const component of components) {
     const target = join(deps, component.name);
-    const existing = inspectDependencyDirectory(target, component);
+    const existing = inspectDependencyDirectory(target, component, { command });
     if (!existing.exists) {
-      cloneAtCommit(target, component);
+      cloneAtCommit(target, component, { command });
     }
-    inspectDependencyDirectory(target, component);
+    inspectDependencyDirectory(target, component, { command });
     if (component.install === "npm-ci") {
-      runNpm(target, ["ci", "--ignore-scripts"]);
+      runNpm(target, ["ci", "--ignore-scripts"], command);
     }
     if (component.build === "npm-run-build") {
-      runNpm(target, ["run", "build"]);
+      runNpm(target, ["run", "build"], command);
     }
     const state = inspectDependencyDirectory(target, {
       ...component,
       expected_entrypoints: [...component.expected_entrypoints, ...(component.post_build_entrypoints ?? [])],
-    });
+    }, { command });
     prepared.push(state);
   }
   return prepared;
 }
 
-export function main() {
-  const prepared = prepareDependencies();
+export function main(options = {}) {
+  let prepared;
+  try {
+    prepared = prepareDependencies(options);
+  } catch (error) {
+    process.stderr.write(`bootstrap failed: ${error.message}\n`);
+    process.exitCode = 1;
+    return;
+  }
   for (const item of prepared) process.stdout.write(`deps/${item.target.split(/[\\/]/).pop()}: ${item.commit} detached clean\n`);
   process.stdout.write("Bootstrap complete.\n");
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
+if (isEntrypoint(import.meta.url)) main();

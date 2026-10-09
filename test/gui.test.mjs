@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { runGuiTask } from "../bin/aas-gui-worker.mjs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { createServer as createNetServer } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { createHash } from "node:crypto";
 import { request } from "node:http";
@@ -11,7 +12,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { stageDetailsModel, validatedRunSettings, scenarioPreset, filterHistory, bindingsModel, compareModel, createGuiServer, historyModel, renderPage, replayHttpStatus, replayResultModel, summaryModel } from "../bin/aas-gui.mjs";
+import { stageDetailsModel, validatedRunSettings, scenarioPreset, filterHistory, bindingsModel, compareModel, createGuiServer, historyModel, renderPage, replayHttpStatus, replayResultModel, startGui, summaryModel } from "../bin/aas-gui.mjs";
 import { compareRuns, exportRunBundle, runDemo, selectPython } from "../bin/aas.mjs";
 
 const provenance = [
@@ -58,7 +59,8 @@ test("GUI exposes a guided page and uses the orchestrator run bundle", async () 
   try {
     const health = await requestServer(server, "/api/health");
     assert.equal(health.status, 200);
-    assert.equal(JSON.parse(health.body).ok, true);
+    const packageVersion = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8")).version;
+    assert.deepEqual(JSON.parse(health.body), { ok: true, stack: "agent-action-stack", version: packageVersion });
     const address = server.address();
     const run = await requestServer(server, "/api/run?response=pass&fault=none", {
       method: "POST",
@@ -216,6 +218,27 @@ test("summary model narrates status, gating reasons, and review results", () => 
   assert.match(rail, /mode rail-review/);
   assert.match(rail, /review recorded/);
   assert.match(rail, /review review-abc/);
+
+  const actErrored = summaryModel({
+    flow: "decide -> act error",
+    stages: {
+      decide: { status: "passed", passed: true },
+      act: { status: "error", reason: "act child process exited with status 7" },
+      prove: { status: "skipped", reason: "act_error" },
+    },
+  });
+  assert.match(actErrored, /prove: skipped \(act errored\)/);
+
+  const actFailed = summaryModel({
+    flow: "decide -> act -> stop (act failed)",
+    stages: {
+      decide: { status: "passed", passed: true },
+      act: { status: "failed" },
+      prove: { status: "skipped", reason: "act_failed" },
+    },
+  });
+  assert.match(actFailed, /prove: skipped \(act failed\)/);
+  assert.doesNotMatch(actFailed, /act_failed/);
 });
 
 test("summary model escapes untrusted values", () => {
@@ -300,7 +323,7 @@ function pageScript() {
 
 function stubDocument() {
   const elements = {};
-  for (const id of ["response", "fault", "dispute", "prove", "run", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count", "inspect-case", "saved-download", "saved-status", "saved-summary", "saved-bindings", "scenario", "apply-scenario", "scenario-note", "restore-settings", "older-history", "history-page-status", "saved-case-id", "lookup-case", "saved-link", "replay-saved", "saved-review-status", "saved-review-result", "saved-artifacts", "saved-report", "comparison-download"]) {
+  for (const id of ["response", "fault", "dispute", "prove", "run", "run-status", "download", "output", "summary", "bindings", "case-file", "replay", "import-status", "import-result", "load-history", "left-case", "right-case", "compare", "compare-status", "compare-result", "history-list", "domain", "history-search", "history-outcome", "history-count", "inspect-case", "saved-download", "saved-status", "saved-summary", "saved-bindings", "scenario", "apply-scenario", "scenario-note", "restore-settings", "older-history", "history-page-status", "saved-case-id", "lookup-case", "saved-link", "replay-saved", "saved-review-status", "saved-review-result", "saved-artifacts", "saved-report", "comparison-download"]) {
     elements[id] = { value: "pass", checked: false, disabled: false, textContent: "", innerHTML: "", href: null, style: {}, listeners: {},
       addEventListener(name, fn) { const prior = this.listeners[name]; this.listeners[name] = prior ? (...args) => { prior(...args); return fn(...args); } : fn; },
       removeAttribute(name) { delete this[name]; } };
@@ -352,9 +375,58 @@ test("page script surfaces request failures without stale exports", async () => 
   const fetch = () => Promise.reject(new Error("boom"));
   const ui = run(document, fetch, globalThis.crypto);
   await ui.click();
-  assert.match(document.elements.output.textContent, /Request failed: boom/);
+  assert.equal(document.elements["run-status"].textContent, "Run request failed: boom");
+  assert.equal(document.elements.output.textContent, "");
   assert.equal(document.elements.download.href, undefined);
   assert.equal(document.elements.run.disabled, false);
+});
+
+test("page script announces run progress, refusals, and outcomes in the visible status", async () => {
+  const script = pageScript();
+  const run = new Function("document", "fetch", "crypto", `${script}; return { click: () => document.getElementById('run').listeners.click() };`);
+  const page = renderPage();
+  // The status sits in the run panel, outside the collapsed raw-report details.
+  assert.match(page, /<button id="run">Run stack<\/button>\s*<p id="run-status" role="status" aria-live="polite"><\/p>/);
+  assert.ok(page.indexOf('id="run-status"') < page.indexOf("<details>"));
+
+  const busy = "Another run or replay is already running; wait for it to finish.";
+  const missingDeps = "Missing deps/constitutional-agent-testbench. Run: npm run bootstrap";
+  for (const error of [busy, missingDeps]) {
+    const document = stubDocument();
+    let release;
+    const fetch = () => new Promise((resolve) => { release = () => resolve({ ok: false, json: async () => ({ error }) }); });
+    const ui = run(document, fetch, globalThis.crypto);
+    const pending = ui.click();
+    assert.equal(document.elements["run-status"].textContent, "Running the synthetic stack...");
+    release();
+    await pending;
+    assert.equal(document.elements["run-status"].textContent, `Run not started: ${error}`);
+    assert.equal(document.elements.run.disabled, false);
+  }
+
+  const bundleFor = (url) => {
+    const id = decodeURIComponent(url.split("/").at(-1));
+    return { report: { run_id: id, stages: {} }, manifest: { run_id: id }, stages: {} };
+  };
+  const completed = stubDocument();
+  await run(completed, async (url) => ({ json: async () => (url.startsWith("/api/run")
+    ? { run_id: "run-ok", exit_code: 0, report: { flow: "decide -> stop (policy failed)", stages: {} } }
+    : bundleFor(url)) }), globalThis.crypto).click();
+  assert.equal(completed.elements["run-status"].textContent, "Run run-ok finished: decide -> stop (policy failed)");
+  assert.match(completed.elements.output.textContent, /"flow": "decide -> stop \(policy failed\)"/);
+
+  const failed = stubDocument();
+  await run(failed, async (url) => ({ json: async () => (url.startsWith("/api/run")
+    ? { run_id: "run-bad", exit_code: 1, report: { flow: "decide -> act error", stages: {} } }
+    : bundleFor(url)) }), globalThis.crypto).click();
+  assert.equal(failed.elements["run-status"].textContent, "Run run-bad finished with a stage failure; see the summary.");
+
+  const unavailable = stubDocument();
+  await run(unavailable, async (url) => (url.startsWith("/api/run")
+    ? { json: async () => ({ run_id: "run-gone", exit_code: 0, report: { flow: "decide -> act", stages: {} } }) }
+    : { ok: false, json: async () => ({ error: "Saved case not found." }) }), globalThis.crypto).click();
+  assert.equal(unavailable.elements["run-status"].textContent, "Run run-gone finished, but its bundle is unavailable.");
+  assert.match(unavailable.elements.bindings.textContent, /Saved case not found/);
 });
 
 test("GUI rail run and CLI agree on the same review binding", async () => {
@@ -705,6 +777,37 @@ test("malformed percent-encoding in a saved-case path is a client error", async 
   }
 });
 
+test("GUI content security policy pins the page script and style by hash", async () => {
+  const page = renderPage();
+  const scripts = [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
+  const styles = [...page.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((match) => match[1]);
+  assert.equal(scripts.length, 1);
+  assert.equal(styles.length, 1);
+  // No other way to run inline code or style: no attributes on the two
+  // elements, no inline handlers, no style attributes.
+  assert.doesNotMatch(page, /<script\s[^>]*>|<style\s[^>]*>/);
+  assert.doesNotMatch(page, /\son[a-z]+=|\sstyle=/i);
+  assert.ok(!scripts[0].includes("\r"), "the hashed script must be LF-only");
+  const sha = (text) => `'sha256-${createHash("sha256").update(text, "utf8").digest("base64")}'`;
+
+  const server = createGuiServer({ outputRoot: mkdtempSync(join(tmpdir(), "aas-gui-csp-")) });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const served = await requestServer(server, "/");
+    assert.equal(served.status, 200);
+    assert.equal(served.body, page);
+    const policy = served.headers["content-security-policy"];
+    assert.ok(policy.includes(`script-src ${sha(scripts[0])}`), policy);
+    assert.ok(policy.includes(`style-src ${sha(styles[0])}`), policy);
+    assert.doesNotMatch(policy, /unsafe-inline|unsafe-eval/);
+    for (const directive of ["default-src 'self'", "object-src 'none'", "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'"]) {
+      assert.ok(policy.includes(directive), `policy is missing ${directive}`);
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("GUI exposes a domain selector defaulting to refund", () => {
   const page = renderPage();
   assert.match(page, /<select id="domain">/);
@@ -790,7 +893,7 @@ test("page reports actionable API failures and refuses mismatched bundle exports
     await run(document, fetch, globalThis.crypto)();
     assert.equal(document.elements.download.href, undefined);
     assert.equal(document.elements.run.disabled, false);
-    assert.match(mismatch ? document.elements.bindings.textContent : document.elements.output.textContent, mismatch ? /identity does not match/ : /Another run is active/);
+    assert.match(mismatch ? document.elements.bindings.textContent : document.elements["run-status"].textContent, mismatch ? /identity does not match/ : /Run not started: Another run is active/);
   }
 });
 
@@ -1181,6 +1284,89 @@ test("saved verification uses 422 for a structurally invalid case and 404 when i
     const missing = await requestServer(server, "/api/replay-saved/missing-saved-case", { method: "POST", headers: { origin } });
     assert.equal(missing.status, 404);
   } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+async function occupiedPort() {
+  const blocker = createNetServer();
+  await new Promise((resolve) => blocker.listen(0, "127.0.0.1", resolve));
+  return { port: blocker.address().port, close: () => new Promise((resolve) => blocker.close(resolve)) };
+}
+
+test("GUI start reports a busy port with a recovery hint instead of crashing", async () => {
+  const busy = await occupiedPort();
+  try {
+    await assert.rejects(startGui({ port: busy.port }), (error) => {
+      assert.equal(error.message, `Cannot listen on 127.0.0.1:${busy.port} (EADDRINUSE). Set AAS_GUI_PORT to a free loopback port.`);
+      return true;
+    });
+    const cli = spawnSync(process.execPath, [fileURLToPath(new URL("../bin/aas-gui.mjs", import.meta.url))], {
+      encoding: "utf8",
+      env: { ...process.env, AAS_GUI_PORT: String(busy.port) },
+      timeout: 30_000,
+    });
+    assert.equal(cli.status, 1, cli.stderr);
+    assert.match(cli.stderr, /AAS_GUI_PORT/);
+    assert.doesNotMatch(cli.stderr, /Unhandled 'error' event/);
+    assert.deepEqual(JSON.parse(cli.stderr), { error: { message: `Cannot listen on 127.0.0.1:${busy.port} (EADDRINUSE). Set AAS_GUI_PORT to a free loopback port.` } });
+  } finally {
+    await busy.close();
+  }
+});
+
+test("GUI history answers store refusals with 422, worker failures with 500, and overlap with Retry-After", async () => {
+  // A runs path that is a regular file is the same refusal compare maps to 422.
+  const outputRoot = mkdtempSync(join(tmpdir(), "aas-gui-history-store-"));
+  writeFileSync(join(outputRoot, "runs"), "not a directory\n");
+  const real = createGuiServer({ outputRoot });
+  await new Promise((resolve) => real.listen(0, "127.0.0.1", resolve));
+  try {
+    const refused = await requestServer(real, "/api/history");
+    assert.equal(refused.status, 422);
+    assert.deepEqual(JSON.parse(refused.body), { error: "Runs directory must be a regular directory." });
+    const compared = await requestServer(real, "/api/compare?a=run-a&b=run-b");
+    assert.equal(compared.status, 422);
+  } finally {
+    await new Promise((resolve) => real.close(resolve));
+  }
+
+  let release;
+  let entered;
+  const started = new Promise((resolve) => { entered = resolve; });
+  const held = new Promise((resolve) => { release = resolve; });
+  const calls = [];
+  const server = createGuiServer({
+    outputRoot,
+    historyTask: async (options) => {
+      calls.push(options);
+      if (calls.length === 1) {
+        entered();
+        await held;
+        return { cases: [], next_cursor: null, scanned: 0, unavailable: [] };
+      }
+      throw new Error("GUI worker exited with code 1.");
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const first = requestServer(server, "/api/history?limit=5");
+    await started;
+    const overlapping = await requestServer(server, "/api/history");
+    assert.equal(overlapping.status, 503);
+    assert.equal(overlapping.headers["retry-after"], "1");
+    release();
+    const loaded = await first;
+    assert.equal(loaded.status, 200);
+    assert.equal(calls[0].limit, 5);
+    assert.equal(calls[0].outputRoot, outputRoot);
+    // The lease is released, and an unexpected worker failure is a 500 with
+    // a stable message rather than the generic "Request failed".
+    const failed = await requestServer(server, "/api/history");
+    assert.equal(failed.status, 500);
+    assert.deepEqual(JSON.parse(failed.body), { error: "History could not be loaded." });
+  } finally {
+    release();
     await new Promise((resolve) => server.close(resolve));
   }
 });

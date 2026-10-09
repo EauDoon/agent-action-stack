@@ -1,7 +1,7 @@
 {
   "name": "agent-action-stack",
-  "version": "0.2.5",
-  "private": false,
+  "version": "0.3.0",
+  "private": true,
   "description": "Reference demo: decide with Constitutional Agent Testbench, act with Consequence Rail, prove disputes with MandateBound.",
   "type": "module",
   "bin": {
@@ -17,7 +17,9 @@
     "test": "node --test --experimental-test-isolation=none test/gui.test.mjs test/stack.test.mjs",
     "integration": "node scripts/integration-check.mjs",
     "example:review-handoff": "node examples/review-handoff.mjs",
-    "check": "npm test",
+    "check": "npm test && npm run check:syntax && npm run check:version",
+    "check:syntax": "node scripts/check-syntax.mjs",
+    "check:version": "node scripts/check-version.mjs",
     "test:browser": "playwright test",
     "example:connector-conformance": "node examples/connector-conformance.mjs"
   },

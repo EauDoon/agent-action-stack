@@ -31,8 +31,15 @@ and prepares each dependency under `deps/`:
    is a regular directory, detached (`HEAD` matches the pinned commit
    exactly), clean, and contains every expected entrypoint. Substituted or
    dirty pre-existing directories are rejected.
-2. If absent, bootstrap clones the public URL at the pinned commit, checks
-   out detached, and verifies the entrypoints.
+2. If absent, bootstrap clones the public URL at the pinned commit into a
+   hidden staging directory beside it (`deps/.tmp-` plus six characters,
+   shorter than any component name so Windows path limits are no tighter than
+   for the final checkout), checks out detached, and only then moves it to
+   `deps/<component>` and verifies the entrypoints. A failed fetch removes the
+   staging directory, so a network error never leaves a half-initialized
+   repository that the next bootstrap would refuse. A process killed mid-clone
+   can leave only a hidden staging directory, which is safe to delete and does
+   not block the next run.
 3. For components with an `install` hook, bootstrap runs the declared
    step (`npm-ci`, which runs `npm ci --ignore-scripts`, for MandateBound).
 4. For components with a `build` hook, bootstrap runs the declared step
@@ -41,8 +48,9 @@ and prepares each dependency under `deps/`:
    any other value rather than skipping the step, because a silently ignored
    hook would report a successful bootstrap for an unprepared component.
 The orchestrator records each component's provenance on every run bundle. A
-run resolving components whose checkout disagrees with the lock surfaces the
-disagreement in its manifest.
+checkout that disagrees with the lock (origin, commit, detached state, local
+changes, or entrypoints) stops the run before any stage and writes no bundle,
+so recorded provenance always shows detached, clean, pinned checkouts.
 
 ## When to update
 
@@ -56,6 +64,9 @@ the lock on its own.
    `build` only if the sibling's published contract actually changed.
 4. Run `npm run integration` locally on Ubuntu and Windows. The CI
    integration job runs the same proof on every push and pull request.
+5. Update the pin list in `docs/release-readiness.md` in the same pull
+   request. `npm run check:version` fails while that list is missing a
+   locked commit.
 Security fixes follow the same path. The schema version (`schema_version`)
 is bumped only when the shape changes in a way that requires loader
 changes; existing tools keep reading older versions until the bump lands
@@ -67,14 +78,31 @@ round trips, both currency validation boundaries, and refusal of re-signed
 synthetic evidence whose currency contradicts the proposal. The historical
 `fixtures/legacy-rail-review.json` was exported using Rail `6c61e9f` and
 MandateBound `e526c4c`; it pins replay compatibility for an ordinary synthetic
-refund. Its public demonstration signatures establish no real-world provenance.
+refund. `fixtures/previous-pins-inventory-review.json` was saved by `main` at
+`8179e59` using Rail `c430383` and MandateBound `708256d`, the pins before the
+0.3.0 refresh; it pins replay compatibility for a compensated inventory case
+already in a case store. Their public demonstration signatures establish no
+real-world provenance.
 
 The current Rail pin also binds a receipt's close time to its terminal event,
 so a clock advancing between reads still produces evidence that survives the
 same-case handoff and replay. The MandateBound pin rejects weak Ed25519 keys in
 caller-pinned CasePack checkpoint trust snapshots using its existing strict key
 validator. Ordinary valid evidence retains the same format; neither update
-rewrites old artifacts. The testbench runtime pin is unchanged.
+rewrites old artifacts.
+
+Since 0.3.0 the pins are the component releases of 2026-10-09: Consequence Rail
+0.3.0, MandateBound 2.0.0, and Constitutional Agent Testbench 0.6.0, each at
+its release merge commit. Rail 0.3.0 also binds a receipt's outcome and
+configured postcondition result to the terminal `CLOSED` event for every bundle
+profile, and a receipt-profile `closed_at` to that event's time within 1000 ms,
+so receipts from Rail 0.2.20 and earlier still verify. MandateBound 2.0.0 is a
+major release for its CLI and package API, but the `simulate` and `review`
+commands the stack runs, the review record, and engine `1.0.0` are unchanged,
+so a same-case review recorded under either the previous or the current pins
+replays under the other. Testbench 0.6.0 adds `--version`, command help, and
+Apache-2.0 package metadata; `evaluate` and its Python 3.11 floor are
+unchanged. No entrypoint or hook in the lock changed.
 
 An older artifact with numeric-looking object keys may contain signatures made
 with the former Rail canonical ordering. The current verifier does not try that

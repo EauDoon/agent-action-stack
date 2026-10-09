@@ -26,7 +26,9 @@ What happens. Include error text, stack trace, or logs.
 
 ## Environment
 
-Repo, commit or tag, OS, runtime version, relevant inputs.
+Repo, commit or tag, OS, runtime version, relevant inputs. Include the
+output of `node bin/aas.mjs --version`, and for a saved case the
+`stack_version` in its `manifest.json`.
 
 ## Severity
 

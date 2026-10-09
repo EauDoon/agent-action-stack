@@ -1,26 +1,37 @@
 # Integrator examples
 
-Runnable scripts that connect the pinned components through their supported
-public interfaces. They transport bytes between component CLIs and check the
+Runnable scripts that connect the pinned components. `review-handoff.mjs`
+spawns the real component CLIs, transports bytes between them, and checks the
 bindings between outputs; policy semantics stay in the testbench, execution
-semantics in the rail, and review semantics in MandateBound. Nothing is
-mocked: every step spawns the real component CLI.
+semantics in the rail, and review semantics in MandateBound. Nothing in it is
+mocked. `connector-conformance.mjs` instead drives the rail's synthetic
+connector modules in-process (`src/mock-refund-connector.js` and
+`src/mock-inventory-connector.js` in the pinned checkout); those are rail
+internals, not a supported public interface, and the example moves with the
+rail pin.
 
 Prerequisites: Node.js 22.12+, Python 3.11+ on `PATH`, and a bootstrapped
 checkout (`npm run bootstrap`).
 
 ```bash
 npm run example:review-handoff
-npm run example:review-handoff -- --domain inventory
-npm run example:review-handoff -- --response fail   # exits 1, refusing
+node examples/review-handoff.mjs --domain inventory
+node examples/review-handoff.mjs --response fail   # exits 1, refusing
 npm run example:connector-conformance
 ```
+
+The options are passed to `node` directly: forwarding them through
+`npm run ... -- --flag value` is unreliable on the Windows shell, which is
+why CI invokes the script the same way.
 
 ## review-handoff.mjs
 
 One journey across both synthetic domains (`--domain refund|inventory`):
 
-1. policy evaluation with constitutional-agent-testbench
+1. policy evaluation with constitutional-agent-testbench, against the same
+   gate `aas demo` uses: `fixtures/policy.json` (`aas-refund-gate-v1`) or
+   `fixtures/inventory.policy.json` (`aas-inventory-gate-v1`). The example
+   fails if step 1 or the orchestrated run in step 6 reports another policy.
 2. execution with consequence-rail, which reserves recourse before the
    permit and persists the settlement bundle
 3. evidence inspection: the observed facts and the receipt's digests
@@ -46,12 +57,27 @@ protocol compliance, or that any real-world action is reversible or safe.
 
 ## connector-conformance.mjs
 
-The connector contract, exercised against both real synthetic connectors:
-capability advertisement, recourse reservation refusals (unknown capability,
-undersized scope, cross-domain action), at-most-once execution per
-idempotency key, reconciliation without re-execution, a remedy that reverses
-only the effect bound to the action and only once, and remedy status
-confirmation.
+The connector contract, exercised rule by rule against both synthetic
+connectors (refund and inventory), measuring the effect rather than only the
+return values:
+
+1. capability advertisement: connector, actions, remedies, and custody
+2. recourse reservation: a valid scope is accepted, and an unknown
+   capability, an undersized scope, and a cross-domain action are refused
+3. at-most-once execution: two executes with one idempotency key leave
+   exactly one active refund, and take the allocated quantity off on-hand
+   stock once
+4. reconciliation: `status` returns the recorded result without another
+   execute call or any change to the effect
+5. remedy: the inventory remedy returns on-hand stock exactly to its
+   baseline; the refund remedy voids only the duplicate refund created by
+   the duplicate fault and keeps the primary, and a clean refund remediates
+   to `no_change`. Replaying the same remedy key returns the same result,
+   and a second key is refused with `RECOURSE_NOT_ACTIVE`
+6. remedy status: the recorded remedy result is confirmed, and an unknown
+   key reports `unknown`
+
+Each rule prints `ok <rule> (refund, inventory)`; the first violation exits 1.
 
 It is a synthetic self-check of the shipped connectors. It does not certify
 any real connector, provider, or external effect.

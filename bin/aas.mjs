@@ -25,12 +25,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import {
   assertDependencyDirectory,
   assertFullStackNodeVersion,
   inspectDependencyDirectory,
+  isEntrypoint,
   loadComponentLock,
 } from "../scripts/bootstrap.mjs";
 
@@ -108,6 +109,31 @@ export const DEFAULT_PATHS = Object.freeze({
   outputRoot: join(root, ".out"),
   lock: join(root, "stack-lock.json"),
 });
+
+let cachedStackVersion;
+
+/**
+ * The orchestrator version, read from this package's package.json, which is
+ * the single source of truth for it. Read lazily and cached: the integration
+ * proof's offline replay copies bin/aas.mjs without package.json, so an
+ * import-time read would break every command there. Returns null when the
+ * file is missing, unreadable, or not this package's manifest.
+ *
+ * @returns {string|null}
+ */
+export function stackVersion() {
+  if (cachedStackVersion === undefined) {
+    try {
+      const pkg = JSON.parse(readFileSync(join(DEFAULT_PATHS.root, "package.json"), "utf8"));
+      cachedStackVersion = pkg?.name === "agent-action-stack" && typeof pkg.version === "string" && pkg.version !== ""
+        ? pkg.version
+        : null;
+    } catch {
+      cachedStackVersion = null;
+    }
+  }
+  return cachedStackVersion;
+}
 
 const STAGE_NAMES = ["decide", "act", "prove"];
 const DEMO_FLAG_OPTIONS = new Set(["--dispute", "--json"]);
@@ -242,7 +268,7 @@ export function helpText() {
 
 Usage:
   aas demo [--response pass|fail] [--fault none|duplicate] [--dispute] [--prove simulate|rail] [--domain refund|inventory] [--json]
-  aas export <run-id> [--out <path>] [--overwrite] [--json]
+  aas export <run-id> [--root output-dir] [--out <path>] [--overwrite] [--json]
   aas replay <bundle-file|-> [--json]
   aas latest [--root output-dir] [--json]
   aas verify <run-id> [--root output-dir] [--json]
@@ -250,7 +276,8 @@ Usage:
   aas runs [--root output-dir] [--json]
   aas cases [--root output-dir] [--before run-id] [--limit 1..50] [--domain refund|inventory|unknown] [--outcome settled|compensated|none] [--search text] [--json]
   aas compare <run-id> <run-id> [--root output-dir] [--json|--markdown]
-  aas prune --keep <n> [--dry-run] [--json]
+  aas prune --keep <n> [--root output-dir] [--dry-run] [--json]
+  aas --version [--json]
   aas help
 
 Commands:
@@ -263,6 +290,7 @@ Commands:
   cases   List bounded case summaries (outcome, policy, review, digest)
   compare Compare two cases and classify identical, different, or not comparable
   prune   Remove oldest runs beyond --keep (latest stays; --dry-run previews)
+  version Print the orchestrator version (also --version)
   help    Show this help (also -h or --help)
 
 Options:
@@ -272,7 +300,8 @@ Options:
   --prove simulate|rail    Prove path: canned operator simulation (default)
                            or review of the same-case rail bundle
   --domain refund|inventory  Synthetic action domain (default: refund)
-  --root output-dir        Select saved-case storage for inspect/runs/cases/compare/export/prune
+  --root output-dir        Saved-case storage for latest, verify, inspect, runs, cases,
+                           compare, export, and prune (default: .out)
   --out <path>             Write an export to this file (refuses to replace; see --overwrite)
   --overwrite              Allow --out to replace an existing file
   --before run-id          Start a cases page older than this run id
@@ -284,11 +313,12 @@ Options:
   --dry-run                prune: report what would be removed without deleting
   --markdown               Print the readable Markdown form (compare, inspect)
   --json                   Print machine-readable JSON
+  --version                Print the orchestrator version
   -h, --help               Show this help
 
 Flow:
   decide -> constitutional-agent-testbench evaluate
-  on pass -> consequence-rail demo refund
+  on pass -> consequence-rail demo <domain>
   on dispute -> mandatebound simulate --scenario operator
   on dispute --prove rail -> rail bundle verify + mandatebound review
 
@@ -1104,19 +1134,45 @@ export function readRunBundle(outputRoot, runId) {
   }
 }
 
+/**
+ * Replace a filesystem error from a saved-case read with one that names the
+ * case instead of the absolute local path. The code is kept, so callers that
+ * map ENOENT to "not found" (the GUI's 404s) behave exactly as before.
+ */
+function caseReadError(error, runId, file) {
+  if (!error || typeof error.syscall !== "string") return error;
+  const message = error.code === "ENOENT"
+    ? (file === null ? `Saved case not found: ${runId}` : `Saved case ${runId} is missing ${file}.`)
+    : `Saved case ${runId} could not be read${file === null ? "" : ` (${file})`}: ${error.code ?? "filesystem error"}.`;
+  return Object.assign(new Error(message), { code: error.code });
+}
+
 function readRunBundleBody(outputRoot, runId) {
   if (!isValidRunId(runId)) throw new Error("Invalid run id.");
   assertRunsDirectory(outputRoot);
   const bundleDir = join(outputRoot, "runs", runId);
-  const directory = lstatSync(bundleDir);
+  let directory;
+  try {
+    directory = lstatSync(bundleDir);
+  } catch (error) {
+    throw caseReadError(error, runId, null);
+  }
   if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error("Case directory must be a regular directory.");
-  const manifest = readBoundedCaseJson(join(bundleDir, "manifest.json"));
+  // `file` is the manifest-relative name, already restricted by safeBundleFile.
+  const readCaseFile = (path, file) => {
+    try {
+      return readBoundedCaseJson(path);
+    } catch (error) {
+      throw caseReadError(error, runId, file);
+    }
+  };
+  const manifest = readCaseFile(join(bundleDir, "manifest.json"), "manifest.json");
   validateSavedManifest(manifest, bundleDir);
-  const report = readBoundedCaseJson(safeBundleFile(bundleDir, manifest.report, "report path"));
+  const report = readCaseFile(safeBundleFile(bundleDir, manifest.report, "report path"), manifest.report);
   if (manifest.run_id !== runId || report?.run_id !== runId) throw new Error("Case identity does not match its directory.");
   const stages = {};
   for (const [name, stage] of Object.entries(manifest.stages)) {
-    if (stage.artifact) stages[name] = readBoundedCaseJson(safeBundleFile(bundleDir, stage.artifact, "stage artifact path"));
+    if (stage.artifact) stages[name] = readCaseFile(safeBundleFile(bundleDir, stage.artifact, "stage artifact path"), stage.artifact);
   }
   const bundle = { manifest, report, stages };
   if (Buffer.byteLength(JSON.stringify(bundle, null, 2) + "\n") > CHILD_JSON_LIMIT) throw new Error("Exported case exceeds the replay byte limit.");
@@ -1287,6 +1343,8 @@ export function summarizeRun(runId, { outputRoot = DEFAULT_PATHS.outputRoot } = 
     run_id: runId,
     created_at: typeof manifest.created_at === "string" ? manifest.created_at : null,
     schema_version: manifest.schema_version,
+    // Informational only, never compared: a release changes it on every case.
+    stack_version: typeof manifest.stack_version === "string" ? manifest.stack_version : null,
     domain: typeof report.domain === "string" ? report.domain : null,
     exit_code: manifest.exit_code ?? null,
     flow: typeof report.flow === "string" ? report.flow : null,
@@ -1464,6 +1522,7 @@ export function persistRunBundle({
   componentProvenance,
   exitCode,
   now = new Date().toISOString(),
+  orchestratorVersion = stackVersion(),
 }) {
   // The same rule as readers. The regex alone accepts ".", "..", and "...",
   // and `RegExp.test` stringifies non-strings, so ".." was a path escape.
@@ -1497,6 +1556,8 @@ export function persistRunBundle({
       run_id: runId,
       created_at: now,
       exit_code: exitCode,
+      // Additive within run/v1: readers treat a missing field as null.
+      stack_version: orchestratorVersion,
       component_provenance: componentProvenance,
       stages: stageManifest,
       report: "report.json",
@@ -1558,21 +1619,15 @@ export function printHuman(report, bundleDir = null) {
 }
 
 /**
- * Run decide → act → prove and persist an isolated bundle.
+ * Validate demo flags and their values without touching the environment.
+ * `main` calls this before probing Node.js and Python, so a usage error
+ * exits 2 even when the runtime is broken, and costs no interpreter spawns.
  *
- * @param {string[]} [args] Demo flags: --response, --fault, --dispute, --json.
- * @param {object} [options]
- * @returns {Promise<DemoResult>}
+ * @param {string[]} args
+ * @returns {{responseName: "pass"|"fail", fault: string, forceDispute: boolean, asJson: boolean, proveMode: string, domain: string}}
  */
-export async function runDemo(args = [], options = {}) {
+export function parseDemoOptions(args) {
   validateDemoArgs(args);
-  const childTimeoutMs = options.childTimeoutMs ?? resolveChildTimeoutMs();
-  const runner = options.runner ?? ((command, args, opts = {}) =>
-    runCapture(command, args, { timeout: childTimeoutMs, ...opts }));
-  const paths = {
-    ...DEFAULT_PATHS,
-    ...(options.paths ?? {}),
-  };
   const responseName = option(args, "--response", "pass");
   if (responseName !== "pass" && responseName !== "fail") {
     throw new UsageError("--response must be pass or fail");
@@ -1591,6 +1646,25 @@ export async function runDemo(args = [], options = {}) {
   if (!DEMO_DOMAINS.has(domain)) {
     throw new UsageError("--domain must be refund or inventory");
   }
+  return { responseName, fault, forceDispute, asJson, proveMode, domain };
+}
+
+/**
+ * Run decide → act → prove and persist an isolated bundle.
+ *
+ * @param {string[]} [args] Demo flags: --response, --fault, --dispute, --json.
+ * @param {object} [options]
+ * @returns {Promise<DemoResult>}
+ */
+export async function runDemo(args = [], options = {}) {
+  const { responseName, fault, forceDispute, asJson, proveMode, domain } = parseDemoOptions(args);
+  const childTimeoutMs = options.childTimeoutMs ?? resolveChildTimeoutMs();
+  const runner = options.runner ?? ((command, args, opts = {}) =>
+    runCapture(command, args, { timeout: childTimeoutMs, ...opts }));
+  const paths = {
+    ...DEFAULT_PATHS,
+    ...(options.paths ?? {}),
+  };
   const responseFile =
     domain === "inventory"
       ? `inventory.response.${responseName}.json`
@@ -1609,6 +1683,7 @@ export async function runDemo(args = [], options = {}) {
   let exitCode = 0;
   const report = {
     stack: "agent-action-stack",
+    stack_version: stackVersion(),
     response: responseName,
     requested_options: { response: responseName, domain, fault, prove: proveMode, dispute: forceDispute },
     domain,
@@ -1633,6 +1708,7 @@ export async function runDemo(args = [], options = {}) {
       stages,
       componentProvenance,
       exitCode,
+      orchestratorVersion: report.stack_version,
     });
     return { report, manifest: persisted.manifest, bundleDir: persisted.bundleDir, exitCode, asJson };
   };
@@ -1755,7 +1831,12 @@ export async function runDemo(args = [], options = {}) {
       stages.prove = stageRecord("error", stageErrorFields(error));
       report.stages.prove = stages.prove;
     }
-    if (actStarted && !proveStarted) stages.prove = stageRecord("skipped", { reason: "act_error" });
+    if (actStarted && !proveStarted) {
+      // Record the same skip reason the manifest carries; the report used to
+      // keep its initial not_reached here.
+      stages.prove = stageRecord("skipped", { reason: "act_error" });
+      report.stages.prove = stages.prove;
+    }
     if (proveStarted && stages.act.status === "pending") {
       stages.act = stageRecord("skipped", { reason: "prove_error" });
       report.stages.act = stages.act;
@@ -1928,10 +2009,10 @@ function runPruneCommand(args, { asJson, outputRoot = DEFAULT_PATHS.outputRoot }
     } else if (token === "--dry-run") {
       dryRun = true;
     } else if (token !== "--json") {
-      throw new UsageError(`Unsupported prune option: ${token} (expected --keep <n> [--dry-run] [--json])`);
+      throw new UsageError(`Unsupported prune option: ${token} (expected --keep <n> [--root output-dir] [--dry-run] [--json])`);
     }
   }
-  if (keep === null) throw new UsageError("Usage: aas prune --keep <positive integer> [--dry-run] [--json]");
+  if (keep === null) throw new UsageError("Usage: aas prune --keep <positive integer> [--root output-dir] [--dry-run] [--json]");
   const result = pruneRuns({ keep, dryRun, outputRoot });
   if (asJson) {
     process.stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`);
@@ -1992,7 +2073,7 @@ function runExportCommand(args, { asJson, outputRoot = DEFAULT_PATHS.outputRoot 
       runId = token;
     }
   }
-  if (runId === null) throw new UsageError("Usage: aas export <run-id> [--out <path>] [--overwrite] [--json]");
+  if (runId === null) throw new UsageError("Usage: aas export <run-id> [--root output-dir] [--out <path>] [--overwrite] [--json]");
   if (overwrite && out === null) throw new UsageError("--overwrite requires --out");
   let bundle;
   try {
@@ -2075,6 +2156,23 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   if (isHelpToken(command) || (command === "demo" && demoRequestsHelp(argv.slice(1)))) {
     printHelp();
     process.exitCode = 0;
+    return;
+  }
+  if (command === "--version" || command === "version") {
+    try {
+      const rest = argv.slice(1);
+      if (rest.length > 1 || rest.some((token) => token !== "--json")) throw new UsageError("Usage: aas --version [--json]");
+      const version = stackVersion();
+      if (version === null) throw new Error("Orchestrator version unavailable: package.json is missing or unreadable.");
+      process.stdout.write(asJson
+        ? `${JSON.stringify({ ok: true, name: "agent-action-stack", version })}\n`
+        : `agent-action-stack ${version}\n`);
+      process.exitCode = 0;
+    } catch (error) {
+      const usage = error instanceof UsageError;
+      writeCliError(error, { asJson, usage });
+      process.exitCode = usage ? 2 : 1;
+    }
     return;
   }
   if (command === "latest") {
@@ -2161,6 +2259,7 @@ export async function main(argv = process.argv.slice(2), options = {}) {
     return;
   }
   try {
+    parseDemoOptions(argv.slice(1));
     assertFullStackNodeVersion(
       options.nodeVersion === undefined ? {} : { version: options.nodeVersion },
     );
@@ -2176,7 +2275,7 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isEntrypoint(import.meta.url)) {
   main().catch((error) => {
     process.stderr.write(`${JSON.stringify({ error: { message: error.message } })}\n`);
     process.exitCode = 1;

@@ -13,9 +13,9 @@ Local checks may install dependencies and write caches or temporary files; see
 
 - [ ] Review the final raw tree and changed-file list.
 - [ ] Confirm `stack-lock.json` still contains the approved public URLs and commits:
-  - Constitutional Agent Testbench: `16b2faa71b0f92b9afa15b13afad8c48da8132f4`
-  - Consequence Rail: `c430383c0a0931f0dcf17845d6f0e8ccf328615a` ([PR #68](https://github.com/EauDoon/consequence-rail/pull/68))
-  - MandateBound: `708256d4e48babeb13079fac7589d172920a5c95` ([PR #103](https://github.com/EauDoon/mandatebound/pull/103))
+  - Constitutional Agent Testbench: `ed46f0cb9af400560aa9a9e73bbb9864ed5678a0` (release `v0.6.0`, [PR #63](https://github.com/EauDoon/constitutional-agent-testbench/pull/63))
+  - Consequence Rail: `78d6f8a23dbce69bb443b453c8d471645f67daac` (release `v0.3.0`, [PR #69](https://github.com/EauDoon/consequence-rail/pull/69))
+  - MandateBound: `32d525618e23678f86c754e4a536e4d094988a1b` (release `v2.0.0`, [PR #104](https://github.com/EauDoon/mandatebound/pull/104))
 - [ ] Run bootstrap from a clean workspace and verify detached, clean, exact dependency checkouts.
 - [ ] Confirm no private repository, credential, or production endpoint is referenced.
 
@@ -24,7 +24,9 @@ Local checks may install dependencies and write caches or temporary files; see
 - [ ] `npm ci --ignore-scripts` completes on Windows and Ubuntu.
 - [ ] `npm test` passes with lock mismatch, stale dependency, stage, child-process, and atomic-write coverage.
 - [ ] `npm run gui:smoke` passes.
-- [ ] `npm run integration` passes on Ubuntu and Windows (Node.js 22.12.0 and 24, Python 3.13).
+- [ ] `npm run check` passes (unit suite, syntax gate, version consistency), and
+  `node scripts/check-version.mjs --tag vX.Y.Z` reports the release tag consistent.
+- [ ] `npm run integration` passes on Ubuntu and Windows (Node.js 22.12.0 and 24 with Python 3.13, plus Python 3.11 on Ubuntu with Node.js 22.12.0).
 - [ ] The public-copy scanner reports no punctuation or secret findings.
 - [ ] The final tree contains no placeholders or generated dependency directories.
 
@@ -225,6 +227,57 @@ tests, on Ubuntu and Windows with Node.js 22.12.0 and 24 and Python 3.13.
 Browser tests are a distinct category from component and orchestrator unit
 tests: they drive real clicks, file selection, and asynchronous responses
 against the pinned components, and are the only evidence for UI behaviour.
+
+## Release 0.3.0
+
+Version 0.3.0 (tag `v0.3.0`, created after the release pull request merges).
+The release refreshes all three component pins to the merge commits of the
+sibling releases published on 2026-10-09, the same pins as the source gate
+above. Each release tag resolves to the pinned merge commit, and each merge
+commit passed its own repository's CI on `main`:
+
+- Constitutional Agent Testbench 0.6.0: `ed46f0cb9af400560aa9a9e73bbb9864ed5678a0`
+  (was `16b2faa7`)
+- Consequence Rail 0.3.0: `78d6f8a23dbce69bb443b453c8d471645f67daac`
+  (was `c430383c`)
+- MandateBound 2.0.0: `32d525618e23678f86c754e4a536e4d094988a1b`
+  (was `708256d4`)
+
+No expected entrypoint, post-build entrypoint, install, or build hook changed,
+and the orchestrator needed no code change for the new pins. The stack calls
+only MandateBound `simulate --scenario operator` and `review --input`. The
+2.0.0 breaking changes are in surfaces the stack does not use (the `decide`,
+`preview`, `replay`, `appeal`, `serve`, `operator`, and `ap2-dispute`
+commands, and the package API); the simulate result keeps its structure, and
+review records still carry engine `1.0.0`. A same-case review recorded under
+the previous pins replays under the new pins and the reverse, for compensated
+and settled refunds; `fixtures/legacy-rail-review.json` and the new
+`fixtures/previous-pins-inventory-review.json` (an inventory case saved under
+the previous pins) still replay. The rail's new receipt outcome and close-time
+bindings accept the stack's settled, compensated, and moving-clock bundles.
+The testbench's `evaluate` contract and Python 3.11 floor are unchanged.
+
+Measured on the release branch head with the refreshed pins, Windows 11,
+Node.js v24.18.0, Python 3.12.10 (and the decide stage on CPython 3.11.15
+through `AAS_PYTHON`):
+
+- `npm test`: 208 tests, 202 passed, 0 failed, 6 skipped (five symlink cases
+  where Windows refuses symlink creation, and the FIFO case on win32).
+- `npm run check:syntax`: 15 modules parsed. `npm run check:version`:
+  0.3.0 consistent, including `--tag v0.3.0`.
+- `npm run gui:smoke`: passed.
+- `npm run integration`: passed from a fresh clone with network clones of the
+  three pins (pass, refusal, dispute, settled-review, rail-review, and
+  inventory paths, export/replay, the GUI replay, and the offline replay).
+- `test/component-compatibility.test.mjs`: 6 of 6.
+- Integrator examples: review handoff pass, inventory, and refusal (exit 1)
+  paths; connector conformance 6 of 6 rules on both connectors.
+- `npm run test:browser`: 14 of 14 real Chromium workflow tests (locally on
+  the installed Chromium headless shell build 1234 through `executablePath`;
+  the CI browser job installs the build Playwright 1.63.0 expects).
+
+CI on the pull request runs the same gates on Ubuntu and Windows with Node.js
+22.12.0 and 24, plus the Python 3.11 integration leg and the browser job.
 
 ## Publication boundary
 

@@ -90,8 +90,10 @@ below 3.11 fails with an actionable message.
 
 Each invocation writes one atomic bundle under `.out/runs/<run-id>/`:
 
-- `manifest.json`: stage status and component provenance
-- `report.json`: user-facing run report
+- `manifest.json`: stage status, component provenance, and the orchestrator
+  version that wrote it (`stack_version`, null in bundles that predate it)
+- `report.json`: user-facing run report, which carries the same
+  `stack_version`
 - `stages/<stage>.json`: captured output from each stage that ran
 
 `.out/latest.json` is an atomic pointer to the most recent complete bundle.
@@ -104,14 +106,26 @@ repository URL, commit, detached checkout flag, clean checkout flag, and
 expected entrypoints present. The orchestrator never re-verifies the
 components; the sibling CLIs and the rail's own verifier do that.
 
-## Verify-only CI boundary
+## CI and release boundary
 
-GitHub Actions in `.github/workflows/ci.yml` runs three jobs and nothing
-else: `test` (unit suite plus syntax check plus GUI smoke), `integration`
-(clean checkout bootstrap plus the integrator examples), and `browser`
-(Playwright real-browser workflow tests). CI has no publish, deploy, push,
-or release step. It does not write to any registry, package index, or
-hosted target. `contents: read` is the only permission requested.
+`.github/workflows/ci.yml` stays verify-only. It runs on pushes to `main` and
+on pull requests, requests only `contents: read`, and has three jobs: `test`
+(unit suite, syntax gate, version consistency check, GUI smoke), `integration`
+(clean checkout bootstrap plus the integrator examples, including one Python
+3.11 leg), and `browser` (Playwright real-browser workflow tests). It has no
+publish, deploy, push, or release step.
+
+`.github/workflows/release.yml` runs only when a `vX.Y.Z` tag is pushed. Its
+single job re-runs `npm run check` and the integration proof on the tagged
+commit, confirms with `scripts/check-version.mjs --tag` that the tag,
+`package.json`, `package-lock.json`, and `CHANGELOG.md` agree, and creates a
+GitHub Release whose notes are that version's CHANGELOG section. That job
+alone holds `contents: write`, restores no cache, and keeps the checkout
+token out of `.git/config`. It never publishes to a package registry, and
+`package.json` is `"private": true`, so `npm publish` refuses the package.
+
+`.github/dependabot.yml` only opens pull requests for GitHub Actions and npm
+updates; they pass through the same CI and are merged by hand.
 
 ## Local write targets
 

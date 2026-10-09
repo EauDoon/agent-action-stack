@@ -1,0 +1,60 @@
+name: Release
+
+# Runs only when a vX.Y.Z tag is pushed. It re-verifies the tagged commit,
+# checks the tag against package.json, package-lock.json, and CHANGELOG.md,
+# and publishes that version's CHANGELOG section as a GitHub Release. Nothing
+# is published to a package registry.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      # Only this job can write, and only to create the GitHub Release.
+      contents: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.12.0"
+          # A job with write permission restores no cache.
+          package-manager-cache: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install locked package set
+        run: npm ci --ignore-scripts
+      - name: Run unit, syntax, and version checks
+        run: npm run check
+      - name: Run full-stack integration proof
+        run: npm run integration --ignore-scripts
+      - name: Check the tag and extract its release notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: node scripts/check-version.mjs --tag "$TAG" --notes "$RUNNER_TEMP/release-notes.md"
+      - name: Publish the GitHub Release
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; leaving it unchanged."
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "Agent Action Stack $TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
+          fi

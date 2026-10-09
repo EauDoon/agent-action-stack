@@ -6,8 +6,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
-import { assertFullStackNodeVersion, compareVersionTuples, loadComponentLock, inspectDependencyDirectory, MIN_FULL_STACK_NODE, npmInvocation, parseNodeVersion, prepareDependencies } from "../scripts/bootstrap.mjs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { assertFullStackNodeVersion, compareVersionTuples, isEntrypoint, loadComponentLock, inspectDependencyDirectory, main as bootstrapMain, MIN_FULL_STACK_NODE, moveIntoPlace, npmInvocation, parseNodeVersion, prepareDependencies } from "../scripts/bootstrap.mjs";
+import { checkSyntax, listSyntaxTargets } from "../scripts/check-syntax.mjs";
+import { checkReleaseConsistency, loadReleaseInputs, parseChangelog, releaseNotes } from "../scripts/check-version.mjs";
 import {
   buildRailReviewRequest,
   CHILD_JSON_LIMIT,
@@ -36,6 +38,7 @@ import {
   runProve,
   runProveRail,
   selectPython,
+  stackVersion,
   compareRuns,
   listRunSummaries,
   listRuns,
@@ -51,7 +54,7 @@ const PROVENANCE = [
   {
     name: "constitutional-agent-testbench",
     repository: "https://github.com/EauDoon/constitutional-agent-testbench.git",
-    commit: "16b2faa71b0f92b9afa15b13afad8c48da8132f4",
+    commit: "ed46f0cb9af400560aa9a9e73bbb9864ed5678a0",
     origin: "https://github.com/EauDoon/constitutional-agent-testbench.git",
     detached: true,
     clean: true,
@@ -60,7 +63,7 @@ const PROVENANCE = [
   {
     name: "consequence-rail",
     repository: "https://github.com/EauDoon/consequence-rail.git",
-    commit: "c430383c0a0931f0dcf17845d6f0e8ccf328615a",
+    commit: "78d6f8a23dbce69bb443b453c8d471645f67daac",
     origin: "https://github.com/EauDoon/consequence-rail.git",
     detached: true,
     clean: true,
@@ -69,7 +72,7 @@ const PROVENANCE = [
   {
     name: "mandatebound",
     repository: "https://github.com/EauDoon/mandatebound.git",
-    commit: "708256d4e48babeb13079fac7589d172920a5c95",
+    commit: "32d525618e23678f86c754e4a536e4d094988a1b",
     origin: "https://github.com/EauDoon/mandatebound.git",
     detached: true,
     clean: true,
@@ -151,6 +154,117 @@ test("lock mismatch rejects substituted or stale pre-existing dependencies", () 
       /lock|detached|changes|origin|commit/i,
     );
   }
+});
+
+/**
+ * A fake git that clones into whatever directory `init` names. `failOn` makes
+ * that subcommand exit 128, as a dropped network or Ctrl+C during fetch would.
+ */
+function fakeGit(component, { failOn = null } = {}) {
+  const calls = [];
+  const command = (name, args) => {
+    calls.push([name, ...args]);
+    assert.equal(name, "git", `bootstrap must not spawn ${name} for a component without install or build`);
+    const sub = args[0] === "-C" ? args[2] : args[0];
+    if (sub === failOn) return { status: 128, stdout: "", stderr: "fatal: unable to access", error: null };
+    if (sub === "init") {
+      mkdirSync(join(args.at(-1), ".git"), { recursive: true });
+      return { status: 0, stdout: "", stderr: "", error: null };
+    }
+    if (sub === "remote" || sub === "fetch") return { status: 0, stdout: "", stderr: "", error: null };
+    if (sub === "checkout") {
+      for (const entrypoint of component.expected_entrypoints) {
+        mkdirSync(join(args[1], entrypoint, ".."), { recursive: true });
+        writeFileSync(join(args[1], entrypoint), "fixture\n");
+      }
+      return { status: 0, stdout: "", stderr: "", error: null };
+    }
+    if (sub === "config") return { status: 0, stdout: `${component.repository}\n`, stderr: "", error: null };
+    if (sub === "rev-parse") return { status: 0, stdout: `${component.commit}\n`, stderr: "", error: null };
+    if (sub === "symbolic-ref") return { status: 1, stdout: "", stderr: "", error: null };
+    if (sub === "status") return { status: 0, stdout: "", stderr: "", error: null };
+    throw new Error(`unexpected git command: ${args.join(" ")}`);
+  };
+  return { command, calls };
+}
+
+test("bootstrap stages a clone so a failed fetch leaves nothing in deps", () => {
+  // The testbench has no install or build step, so no npm runs.
+  const component = loadComponentLock(LOCK).find((entry) => entry.name === "constitutional-agent-testbench");
+  const deps = tempRoot();
+  const failing = fakeGit(component, { failOn: "fetch" });
+  assert.throws(
+    () => prepareDependencies({ deps, components: [component], command: failing.command }),
+    new RegExp(`^Error: Could not prepare constitutional-agent-testbench at ${component.commit}: Command failed: git .* fetch .*\\(exit 128\\): fatal: unable to access\\. Nothing was left in deps/; rerun npm run bootstrap\\.$`),
+  );
+  assert.equal(existsSync(join(deps, component.name)), false);
+  assert.deepEqual(readdirSync(deps), []);
+  // The clone ran in a hidden staging directory, never in the final target.
+  // Its name is shorter than every component name, so the clone never needs
+  // a longer path than the final checkout (Git for Windows stops at 260).
+  const init = failing.calls.find((call) => call[1] === "init");
+  assert.match(init.at(-1), /[\\/]\.tmp-[A-Za-z0-9]{6}$/);
+  const stagingName = init.at(-1).split(/[\\/]/).at(-1);
+  for (const entry of loadComponentLock(LOCK)) assert.ok(stagingName.length < entry.name.length, entry.name);
+
+  // The next run is not wedged by the failure.
+  const working = fakeGit(component);
+  const prepared = prepareDependencies({ deps, components: [component], command: working.command });
+  assert.equal(prepared.length, 1);
+  assert.equal(prepared[0].commit, component.commit);
+  assert.equal(prepared[0].detached, true);
+  assert.equal(prepared[0].clean, true);
+  assert.ok(existsSync(join(deps, component.name, ".git")));
+  assert.ok(existsSync(join(deps, component.name, "src", "constitutional_agent_testbench", "cli.py")));
+  assert.deepEqual(readdirSync(deps), [component.name]);
+});
+
+test("bootstrap retries a briefly locked rename and reports failures without a stack trace", () => {
+  let attempts = 0;
+  moveIntoPlace("staging", "target", {
+    delayMs: 1,
+    rename: () => {
+      attempts += 1;
+      if (attempts < 3) throw Object.assign(new Error("resource busy"), { code: "EBUSY" });
+    },
+  });
+  assert.equal(attempts, 3);
+  attempts = 0;
+  assert.throws(() => moveIntoPlace("staging", "target", {
+    delayMs: 1,
+    rename: () => { attempts += 1; throw Object.assign(new Error("denied"), { code: "EPERM" }); },
+  }), /denied/);
+  assert.equal(attempts, 4, "one attempt plus three retries");
+  attempts = 0;
+  assert.throws(() => moveIntoPlace("staging", "target", {
+    rename: () => { attempts += 1; throw Object.assign(new Error("not empty"), { code: "ENOTEMPTY" }); },
+  }), /not empty/);
+  assert.equal(attempts, 1, "other errors are not retried");
+
+  // A half-initialized checkout left by an older bootstrap names the fix.
+  const component = loadComponentLock(LOCK)[0];
+  const target = join(tempRoot(), component.name);
+  mkdirSync(join(target, ".git"), { recursive: true });
+  const broken = () => ({ status: 128, stdout: "", stderr: "fatal: not a git repository", error: null });
+  assert.throws(() => inspectDependencyDirectory(target, component, { command: broken }),
+    new RegExp(`Refusing unusable pre-existing dependency: ${component.name}\\. Remove deps/${component.name} and rerun npm run bootstrap\\.`));
+
+  const stderr = [];
+  const originalStderr = process.stderr.write;
+  const originalExitCode = process.exitCode;
+  process.stderr.write = (chunk) => { stderr.push(String(chunk)); return true; };
+  let exitCode;
+  try {
+    bootstrapMain({ deps: tempRoot(), components: [component], command: fakeGit(component, { failOn: "fetch" }).command });
+    exitCode = process.exitCode;
+  } finally {
+    process.stderr.write = originalStderr;
+    process.exitCode = originalExitCode;
+  }
+  assert.equal(exitCode, 1);
+  assert.equal(stderr.length, 1);
+  assert.match(stderr[0], /^bootstrap failed: Could not prepare constitutional-agent-testbench at [0-9a-f]{40}: .*rerun npm run bootstrap\.\n$/);
+  assert.doesNotMatch(stderr[0], /\n\s+at /);
 });
 
 // Windows only permits symlink creation for elevated or Developer Mode
@@ -764,6 +878,12 @@ test("act and prove child-process errors keep the run isolated", async () => {
   assert.equal(actError.exitCode, 1);
   assert.equal(actError.manifest.stages.act.status, "error");
   assert.equal(actError.manifest.stages.prove.reason, "act_error");
+  // report.json and manifest.json must give the same reason for one run.
+  assert.equal(actError.report.stages.prove.status, "skipped");
+  assert.equal(actError.report.stages.prove.reason, "act_error");
+  const persistedReport = JSON.parse(readFileSync(join(actError.bundleDir, "report.json"), "utf8"));
+  assert.equal(persistedReport.stages.prove.reason, actError.manifest.stages.prove.reason);
+  assert.ok(!("raw" in persistedReport.stages.prove));
 
   const proveOutputRoot = tempRoot();
   const proveError = await runDemo(["--response", "pass", "--dispute"], stubOptions(proveOutputRoot, {
@@ -906,6 +1026,27 @@ test("CLI help documents every command and every option the usage block names", 
   for (const [, option] of usage.matchAll(/(--[a-z][a-z-]*)/g)) {
     assert.ok(options.includes(option), `option block does not document ${option}`);
   }
+  // Every saved-case command accepts --root through parseRootArgs or
+  // parseInspectArgs, so its usage line and the --root reference say so.
+  const rootReference = options.split("--root output-dir")[1].split(/\n {2}--/)[0];
+  for (const command of ["latest", "verify", "inspect", "runs", "cases", "compare", "export", "prune"]) {
+    assert.match(usage, new RegExp(`^ {2}aas ${command} .*\\[--root output-dir\\]`, "m"), `${command} usage omits --root`);
+    assert.match(rootReference, new RegExp(`\\b${command}\\b`), `--root reference omits ${command}`);
+  }
+  const flow = text.split("Flow:")[1].split("First-time setup:")[0];
+  assert.match(flow, /on pass -> consequence-rail demo <domain>/);
+});
+
+test("export and prune usage errors name the --root option", async () => {
+  const exportUsage = await captureMain(["export"]);
+  assert.equal(exportUsage.exitCode, 2);
+  assert.match(exportUsage.stderr, /Usage: aas export <run-id> \[--root output-dir\]/);
+  const pruneUsage = await captureMain(["prune"]);
+  assert.equal(pruneUsage.exitCode, 2);
+  assert.match(pruneUsage.stderr, /Usage: aas prune --keep <positive integer> \[--root output-dir\]/);
+  const pruneOption = await captureMain(["prune", "--keep", "1", "--bogus"]);
+  assert.equal(pruneOption.exitCode, 2);
+  assert.match(pruneOption.stderr, /expected --keep <n> \[--root output-dir\] \[--dry-run\] \[--json\]/);
 });
 
 test("CLI prints help for help tokens and demo --help", async () => {
@@ -915,6 +1056,38 @@ test("CLI prints help for help tokens and demo --help", async () => {
     assert.equal(result.stdout, helpText());
     assert.equal(result.stderr, "");
   }
+});
+
+test("entrypoints run when launched through a linked directory", (t) => {
+  // npm installs `bin.aas` as a symlink, and `npm link`, a macOS /tmp checkout,
+  // or a Windows junction all reach the scripts through a link. A junction
+  // needs no privilege on Windows; POSIX ignores the type and makes a
+  // directory symlink.
+  const link = join(tempRoot(), "linked-bin");
+  if (!linkOrSkip(t, join(ROOT, "bin"), link, "junction")) return;
+  const run = (args) => spawnSync(process.execPath, args, { cwd: ROOT, encoding: "utf8" });
+
+  const help = run([join(link, "aas.mjs"), "help"]);
+  assert.equal(help.status, 0, help.stderr);
+  assert.equal(help.stdout, helpText());
+
+  const unknown = run([join(link, "aas.mjs"), "no-such-command"]);
+  assert.equal(unknown.status, 2, unknown.stderr);
+  assert.match(unknown.stderr, /Unknown command: no-such-command/);
+
+  const smoke = run([join(link, "aas-gui.mjs"), "--smoke-test"]);
+  assert.equal(smoke.status, 0, smoke.stderr);
+  assert.match(smoke.stdout, /GUI smoke test passed/);
+});
+
+test("isEntrypoint compares resolved paths and fails closed", () => {
+  const script = join(ROOT, "bin", "aas.mjs");
+  const url = pathToFileURL(script).href;
+  assert.equal(isEntrypoint(url, script), true);
+  assert.equal(isEntrypoint(url, undefined), false);
+  assert.equal(isEntrypoint(url, ""), false);
+  assert.equal(isEntrypoint(url, join(ROOT, "package.json")), false);
+  assert.equal(isEntrypoint(url, join(tempRoot(), "missing.mjs")), false);
 });
 
 test("CLI reports unknown commands, flags, and empty values as usage errors", async () => {
@@ -1356,7 +1529,11 @@ test("export reads the persisted run bundle", async () => {
   const exported = exportRunBundle("export-run", { outputRoot });
   assert.equal(exported.report.run_id, "export-run");
   assert.deepEqual(Object.keys(exported.stages).sort(), ["act", "decide"]);
-  assert.throws(() => exportRunBundle("no-such-run", { outputRoot }), /Invalid run id|ENOENT/);
+  assert.throws(() => exportRunBundle("no-such-run", { outputRoot }), (error) => {
+    assert.equal(error.message, "Saved case not found: no-such-run");
+    assert.equal(error.code, "ENOENT");
+    return true;
+  });
   assert.throws(() => exportRunBundle("../escape", { outputRoot }), /Invalid run id/);
 });
 
@@ -1502,6 +1679,53 @@ test("export and replay CLI validate arguments and missing files", async () => {
   assert.equal(noSource.exitCode, 2);
   const extra = await captureMain(["replay", "a", "b"]);
   assert.equal(extra.exitCode, 2);
+});
+
+test("demo usage errors exit 2 before any runtime probing", async () => {
+  // A broken interpreter override used to win: main probed Node.js and every
+  // Python candidate first, so a typo exited 1 with an AAS_PYTHON message.
+  await withEnv("AAS_PYTHON", "aas-synthetic-missing-python", async () => {
+    const bogus = await captureMain(["demo", "--bogus"]);
+    assert.equal(bogus.exitCode, 2);
+    assert.match(bogus.stderr, /Unsupported demo option: --bogus/);
+    assert.doesNotMatch(bogus.stderr, /AAS_PYTHON/);
+
+    const value = await captureMain(["demo", "--response", "maybe"]);
+    assert.equal(value.exitCode, 2);
+    assert.match(value.stderr, /--response must be pass or fail/);
+    assert.doesNotMatch(value.stderr, /AAS_PYTHON/);
+
+    const domain = await captureMain(["demo", "--domain", "payroll", "--json"]);
+    assert.equal(domain.exitCode, 2);
+    assert.deepEqual(JSON.parse(domain.stderr), { error: { message: "--domain must be refund or inventory" } });
+
+    // Valid arguments still reach the interpreter check and fail there.
+    const valid = await captureMain(["demo", "--response", "fail"]);
+    assert.equal(valid.exitCode, 1);
+    assert.match(valid.stderr, /AAS_PYTHON \(aas-synthetic-missing-python\)/);
+  });
+});
+
+test("saved-case commands name a missing case without the local path", async () => {
+  const outputRoot = tempRoot();
+  mkdirSync(join(outputRoot, "runs"));
+  for (const argv of [
+    ["export", "missing-id", "--json", "--root", outputRoot],
+    ["verify", "missing-id", "--json", "--root", outputRoot],
+    ["inspect", "missing-id", "--json", "--root", outputRoot],
+  ]) {
+    const result = await captureMain(argv);
+    assert.equal(result.exitCode, 1, `${argv[0]} exit code`);
+    assert.deepEqual(JSON.parse(result.stderr), { error: { message: "Saved case not found: missing-id", code: "ENOENT" } }, argv[0]);
+    assert.ok(!result.stderr.includes(outputRoot), `${argv[0]} printed the local path`);
+  }
+
+  // A case directory that lost its manifest is reported by name, not by path.
+  mkdirSync(join(outputRoot, "runs", "torn-run"));
+  const torn = await captureMain(["export", "torn-run", "--root", outputRoot]);
+  assert.equal(torn.exitCode, 1);
+  assert.match(torn.stderr, /^Saved case torn-run is missing manifest\.json\.\ncode: ENOENT\n$/);
+  assert.ok(!torn.stderr.includes(outputRoot));
 });
 
 async function makeRuns(outputRoot, count) {
@@ -2161,6 +2385,323 @@ test("review handoff removes its scratch directory when decide cannot start", ()
 test('review handoff example honors the explicit interpreter override', () => {
   const child=spawnSync(process.execPath,[join(ROOT,'examples/review-handoff.mjs')],{cwd:ROOT,encoding:'utf8',timeout:5000,env:{...process.env,AAS_PYTHON:'aas-synthetic-missing-python'}});
   assert.equal(child.status,1);assert.match(child.stderr,/AAS_PYTHON/);assert.match(child.stderr,/did not report a usable Python version/);
+});
+
+test("syntax gate lists every tracked module and reports a parse failure", () => {
+  const targets = listSyntaxTargets(ROOT);
+  for (const file of [
+    "bin/aas.mjs",
+    "bin/aas-gui.mjs",
+    "bin/aas-gui-worker.mjs",
+    "bin/case-review.mjs",
+    "examples/connector-conformance.mjs",
+    "examples/review-handoff.mjs",
+    "playwright.config.mjs",
+    "scripts/bootstrap.mjs",
+    "scripts/check-syntax.mjs",
+    "scripts/integration-check.mjs",
+    "test/browser/workbench.spec.mjs",
+    "test/component-compatibility.test.mjs",
+    "test/gui.test.mjs",
+    "test/stack.test.mjs",
+  ]) {
+    assert.ok(targets.includes(file), `syntax gate does not list ${file}`);
+  }
+  assert.ok(targets.every((file) => /\.(?:mjs|cjs|js)$/.test(file) && !file.includes("\\")));
+  assert.ok(!targets.some((file) => /^(?:deps|node_modules|\.out)\//.test(file)));
+
+  // Without Git the gate walks the tree and still skips generated folders.
+  const walked = listSyntaxTargets(ROOT, { command: () => ({ status: 128, stdout: "", stderr: "not a git repository" }) });
+  assert.ok(walked.includes("bin/aas.mjs") && walked.includes("scripts/check-syntax.mjs"));
+  assert.ok(!walked.some((file) => /^(?:deps|node_modules|\.out)\//.test(file)));
+
+  const scratch = tempRoot();
+  writeFileSync(join(scratch, "valid.mjs"), "export const ok = 1;\n");
+  writeFileSync(join(scratch, "broken.mjs"), "export const = ;\n");
+  const failures = checkSyntax(["valid.mjs", "broken.mjs"], { cwd: scratch });
+  assert.deepEqual(failures.map((failure) => failure.file), ["broken.mjs"]);
+  assert.match(failures[0].detail, /SyntaxError/);
+});
+
+test("workflow actions are pinned by commit and checkouts drop the token", () => {
+  const workflows = join(ROOT, ".github", "workflows");
+  const files = readdirSync(workflows).filter((name) => /\.ya?ml$/.test(name)).sort();
+  assert.ok(files.includes("ci.yml"), "ci.yml is missing");
+  const pins = new Map();
+  let checkouts = 0;
+  for (const name of files) {
+    const lines = readFileSync(join(workflows, name), "utf8").split(/\r?\n/);
+    lines.forEach((line, index) => {
+      const uses = /^(\s*(?:-\s+)?)uses:\s*(\S+)/.exec(line);
+      if (!uses) return;
+      const where = `${name}:${index + 1}`;
+      const pinned = /^\s*(?:-\s+)?uses:\s*([\w.-]+\/[\w./-]+)@([0-9a-f]{40})\s+#\s*(v\d+\.\d+\.\d+)\s*$/.exec(line);
+      assert.ok(pinned, `${where} must pin a 40-character commit SHA with a # vX.Y.Z comment: ${line.trim()}`);
+      const [, action, sha, tag] = pinned;
+      const known = pins.get(action);
+      if (known) {
+        assert.equal(sha, known.sha, `${where} pins ${action} to a different SHA than ${known.where}`);
+        assert.equal(tag, known.tag, `${where} labels ${action} differently than ${known.where}`);
+      } else {
+        pins.set(action, { sha, tag, where });
+      }
+      if (action !== "actions/checkout") return;
+      checkouts += 1;
+      // The step's keys sit at the column of `uses:`; the step ends at the
+      // first non-blank line indented less than that.
+      const keyIndent = uses[1].length;
+      const block = [];
+      for (const next of lines.slice(index + 1)) {
+        if (next.trim() === "") continue;
+        if (next.length - next.trimStart().length < keyIndent) break;
+        block.push(next.trim());
+      }
+      assert.ok(block.includes("persist-credentials: false"), `${where} checkout must set persist-credentials: false`);
+    });
+  }
+  assert.ok(checkouts >= 3, `expected every job to check out the repository, found ${checkouts}`);
+  for (const action of ["actions/checkout", "actions/setup-node", "actions/setup-python"]) {
+    assert.ok(pins.has(action), `${action} is not used by any workflow`);
+  }
+});
+
+function releaseFixture({ version = "0.2.5", lockVersion = version, changelog, readiness, tag = null } = {}) {
+  const pins = loadComponentLock(LOCK).map((component) => component.commit);
+  return {
+    pkg: { name: "agent-action-stack", version },
+    lock: { name: "agent-action-stack", version: lockVersion, packages: { "": { name: "agent-action-stack", version: lockVersion } } },
+    changelog: changelog ?? [
+      "# Changelog",
+      "",
+      "## [Unreleased]",
+      "",
+      "### Fixed",
+      "- One fix.",
+      "",
+      "[Unreleased]: https://github.com/EauDoon/agent-action-stack/compare/c9e89c001f51b48f1ebda6716996680546033a8b...HEAD",
+      "",
+    ].join("\n"),
+    readiness: readiness ?? pins.map((sha) => `- pin \`${sha}\``).join("\n"),
+    stackLock: { components: loadComponentLock(LOCK) },
+    tag,
+  };
+}
+
+const RELEASED_CHANGELOG = [
+  "# Changelog",
+  "",
+  "## [Unreleased]",
+  "",
+  "## [0.3.0] - 2026-10-09",
+  "",
+  "### Changed",
+  "- BREAKING: a change.",
+  "",
+  "### Fixed",
+  "- A fix.",
+  "",
+  "## [0.2.0] - 2026-08-03",
+  "",
+  "### Added",
+  "- The GUI.",
+  "",
+  "## [0.1.0] - 2026-07-31",
+  "",
+  "### Added",
+  "- The first demo.",
+  "",
+  "[Unreleased]: https://github.com/EauDoon/agent-action-stack/compare/v0.3.0...HEAD",
+  "[0.3.0]: https://github.com/EauDoon/agent-action-stack/compare/v0.2.0...v0.3.0",
+  "[0.2.0]: https://github.com/EauDoon/agent-action-stack/compare/v0.1.0...v0.2.0",
+  "[0.1.0]: https://github.com/EauDoon/agent-action-stack/releases/tag/v0.1.0",
+  "",
+].join("\n");
+
+test("version check accepts the live repository and a well-formed release", () => {
+  assert.deepEqual(checkReleaseConsistency(loadReleaseInputs(ROOT)), []);
+  assert.deepEqual(checkReleaseConsistency(releaseFixture()), []);
+  assert.deepEqual(checkReleaseConsistency(releaseFixture({ version: "0.3.0", changelog: RELEASED_CHANGELOG, tag: "v0.3.0" })), []);
+});
+
+test("version check flags lock, changelog, pin, and tag drift", () => {
+  const flagged = (inputs, pattern) => {
+    const problems = checkReleaseConsistency(inputs);
+    assert.ok(problems.some((problem) => pattern.test(problem)), `expected ${pattern} in ${JSON.stringify(problems)}`);
+  };
+  flagged(releaseFixture({ lockVersion: "0.2.0" }), /package-lock\.json version "0\.2\.0" does not match package\.json 0\.2\.5/);
+  flagged(releaseFixture({ lockVersion: "0.2.0" }), /packages\[""\]\.version "0\.2\.0"/);
+  flagged(releaseFixture({ version: "0.2" }), /is not X\.Y\.Z/);
+  flagged(releaseFixture({ changelog: "## [Unreleased]\n\n### Changed\n- a\n\n### Changed\n- b\n\n[Unreleased]: https://github.com/EauDoon/agent-action-stack/compare/x...HEAD\n" }),
+    /repeats "### Changed"/);
+  flagged(releaseFixture({ changelog: "## [Unreleased]\n\n### Improved\n- a\n\n[Unreleased]: https://github.com/EauDoon/agent-action-stack/compare/x...HEAD\n" }),
+    /"### Improved" is not one of/);
+  flagged(releaseFixture({ changelog: "## [0.2.5] - 2026-09-28\n\n### Fixed\n- a\n\n[0.2.5]: https://github.com/EauDoon/agent-action-stack/releases/tag/v0.2.5\n" }),
+    /must open with a "## \[Unreleased\]" section/);
+  flagged(releaseFixture({ changelog: "## [Unreleased]\n\n[Unreleased]: https://example.com/compare/x...HEAD\n" }), /must link into/);
+  flagged(releaseFixture({ changelog: "## [Unreleased]\n\n### Fixed\n- a\n" }), /no \[Unreleased\] link definition/);
+
+  const unsorted = RELEASED_CHANGELOG.replace("## [0.2.0] - 2026-08-03", "## [0.4.0] - 2026-08-03");
+  flagged(releaseFixture({ version: "0.3.0", changelog: unsorted }), /0\.4\.0 must be older than 0\.3\.0/);
+  flagged(releaseFixture({ version: "0.3.0", changelog: RELEASED_CHANGELOG.replace("2026-08-03", "2026-02-30") }), /invalid version or date/);
+  flagged(releaseFixture({ version: "0.3.0", changelog: RELEASED_CHANGELOG.replace("## [0.1.0] - 2026-07-31", "## [0.1.0]") }), /is not "## \[X\.Y\.Z\] - YYYY-MM-DD"/);
+  flagged(releaseFixture({ version: "0.3.1", changelog: RELEASED_CHANGELOG }), /newest release 0\.3\.0 does not match package\.json 0\.3\.1/);
+  flagged(releaseFixture({ version: "0.3.0", changelog: RELEASED_CHANGELOG.replace("compare/v0.3.0...HEAD", "compare/main...HEAD") }),
+    /\[Unreleased\] should be https:\/\/github\.com\/EauDoon\/agent-action-stack\/compare\/v0\.3\.0\.\.\.HEAD/);
+  flagged(releaseFixture({ version: "0.3.0", changelog: RELEASED_CHANGELOG.replace("releases/tag/v0.1.0", "releases/tag/v0.0.1") }), /\[0\.1\.0\] should be/);
+
+  flagged(releaseFixture({ tag: "v9.9.9" }), /Tag v9\.9\.9 does not match package\.json version 0\.2\.5/);
+  flagged(releaseFixture({ tag: "v0.2.5" }), /no released "## \[0\.2\.5\] - YYYY-MM-DD" section/);
+  flagged(releaseFixture({ version: "0.3.0", tag: "v0.3.0", changelog: RELEASED_CHANGELOG.replace("- BREAKING: a change.", "").replace("- A fix.", "") }),
+    /section 0\.3\.0 has no entries/);
+
+  const missingPin = loadComponentLock(LOCK)[1].commit;
+  flagged(releaseFixture({ readiness: loadComponentLock(LOCK).filter((component) => component.commit !== missingPin).map((component) => component.commit).join("\n") }),
+    new RegExp(`does not list the consequence-rail pin ${missingPin}`));
+});
+
+test("release notes are exactly one changelog section", () => {
+  const notes = releaseNotes(RELEASED_CHANGELOG, "0.3.0");
+  assert.equal(notes, "### Changed\n- BREAKING: a change.\n\n### Fixed\n- A fix.\n");
+  assert.equal(releaseNotes(RELEASED_CHANGELOG, "0.1.0"), "### Added\n- The first demo.\n");
+  assert.throws(() => releaseNotes(RELEASED_CHANGELOG, "9.9.9"), /no section for 9\.9\.9/);
+  // A heading inside a fenced block is content, not structure.
+  const fenced = parseChangelog("## [Unreleased]\n\n### Added\n- a\n\n```md\n### Added\n```\n");
+  assert.deepEqual(fenced.sections[0].headings.map((heading) => heading.title), ["Added"]);
+});
+
+test("version check CLI reports drift with exit 1 and usage errors with exit 2", () => {
+  const script = join(ROOT, "scripts", "check-version.mjs");
+  const live = spawnSync(process.execPath, [script], { cwd: ROOT, encoding: "utf8" });
+  assert.equal(live.status, 0, live.stderr);
+  assert.match(live.stdout, /^version: \d+\.\d+\.\d+ consistent \(package, lock, changelog, release pins\)\n$/);
+
+  const usage = spawnSync(process.execPath, [script, "--tag"], { cwd: ROOT, encoding: "utf8" });
+  assert.equal(usage.status, 2);
+  assert.match(usage.stderr, /Missing value for --tag/);
+
+  const wrongTag = spawnSync(process.execPath, [script, "--tag", "v0.0.0-not-this"], { cwd: ROOT, encoding: "utf8" });
+  assert.equal(wrongTag.status, 1);
+  assert.match(wrongTag.stderr, /Tag v0\.0\.0-not-this does not match package\.json version/);
+});
+
+test("aas --version prints the package.json version and rejects extra arguments", async () => {
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+  assert.equal(stackVersion(), pkg.version);
+  for (const argv of [["--version"], ["version"]]) {
+    const plain = await captureMain(argv);
+    assert.equal(plain.exitCode, 0);
+    assert.equal(plain.stdout, `agent-action-stack ${pkg.version}\n`);
+    assert.equal(plain.stderr, "");
+    const json = await captureMain([...argv, "--json"]);
+    assert.equal(json.exitCode, 0);
+    assert.deepEqual(JSON.parse(json.stdout), { ok: true, name: "agent-action-stack", version: pkg.version });
+  }
+  for (const argv of [["version", "extra"], ["--version", "--bogus"], ["--version", "--json", "--json"]]) {
+    const bad = await captureMain(argv);
+    assert.equal(bad.exitCode, 2, JSON.stringify(argv));
+    assert.match(bad.stderr, /Usage: aas --version \[--json\]/);
+  }
+  const help = helpText();
+  assert.match(help, /^ {2}aas --version \[--json\]$/m);
+  assert.match(help, /^ {2}version +Print the orchestrator version \(also --version\)$/m);
+  assert.match(help.split("Options:")[1], /^ {2}--version +\S/m);
+});
+
+test("runs record stack_version, and cases saved without it still load", async () => {
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+  const outputRoot = tempRoot();
+  const result = await runDemo(["--response", "pass"], stubOptions(outputRoot, { runId: "versioned-run" }));
+  assert.equal(result.report.stack_version, pkg.version);
+  assert.equal(result.manifest.stack_version, pkg.version);
+  assert.equal(result.manifest.schema_version, "agent-action-stack.run/v1");
+  const saved = exportRunBundle("versioned-run", { outputRoot });
+  assert.equal(saved.manifest.stack_version, pkg.version);
+  assert.equal(saved.report.stack_version, pkg.version);
+  assert.equal(summarizeRun("versioned-run", { outputRoot }).stack_version, pkg.version);
+
+  // A case written before the field existed: summaries, comparison, and the
+  // case review report it as unavailable instead of rejecting the case.
+  const legacyRoot = tempRoot();
+  writeCase(legacyRoot, "2026-09-06T050000000Z-legacy");
+  writeCase(legacyRoot, "2026-09-06T050000000Z-legacy2");
+  const legacy = summarizeRun("2026-09-06T050000000Z-legacy", { outputRoot: legacyRoot });
+  assert.equal(legacy.stack_version, null);
+  assert.notEqual(compareRuns("2026-09-06T050000000Z-legacy", "2026-09-06T050000000Z-legacy2", { outputRoot: legacyRoot }).classification, "not-comparable");
+
+  // stack_version is informational: two cases that differ only in it compare
+  // as identical.
+  const mixedRoot = tempRoot();
+  await runDemo(["--response", "pass"], stubOptions(mixedRoot, { runId: "mixed-a" }));
+  await runDemo(["--response", "pass"], stubOptions(mixedRoot, { runId: "mixed-b" }));
+  const manifestPath = join(mixedRoot, "runs", "mixed-b", "manifest.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  delete manifest.stack_version;
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  const mixed = compareRuns("mixed-a", "mixed-b", { outputRoot: mixedRoot });
+  assert.equal(mixed.classification, "identical");
+  assert.ok(!mixed.differences.some((difference) => difference.field === "stack_version"));
+  assert.equal(mixed.left.stack_version, pkg.version);
+  assert.equal(mixed.right.stack_version, null);
+
+  const { inspectCase, renderCaseMarkdown } = await import("../bin/case-review.mjs");
+  const current = inspectCase("versioned-run", { outputRoot });
+  assert.equal(current.stack_version, pkg.version);
+  assert.match(renderCaseMarkdown(current), new RegExp(`^- Orchestrator version: ${pkg.version.replace(/\./g, "\\\\\\.")}$`, "m"));
+  const older = inspectCase("mixed-b", { outputRoot: mixedRoot });
+  assert.equal(older.stack_version, null);
+  assert.match(renderCaseMarkdown(older), /^- Orchestrator version: unavailable$/m);
+});
+
+test("stackVersion reads package.json lazily so a copy without it still imports", () => {
+  // The integration proof's offline replay copies bin/aas.mjs and
+  // scripts/bootstrap.mjs without package.json and runs `aas replay`.
+  const isolated = tempRoot();
+  for (const path of ["bin/aas.mjs", "scripts/bootstrap.mjs", "stack-lock.json"]) {
+    mkdirSync(join(isolated, path, ".."), { recursive: true });
+    writeFileSync(join(isolated, path), readFileSync(join(ROOT, path)));
+  }
+  const listed = spawnSync(process.execPath, [join(isolated, "bin", "aas.mjs"), "runs", "--json"], { cwd: isolated, encoding: "utf8" });
+  assert.equal(listed.status, 0, listed.stderr);
+  const version = spawnSync(process.execPath, [join(isolated, "bin", "aas.mjs"), "--version", "--json"], { cwd: isolated, encoding: "utf8" });
+  assert.equal(version.status, 1);
+  assert.deepEqual(JSON.parse(version.stderr), { error: { message: "Orchestrator version unavailable: package.json is missing or unreadable." } });
+});
+
+test("release workflow runs only on version tags with write access scoped to its job", () => {
+  const text = readFileSync(join(ROOT, ".github", "workflows", "release.yml"), "utf8");
+  const lines = text.split(/\r?\n/);
+  const block = (key, indent) => {
+    const start = lines.findIndex((line) => line === `${" ".repeat(indent)}${key}:`);
+    assert.ok(start >= 0, `release.yml has no ${key}: block at indent ${indent}`);
+    const body = [];
+    for (const line of lines.slice(start + 1)) {
+      if (line.trim() !== "" && line.length - line.trimStart().length <= indent) break;
+      if (line.trim() !== "" && !line.trim().startsWith("#")) body.push(line.trim());
+    }
+    return body;
+  };
+  // Tags only: no branch push, pull_request, schedule, or manual trigger.
+  assert.deepEqual(block("on", 0), ["push:", 'tags: ["v*.*.*"]']);
+  assert.deepEqual(block("permissions", 0), ["contents: read"]);
+  assert.deepEqual(block("permissions", 4), ["contents: write"]);
+  assert.equal(lines.filter((line) => /^\s*permissions:/.test(line)).length, 2);
+  // A write-permission job must not restore a cache, and the tag reaches the
+  // shell through env, never through an inline expression.
+  assert.doesNotMatch(text, /^\s*cache:/m);
+  assert.match(text, /package-manager-cache: false/);
+  // Step keys sit at 8 spaces and their mappings at 10, so anything deeper
+  // is the body of a `run: |` script.
+  for (const line of lines.filter((entry) => /^\s*run:/.test(entry) || /^ {12,}\S/.test(entry))) {
+    assert.doesNotMatch(line, /\$\{\{/, `inline expression in a run step: ${line.trim()}`);
+  }
+  assert.match(text, /TAG: \$\{\{ github\.ref_name \}\}/);
+  assert.match(text, /node scripts\/check-version\.mjs --tag "\$TAG" --notes "\$RUNNER_TEMP\/release-notes\.md"/);
+  assert.match(text, /gh release create "\$TAG" --repo "\$GITHUB_REPOSITORY" --verify-tag/);
+  assert.doesNotMatch(text, /npm publish/);
+
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+  assert.equal(pkg.private, true, "package.json must stay private: it cannot work as an installed dependency");
+  assert.equal(pkg.bin.aas, "./bin/aas.mjs");
 });
 
 test("npm test reports every declared test", () => {
