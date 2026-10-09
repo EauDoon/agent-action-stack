@@ -52,6 +52,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
   to go only to the raw report inside a collapsed `<details>`, so a click on
   **Run stack** before bootstrapping appeared to do nothing. The raw report
   now holds only the run JSON.
+- `npm run gui` now exits 1 with `Cannot listen on 127.0.0.1:<port>
+  (EADDRINUSE). Set AAS_GUI_PORT to a free loopback port.` when the port is
+  taken. It crashed with an unhandled `'error'` event and a stack trace.
+- `GET /api/history` now answers a refused case store (a `runs` path that is
+  not a regular directory) with HTTP 422, as `/api/compare` already did, and
+  a worker failure with HTTP 500 `History could not be loaded.` instead of
+  the generic `Request failed`. Its busy 503 now sends `Retry-After: 1`, like
+  the run and replay routes.
 - Saved-case review now includes persisted stage stderr. `aas inspect` and
   the Markdown review omitted the diagnostic that the run report already
   stored, so a failed act looked like it had no child output.

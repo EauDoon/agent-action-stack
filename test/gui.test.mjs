@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { runGuiTask } from "../bin/aas-gui-worker.mjs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { createServer as createNetServer } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { createHash } from "node:crypto";
 import { request } from "node:http";
@@ -11,7 +12,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { stageDetailsModel, validatedRunSettings, scenarioPreset, filterHistory, bindingsModel, compareModel, createGuiServer, historyModel, renderPage, replayHttpStatus, replayResultModel, summaryModel } from "../bin/aas-gui.mjs";
+import { stageDetailsModel, validatedRunSettings, scenarioPreset, filterHistory, bindingsModel, compareModel, createGuiServer, historyModel, renderPage, replayHttpStatus, replayResultModel, startGui, summaryModel } from "../bin/aas-gui.mjs";
 import { compareRuns, exportRunBundle, runDemo, selectPython } from "../bin/aas.mjs";
 
 const provenance = [
@@ -1251,6 +1252,89 @@ test("saved verification uses 422 for a structurally invalid case and 404 when i
     const missing = await requestServer(server, "/api/replay-saved/missing-saved-case", { method: "POST", headers: { origin } });
     assert.equal(missing.status, 404);
   } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+async function occupiedPort() {
+  const blocker = createNetServer();
+  await new Promise((resolve) => blocker.listen(0, "127.0.0.1", resolve));
+  return { port: blocker.address().port, close: () => new Promise((resolve) => blocker.close(resolve)) };
+}
+
+test("GUI start reports a busy port with a recovery hint instead of crashing", async () => {
+  const busy = await occupiedPort();
+  try {
+    await assert.rejects(startGui({ port: busy.port }), (error) => {
+      assert.equal(error.message, `Cannot listen on 127.0.0.1:${busy.port} (EADDRINUSE). Set AAS_GUI_PORT to a free loopback port.`);
+      return true;
+    });
+    const cli = spawnSync(process.execPath, [fileURLToPath(new URL("../bin/aas-gui.mjs", import.meta.url))], {
+      encoding: "utf8",
+      env: { ...process.env, AAS_GUI_PORT: String(busy.port) },
+      timeout: 30_000,
+    });
+    assert.equal(cli.status, 1, cli.stderr);
+    assert.match(cli.stderr, /AAS_GUI_PORT/);
+    assert.doesNotMatch(cli.stderr, /Unhandled 'error' event/);
+    assert.deepEqual(JSON.parse(cli.stderr), { error: { message: `Cannot listen on 127.0.0.1:${busy.port} (EADDRINUSE). Set AAS_GUI_PORT to a free loopback port.` } });
+  } finally {
+    await busy.close();
+  }
+});
+
+test("GUI history answers store refusals with 422, worker failures with 500, and overlap with Retry-After", async () => {
+  // A runs path that is a regular file is the same refusal compare maps to 422.
+  const outputRoot = mkdtempSync(join(tmpdir(), "aas-gui-history-store-"));
+  writeFileSync(join(outputRoot, "runs"), "not a directory\n");
+  const real = createGuiServer({ outputRoot });
+  await new Promise((resolve) => real.listen(0, "127.0.0.1", resolve));
+  try {
+    const refused = await requestServer(real, "/api/history");
+    assert.equal(refused.status, 422);
+    assert.deepEqual(JSON.parse(refused.body), { error: "Runs directory must be a regular directory." });
+    const compared = await requestServer(real, "/api/compare?a=run-a&b=run-b");
+    assert.equal(compared.status, 422);
+  } finally {
+    await new Promise((resolve) => real.close(resolve));
+  }
+
+  let release;
+  let entered;
+  const started = new Promise((resolve) => { entered = resolve; });
+  const held = new Promise((resolve) => { release = resolve; });
+  const calls = [];
+  const server = createGuiServer({
+    outputRoot,
+    historyTask: async (options) => {
+      calls.push(options);
+      if (calls.length === 1) {
+        entered();
+        await held;
+        return { cases: [], next_cursor: null, scanned: 0, unavailable: [] };
+      }
+      throw new Error("GUI worker exited with code 1.");
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const first = requestServer(server, "/api/history?limit=5");
+    await started;
+    const overlapping = await requestServer(server, "/api/history");
+    assert.equal(overlapping.status, 503);
+    assert.equal(overlapping.headers["retry-after"], "1");
+    release();
+    const loaded = await first;
+    assert.equal(loaded.status, 200);
+    assert.equal(calls[0].limit, 5);
+    assert.equal(calls[0].outputRoot, outputRoot);
+    // The lease is released, and an unexpected worker failure is a 500 with
+    // a stable message rather than the generic "Request failed".
+    const failed = await requestServer(server, "/api/history");
+    assert.equal(failed.status, 500);
+    assert.deepEqual(JSON.parse(failed.body), { error: "History could not be loaded." });
+  } finally {
+    release();
     await new Promise((resolve) => server.close(resolve));
   }
 });

@@ -623,14 +623,19 @@ function requestBoundaryFailure(request) {
   if (hostHeaders.length !== 1 || request.headers.host !== expectedHost) return "host";
   const origin = request.headers.origin;
   // Distinguish a missing-Origin POST (caller forgot to identify itself) from
-  // a wrong-Origin POST (caller is some other origin). The first is a 400
-  // ("you forgot to send Origin"), the second is a 403 ("Origin does not
-  // match this server"). Both still return 403 today; the missing-Origin
-  // case is the surprising one for programmatic local clients.
+  // a wrong-Origin POST (caller is some other origin). The first answers 400
+  // ("Origin header required for POST"), the second 403 ("Forbidden").
   if (request.method === "POST" && origin === undefined) return "missing-origin";
   if (request.method === "POST" && origin !== `http://${expectedHost}`) return "origin";
   if (origin !== undefined && origin !== `http://${expectedHost}`) return "origin";
   return null;
+}
+
+const RUNS_DIRECTORY_REFUSAL = "Runs directory must be a regular directory.";
+
+/** 422 for a case store the orchestrator refuses to read; anything else is a 500. */
+function storeErrorStatus(error) {
+  return /Runs directory must be a regular directory/.test(error?.message ?? "") ? 422 : 500;
 }
 
 export function createGuiServer({
@@ -639,6 +644,9 @@ export function createGuiServer({
   runOptions = {},
   replayRunner,
   depsDir,
+  // Injectable so tests can hold a history page open; production pages are
+  // read in the worker like every other case-store scan.
+  historyTask = (options) => runGuiTask({ operation: "history", options }),
 } = {}) {
   let activeWork = false;
   let historyInFlight = false;
@@ -805,10 +813,18 @@ export function createGuiServer({
           || (url.searchParams.has("limit") && !/^(?:[1-9]|[1-4][0-9]|50)$/.test(url.searchParams.get("limit")))) {
           sendJson(response, 400, { error: "Invalid history page options." }); return;
         }
-        if (historyInFlight) { sendJson(response, 503, { error: "A history page is already loading." }); return; }
+        if (historyInFlight) { sendJson(response, 503, { error: "A history page is already loading." }, { "retry-after": "1" }); return; }
         historyInFlight = true;
         let page;
-        try { page = await runGuiTask({ operation: "history", options: { outputRoot, before: url.searchParams.get("before"), limit: Number(url.searchParams.get("limit") ?? 25) } }); } finally { historyInFlight = false; }
+        try {
+          page = await historyTask({ outputRoot, before: url.searchParams.get("before"), limit: Number(url.searchParams.get("limit") ?? 25) });
+        } catch (error) {
+          const status = storeErrorStatus(error);
+          sendJson(response, status, { error: status === 422 ? RUNS_DIRECTORY_REFUSAL : "History could not be loaded." });
+          return;
+        } finally {
+          historyInFlight = false;
+        }
         sendJson(response, 200, { ok: true, ...page });
         return;
       }
@@ -824,8 +840,8 @@ export function createGuiServer({
         try {
           comparison = compareRuns(left, right, { outputRoot });
         } catch (error) {
-          if (/regular directory/.test(error?.message ?? "")) {
-            sendJson(response, 422, { error: "Runs directory must be a regular directory." });
+          if (storeErrorStatus(error) === 422) {
+            sendJson(response, 422, { error: RUNS_DIRECTORY_REFUSAL });
             return;
           }
           throw error;
@@ -869,7 +885,20 @@ export function createGuiServer({
 export async function startGui({ port = DEFAULT_GUI_PORT, host = "127.0.0.1", ...options } = {}) {
   if (host !== "127.0.0.1") throw new TypeError("GUI host must be 127.0.0.1.");
   const server = createGuiServer(options);
-  await new Promise((resolve) => server.listen(port, host, resolve));
+  await new Promise((resolve, reject) => {
+    // Without a listener a taken port is an unhandled 'error' event and a
+    // stack trace. The server never bound, so there is nothing to close.
+    const onError = (error) => {
+      reject(error?.code === "EADDRINUSE" || error?.code === "EACCES"
+        ? new Error(`Cannot listen on ${host}:${port} (${error.code}). Set AAS_GUI_PORT to a free loopback port.`)
+        : error);
+    };
+    server.once("error", onError);
+    server.listen(port, host, () => {
+      server.off("error", onError);
+      resolve();
+    });
+  });
   const address = server.address();
   const actualPort = typeof address === "object" && address ? address.port : port;
   process.stdout.write(`Agent Action Stack GUI: http://${host}:${actualPort}\n`);
