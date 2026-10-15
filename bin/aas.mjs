@@ -1531,39 +1531,53 @@ export function persistRunBundle({
   const runsDir = join(outputRoot, "runs");
   const finalDir = join(runsDir, runId);
   const temporaryDir = join(runsDir, `.${runId}.${process.pid}.${randomUUID()}.tmp`);
+  // Assemble and size the exact documents before publishing any case files.
+  // Individually bounded child outputs can exceed the portable case budget
+  // when combined or pretty-printed. Such a case cannot be reopened by any
+  // reader, so it must not replace latest.json or appear as a successful save.
+  const serializedStages = {};
+  const stageValues = {};
+  const stageManifest = {};
+  for (const stage of STAGE_NAMES) {
+    const current = stages[stage] ?? { status: "skipped", reason: "not_reached" };
+    const artifact = stageArtifact(stage, current.raw);
+    stageManifest[stage] = {
+      status: current.status,
+      reason: current.reason ?? null,
+      code: current.code ?? null,
+      stderr: current.stderr ? clipChildStderr(current.stderr) : null,
+      artifact: artifact?.path ?? null,
+    };
+    if (artifact) {
+      stageValues[stage] = current.raw;
+      serializedStages[artifact.path] = `${JSON.stringify(current.raw, null, 2)}\n`;
+    }
+  }
+  const manifest = {
+    schema_version: "agent-action-stack.run/v1",
+    run_id: runId,
+    created_at: now,
+    exit_code: exitCode,
+    // Additive within run/v1: readers treat a missing field as null.
+    stack_version: orchestratorVersion,
+    component_provenance: componentProvenance,
+    stages: stageManifest,
+    report: "report.json",
+  };
+  const serializedManifest = `${JSON.stringify(manifest, null, 2)}\n`;
+  const serializedReport = `${JSON.stringify(report, null, 2)}\n`;
+  const serializedBundle = `${JSON.stringify({ manifest, report, stages: stageValues }, null, 2)}\n`;
+  if ([serializedManifest, serializedReport, serializedBundle, ...Object.values(serializedStages)]
+    .some((text) => Buffer.byteLength(text, "utf8") > CHILD_JSON_LIMIT)) {
+    throw new Error("Run bundle exceeds the replay byte limit; no case was saved.");
+  }
   mkdirSync(temporaryDir, { recursive: true });
   try {
-    const stageManifest = {};
-    for (const stage of STAGE_NAMES) {
-      const current = stages[stage] ?? { status: "skipped", reason: "not_reached" };
-      const artifact = stageArtifact(stage, current.raw);
-      stageManifest[stage] = {
-        status: current.status,
-        reason: current.reason ?? null,
-        code: current.code ?? null,
-        stderr: current.stderr ? clipChildStderr(current.stderr) : null,
-        artifact: artifact?.path ?? null,
-      };
-      if (artifact) {
-        writeAtomicFile(
-          join(temporaryDir, artifact.path),
-          `${JSON.stringify(current.raw, null, 2)}\n`,
-        );
-      }
+    for (const [path, text] of Object.entries(serializedStages)) {
+      writeAtomicFile(join(temporaryDir, path), text);
     }
-    const manifest = {
-      schema_version: "agent-action-stack.run/v1",
-      run_id: runId,
-      created_at: now,
-      exit_code: exitCode,
-      // Additive within run/v1: readers treat a missing field as null.
-      stack_version: orchestratorVersion,
-      component_provenance: componentProvenance,
-      stages: stageManifest,
-      report: "report.json",
-    };
-    writeAtomicFile(join(temporaryDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
-    writeAtomicFile(join(temporaryDir, "report.json"), `${JSON.stringify(report, null, 2)}\n`);
+    writeAtomicFile(join(temporaryDir, "manifest.json"), serializedManifest);
+    writeAtomicFile(join(temporaryDir, "report.json"), serializedReport);
     if (existsSync(finalDir)) throw new Error(`Run bundle already exists: ${runId}`);
     renameSync(temporaryDir, finalDir);
     const pointer = {
@@ -1696,7 +1710,10 @@ export async function runDemo(args = [], options = {}) {
       prove: stageRecord("skipped", { reason: "not_reached" }),
     },
   };
-  const finalize = () => {
+  // Return this promise without awaiting it inside the stage handlers below.
+  // Persistence failures must escape, not be rewritten as component failures
+  // that discard raw evidence and publish a different, smaller error case.
+  const finalize = async () => {
     report.stages = Object.fromEntries(STAGE_NAMES.map((stage) => {
       const { raw: _raw, ...visible } = report.stages[stage] ?? stages[stage];
       return [stage, { ...visible, status: stages[stage].status }];
