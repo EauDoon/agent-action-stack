@@ -6,6 +6,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Case persistence now checks the exact formatted UTF-8 replay budget before writing files. Oversized combined evidence is rejected without publishing an unreadable case or replacing the previous latest pointer.
+
 ## [0.3.0] - 2026-10-09
 
 The first tagged release since 0.2.0. `package.json` carried 0.2.1 to 0.2.5

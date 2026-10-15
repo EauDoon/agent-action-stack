@@ -2120,7 +2120,9 @@ test('case exports reject mismatched identities and oversized persisted reports'
 
 test('export byte budget includes the actual formatted download representation',async()=>{
   const outputRoot=tempRoot();
-  await runDemo([],{paths:{outputRoot},runId:'formatted-budget',componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false,rows:Array(30000).fill({x:0})},status:0})});
+  const result = await runDemo([],{paths:{outputRoot},runId:'formatted-budget',componentResolver:()=>[],runDecideFn:async()=>({ok:false,raw:{passed:false},status:0})});
+  // Preserve the reader's guard against externally modified historical cases.
+  writeFileSync(join(result.bundleDir, 'stages/decide.json'), JSON.stringify({passed:false,rows:Array(30000).fill({x:0})}));
   assert.throws(()=>exportRunBundle('formatted-budget',{outputRoot}),/byte limit/);
 });
 
@@ -2732,4 +2734,82 @@ test("npm test reports every declared test", () => {
   const reported = Math.max(0, ...counts);
   assert.ok(counts.length > 0, `no test count in the runner summary:\n${result.stdout.slice(-800)}`);
   assert.ok(reported >= declared, `runner reported ${reported} results but ${declared} tests are declared`);
+});
+
+
+test('case persistence rejects a combined oversized case before replacing latest', () => {
+  const outputRoot = tempRoot();
+  const save = (runId, stages) => persistRunBundle({
+    outputRoot, runId, report: {run_id: runId, stages: {}}, stages,
+    componentProvenance: [], exitCode: 0,
+  });
+  save('previous-readable-case', {});
+  const latest = readFileSync(join(outputRoot, 'latest.json'), 'utf8');
+  assert.throws(() => save('oversized-combination', {
+    decide: {status: 'passed', raw: {pad: 'x'.repeat(600000)}},
+    act: {status: 'passed', raw: {pad: 'y'.repeat(600000)}},
+  }), /replay byte limit; no case was saved/);
+  assert.equal(readFileSync(join(outputRoot, 'latest.json'), 'utf8'), latest);
+  assert.deepEqual(readdirSync(join(outputRoot, 'runs')), ['previous-readable-case']);
+  assert.equal(exportRunBundle('previous-readable-case', {outputRoot}).manifest.run_id, 'previous-readable-case');
+});
+
+test('case persistence accounts for pretty printing and UTF-8 bytes', () => {
+  for (const raw of [{rows: Array(30000).fill({x: 0})}, {pad: '界'.repeat(360000)}]) {
+    const outputRoot = tempRoot();
+    assert.throws(() => persistRunBundle({
+      outputRoot, runId: 'oversized-representation', report: {run_id: 'oversized-representation'},
+      stages: {decide: {status: 'passed', raw}}, componentProvenance: [], exitCode: 0,
+    }), /replay byte limit; no case was saved/);
+    assert.equal(existsSync(join(outputRoot, 'latest.json')), false);
+    assert.equal(existsSync(join(outputRoot, 'runs')), false);
+  }
+});
+
+test('successfully persisted cases round-trip at the exact portable byte limit', () => {
+  const outputRoot = tempRoot();
+  const runId = 'exact-portable-limit';
+  const parameters = {
+    outputRoot, runId, report: {run_id: runId}, stages: {decide: {status: 'passed', raw: {pad: ''}}},
+    componentProvenance: [], exitCode: 0, now: '2026-10-15T00:00:00.000Z',
+  };
+  const probeRoot = tempRoot();
+  persistRunBundle({...parameters, outputRoot: probeRoot});
+  const empty = exportRunBundle(runId, {outputRoot: probeRoot});
+  const size = Buffer.byteLength(JSON.stringify(empty, null, 2) + '\n');
+  parameters.stages.decide.raw.pad = 'x'.repeat(CHILD_JSON_LIMIT - size);
+  persistRunBundle(parameters);
+  const result = exportRunBundle(runId, {outputRoot});
+  assert.equal(Buffer.byteLength(JSON.stringify(result, null, 2) + '\n'), CHILD_JSON_LIMIT);
+  assert.equal(result.stages.decide.pad, parameters.stages.decide.raw.pad);
+  assert.throws(() => persistRunBundle({...parameters, outputRoot: tempRoot(),
+    stages: {decide: {status: 'passed', raw: {pad: parameters.stages.decide.raw.pad + 'x'}}},
+  }), /replay byte limit/);
+});
+
+
+test("runDemo preserves the previous case when finalization fails in any stage", async () => {
+  const large = { rows: Array.from({ length: 30_000 }, () => ({ x: 0 })) };
+  const scenarios = [
+    { name: "policy-denied", decide: { ok: false, raw: { passed: false, ...large } } },
+    { name: "act-failed", act: { ok: false, raw: { ...large } } },
+    { name: "settled", act: { ok: true, raw: { outcome: "settled", ...large } } },
+    { name: "prove-passed", prove: { ok: true, raw: { ...large } } },
+    { name: "prove-failed", prove: { ok: false, raw: { ...large } } },
+  ];
+  for (const scenario of scenarios) {
+    const outputRoot = tempRoot();
+    await runDemo([], stubOptions(outputRoot, { runId: "previous" }));
+    const previous = readFileSync(join(outputRoot, "latest.json"), "utf8");
+    await assert.rejects(runDemo([], {
+      paths: { outputRoot },
+      runId: scenario.name,
+      componentResolver: () => [],
+      runDecideFn: async () => scenario.decide ?? { ok: true, raw: { passed: true } },
+      runActFn: async () => scenario.act ?? { ok: true, raw: { outcome: "disputed" } },
+      runProveFn: async () => scenario.prove,
+    }), /replay byte limit; no case was saved/, scenario.name);
+    assert.equal(readFileSync(join(outputRoot, "latest.json"), "utf8"), previous, scenario.name);
+    assert.deepEqual(readdirSync(join(outputRoot, "runs")), ["previous"], scenario.name);
+  }
 });
