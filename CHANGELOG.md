@@ -6,6 +6,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Removed
+- Removed the unused `listRunSummaries` and `runCapture` imports from the GUI module.
+
 ### Fixed
 - Case persistence now checks the exact formatted UTF-8 replay budget before writing files. Oversized combined evidence is rejected without publishing an unreadable case or replacing the previous latest pointer.
 
