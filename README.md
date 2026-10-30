@@ -286,6 +286,42 @@ Inventory domain:
   `moderate` risk level
 - `fixtures/inventory.response.fail.json`: fails the same four rules
 
+### Bring your own response
+
+To gate your own agent's output instead of a fixture, pass its JSON with
+`--response-file` (not together with `--response`):
+
+```bash
+node ./bin/aas.mjs demo --response-file ./my-agent-response.json
+node ./bin/aas.mjs demo --domain inventory --response-file ./allocation.json --fault duplicate --prove rail
+```
+
+The selected domain's policy fixture evaluates the file. The stack checks it
+first under the testbench's own input rules: a regular file of at most
+1,000,000 bytes, UTF-8 without a byte order mark, holding one JSON object. A
+file that breaks one of these exits 2 before any stage runs and writes no case.
+Inputs the testbench refuses for other reasons (duplicate members, nesting
+deeper than 32, more than 100,000 values, non-finite numbers) are recorded as a
+decide error with the testbench's message and exit 1. The exact bytes that
+were checked are evaluated from a private temporary copy, so the recorded
+digest always matches what decide saw. The case records `response: file` and
+`requested_options.response_file` (the basename, its `sha256:` digest, and its
+size), never the content; the basename and digest travel with exports and
+appear in `aas inspect` and the Markdown review. The human output adds
+`response_file: <name> <digest>` after `flow:`.
+
+The file gates orchestration only. A pass lets the act stage run, but act
+still runs the rail's fixed synthetic proposal: nothing in your response
+parameterizes the action, and a file-gated pass does not authorize that
+proposal. The GUI does not take response files, and **Use saved settings**
+reports such a case as one that cannot be restored.
+
+On every policy refusal, from a file or a fixture, the human output names the
+failed rule ids after `flow:`, for example
+`decide_failed_rules: decision-accept, risk-allowed, blocked-is-false, recourse-required`
+(at most 50, then `+N more`); the JSON report carries the full
+`stages.decide.rule_results`.
+
 ## Design bounds
 
 - Orchestration only. Behavior lives in the three libraries.

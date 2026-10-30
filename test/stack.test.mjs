@@ -16,6 +16,8 @@ import {
   DEMO_FAULTS_BY_DOMAIN,
   NO_RECEIPT_FAULTS,
   parseDemoOptions,
+  readResponseFile,
+  RESPONSE_FILE_LIMIT,
   CHILD_JSON_LIMIT,
   exportRunBundle,
   CHILD_TIMEOUT_MAX_MS,
@@ -2860,7 +2862,7 @@ test("every rail demo fault parses for its own domain and is refused for the oth
       const prove = NO_RECEIPT_FAULTS[domain].includes(fault) ? "simulate" : "rail";
       assert.deepEqual(
         parseDemoOptions(["--domain", domain, "--fault", fault, "--prove", prove]),
-        { responseName: "pass", fault, forceDispute: false, asJson: false, proveMode: prove, domain },
+        { responseName: "pass", responseFile: null, fault, forceDispute: false, asJson: false, proveMode: prove, domain },
       );
     }
   }
@@ -3427,4 +3429,172 @@ test("verify --all records a verifier that cannot run as an error without stoppi
   assert.deepEqual(page.results.map((entry) => entry.status), ["error", "unavailable"]);
   assert.match(page.results[0].reason, /replay child process error \(ENOENT\)/);
   assert.equal(page.counts.error, 1);
+});
+
+function responseFileAt(contents, name = "agent-response.json") {
+  const path = join(tempRoot(), name);
+  writeFileSync(path, contents);
+  return path;
+}
+
+test("--response-file and --response are mutually exclusive", async () => {
+  const path = responseFileAt('{"summary":"ok"}');
+  assert.throws(() => parseDemoOptions(["--response", "pass", "--response-file", path]), /Choose either --response or --response-file, not both/);
+  assert.throws(() => parseDemoOptions(["--response-file", path, "--response", "fail"]), /not both/);
+  assert.equal(parseDemoOptions(["--response-file", path]).responseName, "file");
+  assert.equal(parseDemoOptions(["--response-file", path]).responseFile, path);
+  const cli = await captureMain(["demo", "--response", "pass", "--response-file", path], { nodeVersion: "20.0.0" });
+  assert.equal(cli.exitCode, 2);
+  assert.match(cli.stderr, /not both/);
+  const missing = await captureMain(["demo", "--response-file"]);
+  assert.equal(missing.exitCode, 2);
+  assert.match(missing.stderr, /Missing value for demo option: --response-file/);
+});
+
+test("response files the decide stage would refuse are usage errors that run nothing and write nothing", async () => {
+  const exact = Buffer.alloc(RESPONSE_FILE_LIMIT + 1, 0x20);
+  exact[0] = 0x7b;
+  exact[1] = 0x7d;
+  const cases = [
+    [join(tempRoot(), "absent.json"), /--response-file cannot be read \(ENOENT\)/],
+    [tempRoot(), /--response-file (must name a regular file|cannot be read \(E[A-Z]+\))/],
+    [responseFileAt(exact), /exceeds the decide stage's 1000000-byte input limit/],
+    [responseFileAt(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('{"summary":"ok"}')])), /byte order mark/],
+    [responseFileAt(Buffer.from([0xff, 0xfe, 0x7b, 0x00, 0x7d, 0x00])), /byte order mark/],
+    [responseFileAt(Buffer.from([0x7b, 0x22, 0xc3, 0x28, 0x22, 0x3a, 0x31, 0x7d])), /not valid UTF-8/],
+    [responseFileAt('{"summary": '), /does not contain valid JSON/],
+    [responseFileAt(""), /does not contain valid JSON/],
+    [responseFileAt('[{"summary":"ok"}]'), /must contain one JSON object/],
+    [responseFileAt("null"), /must contain one JSON object/],
+  ];
+  for (const [path, pattern] of cases) {
+    const outputRoot = tempRoot();
+    let decideCalls = 0;
+    let resolverCalls = 0;
+    await assert.rejects(
+      () => runDemo(["--response-file", path], stubOptions(outputRoot, {
+        componentResolver: () => { resolverCalls += 1; return PROVENANCE; },
+        runDecideFn: async () => { decideCalls += 1; return { ok: true, raw: { passed: true }, status: 0 }; },
+      })),
+      (error) => error.name === "UsageError" && pattern.test(error.message),
+      String(pattern),
+    );
+    assert.equal(decideCalls, 0);
+    assert.equal(resolverCalls, 0);
+    assert.equal(existsSync(join(outputRoot, "runs")), false);
+  }
+  // Exactly at the limit is accepted.
+  const atLimit = Buffer.alloc(RESPONSE_FILE_LIMIT, 0x20);
+  atLimit[0] = 0x7b;
+  atLimit[1] = 0x7d;
+  assert.equal(readResponseFile(responseFileAt(atLimit)).bytes.length, RESPONSE_FILE_LIMIT);
+  // Content never reaches the message.
+  try {
+    readResponseFile(responseFileAt('{"secret-token-value": '));
+    assert.fail("invalid JSON was accepted");
+  } catch (error) {
+    assert.doesNotMatch(error.message, /secret-token-value/);
+  }
+  const cli = await captureMain(["demo", "--response-file", responseFileAt("[1]")], { nodeVersion: "20.0.0" });
+  assert.equal(cli.exitCode, 2);
+  assert.match(cli.stderr, /must contain one JSON object/);
+});
+
+test("a named pipe cannot hold the response-file reader open", { skip: process.platform === "win32" }, () => {
+  const dir = tempRoot();
+  const fifo = join(dir, "response.json");
+  execFileSync("mkfifo", [fifo]);
+  const url = new URL("../bin/aas.mjs", import.meta.url).href;
+  const script = `import {readResponseFile} from ${JSON.stringify(url)};try{readResponseFile(${JSON.stringify(fifo)});process.exitCode=1;}catch(error){if(!/regular file/.test(error.message))throw error;process.stdout.write("rejected");}`;
+  const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", timeout: 2000 });
+  assert.equal(child.error, undefined);
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(child.stdout, "rejected");
+});
+
+test("decide evaluates a private copy of the exact response bytes and the case records name, digest, and size", async () => {
+  const contents = '{\n  "summary": "Refund approved",\n  "decision": "accept"\n}\n';
+  const path = responseFileAt(contents, "my agent output.json");
+  const outputRoot = tempRoot();
+  let evaluated = null;
+  let evaluatedPath = null;
+  const result = await runDemo(["--response-file", path, "--domain", "inventory"], stubOptions(outputRoot, {
+    runId: "response-file-run",
+    runDecideFn: async (responsePath, { domain }) => {
+      evaluatedPath = responsePath;
+      evaluated = readFileSync(responsePath);
+      assert.equal(domain, "inventory");
+      return { ok: true, raw: { passed: true, policy_id: "aas-inventory-gate-v1", rule_results: [] }, status: 0 };
+    },
+  }));
+  assert.equal(evaluated.toString("utf8"), contents);
+  assert.notEqual(evaluatedPath, path);
+  assert.equal(existsSync(evaluatedPath), false, "the scratch copy must be removed");
+  const digest = `sha256:${createHash("sha256").update(contents).digest("hex")}`;
+  assert.equal(result.report.response, "file");
+  assert.deepEqual(result.report.requested_options, {
+    response: "file",
+    response_file: { name: "my agent output.json", digest, bytes: Buffer.byteLength(contents) },
+    domain: "inventory",
+    fault: "none",
+    prove: "simulate",
+    dispute: false,
+  });
+  assert.equal(result.report.stages.decide.policy_id, "aas-inventory-gate-v1");
+  const lines = captureHuman(result.report);
+  assert.equal(lines[1], "response: file");
+  assert.equal(lines[13], `response_file: my agent output.json ${digest}`);
+  // The scratch copy is removed even when decide throws.
+  let thrownPath = null;
+  const failed = await runDemo(["--response-file", path], stubOptions(tempRoot(), {
+    runDecideFn: async (responsePath) => { thrownPath = responsePath; throw new Error("decide crashed"); },
+  }));
+  assert.equal(failed.exitCode, 1);
+  assert.equal(existsSync(thrownPath), false);
+  // Fixture runs keep their exact requested_options shape.
+  const fixture = await runDemo([], stubOptions(tempRoot()));
+  assert.deepEqual(Object.keys(fixture.report.requested_options), ["response", "domain", "fault", "prove", "dispute"]);
+  // A long basename is clipped to 200 characters.
+  const long = responseFileAt('{"summary":"x"}', `${"n".repeat(230)}.json`);
+  assert.equal(readResponseFile(long).name.length, 200);
+});
+
+test("a policy refusal names its failed rules after flow:, capped at 50", async () => {
+  const outputRoot = tempRoot();
+  const rules = (count) => Array.from({ length: count }, (_, index) => ({ rule_id: `rule-${index}`, passed: false, path: "p", kind: "equals", reason_code: "VALUE_NOT_EQUAL" }));
+  const refused = await runDemo(["--response", "fail"], stubOptions(outputRoot, {
+    runId: "refused-rules",
+    runDecideFn: async () => ({ ok: false, raw: { passed: false, policy_id: "aas-refund-gate-v1", rule_results: [{ rule_id: "summary-present", passed: true }, ...rules(4)] }, status: 0 }),
+  }));
+  const lines = captureHuman(refused.report, refused.bundleDir);
+  assert.equal(lines[12], "flow: decide -> stop (policy failed)");
+  assert.equal(lines[13], "decide_failed_rules: rule-0, rule-1, rule-2, rule-3");
+  assert.equal(lines.at(-1), `bundle: ${refused.bundleDir}`);
+  const many = await runDemo(["--response", "fail"], stubOptions(outputRoot, {
+    runId: "refused-many",
+    runDecideFn: async () => ({ ok: false, raw: { passed: false, rule_results: rules(53) }, status: 0 }),
+  }));
+  const manyLine = captureHuman(many.report)[13];
+  assert.match(manyLine, /^decide_failed_rules: rule-0, rule-1, .*rule-49 \+3 more$/);
+  assert.equal(manyLine.split(", ").length, 50);
+  // A pass and a decide error print no rule line.
+  const passed = await runDemo([], stubOptions(outputRoot, { runId: "passed-rules" }));
+  assert.equal(captureHuman(passed.report).some((line) => line.startsWith("decide_failed_rules:")), false);
+  const errored = await runDemo([], stubOptions(outputRoot, { runId: "errored-rules", runDecideFn: async () => { throw new Error("boom"); } }));
+  assert.equal(captureHuman(errored.report).some((line) => line.startsWith("decide_failed_rules:")), false);
+});
+
+test("inspect lists the response file under requested settings in Markdown and JSON", async () => {
+  const { inspectCase, renderCaseMarkdown } = await import("../bin/case-review.mjs");
+  const outputRoot = tempRoot();
+  const path = responseFileAt('{"summary":"ok"}', "agent_[1].json");
+  await runDemo(["--response-file", path], stubOptions(outputRoot, { runId: "inspect-file" }));
+  const review = inspectCase("inspect-file", { outputRoot });
+  assert.equal(review.requested_options.response, "file");
+  assert.equal(review.requested_options.response_file.name, "agent_[1].json");
+  const markdown = renderCaseMarkdown(review);
+  assert.match(markdown, /- response: file\n/);
+  assert.match(markdown, /- response_file: agent\\_\\\[1\\\]\\\.json; sha256:[0-9a-f]{64}; 16 bytes\n/);
+  await runDemo([], stubOptions(outputRoot, { runId: "inspect-fixture" }));
+  assert.doesNotMatch(renderCaseMarkdown(inspectCase("inspect-fixture", { outputRoot })), /response_file/);
 });

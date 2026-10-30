@@ -49,6 +49,21 @@ project adheres to [Semantic Versioning](https://semver.org/).
   MandateBound commits with `pins_differ`. A missing verifier aborts once
   with the bootstrap hint. `aas verify <run-id>`, `aas replay`, and the GUI
   are unchanged.
+- `aas demo --response-file <path>` gates your own response JSON at decide
+  against the selected domain's policy, instead of only the two bundled
+  fixtures. The file is checked first under the testbench's own input rules
+  (a regular file of at most 1,000,000 bytes, UTF-8 without a byte order
+  mark, one JSON object), so a file it would refuse exits 2 before any stage
+  runs or any case is written; other testbench refusals are recorded as a
+  decide error. Decide evaluates a private copy of the checked bytes. The
+  report records `response: file` and an optional
+  `requested_options.response_file` with the basename, `sha256:` digest, and
+  size, shown by `aas inspect` and the Markdown review and printed as
+  `response_file:` after `flow:`. The response gates orchestration only; act
+  still runs the rail's fixed synthetic proposal.
+- Every policy refusal now names its failed rule ids in the human output, as
+  `decide_failed_rules:` after `flow:` (at most 50, then `+N more`). Before,
+  a refusal printed no reason, although the report carried the rules.
 
 ### Fixed
 - `node scripts/bootstrap.mjs` ignored its arguments, so `--help` ran a full

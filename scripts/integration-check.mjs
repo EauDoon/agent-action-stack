@@ -187,6 +187,62 @@ function checkFaultMatrix() {
   check(readFileSync(join(root, ".out", "latest.json")).equals(before), "no-receipt rail review moved the latest pointer");
 }
 
+/**
+ * Bring-your-own response JSON at decide: a refusal names the testbench's
+ * failed rules and the file digest, a passing file drives the full
+ * decide -> act -> prove flow to a verifiable case, and a file the testbench
+ * refuses (duplicate members) is a recorded decide error.
+ */
+function checkResponseFile() {
+  const failFixture = join(root, "fixtures", "response.fail.json");
+  const refused = runDemo(["--response-file", failFixture]);
+  if (refused.status === 0) {
+    const report = JSON.parse(refused.stdout);
+    const failed = (report.stages.decide?.rule_results ?? []).filter((rule) => rule.passed === false).map((rule) => rule.rule_id);
+    check(report.response === "file" && report.stages.decide?.status === "failed", "response file: refusal not recorded");
+    check(JSON.stringify(failed) === JSON.stringify(["decision-accept", "risk-allowed", "blocked-is-false", "recourse-required"]),
+      `response file: unexpected failed rules ${failed.join(", ")}`);
+    const digest = `sha256:${createHash("sha256").update(readFileSync(failFixture)).digest("hex")}`;
+    check(report.requested_options?.response_file?.digest === digest && report.requested_options.response_file.name === "response.fail.json",
+      "response file: digest or name not recorded");
+  }
+  const human = run(process.execPath, ["./bin/aas.mjs", "demo", "--response-file", failFixture]);
+  check(/^decide_failed_rules: decision-accept, risk-allowed, blocked-is-false, recourse-required$/m.test(human.stdout),
+    `response file: human refusal does not name the failed rules: ${human.stdout.slice(-400)}`);
+
+  const scratch = mkdtempSync(join(tmpdir(), "aas-response-file-"));
+  try {
+    const copy = join(scratch, "agent output.json");
+    writeFileSync(copy, readFileSync(join(root, "fixtures", "inventory.response.pass.json")));
+    const passed = runDemo(["--response-file", copy, "--domain", "inventory", "--fault", "duplicate", "--prove", "rail"]);
+    if (passed.status === 0) {
+      const report = JSON.parse(passed.stdout);
+      check(report.flow === "decide -> act -> prove" && report.stages.prove?.review_verdict === "recorded",
+        `response file: pass did not reach a recorded review (${report.flow})`);
+      check(report.stages.decide?.policy_id === "aas-inventory-gate-v1", "response file: inventory policy not used");
+      const verified = run(process.execPath, ["./bin/aas.mjs", "verify", report.run_id, "--json"]);
+      check(verified.status === 0, `response file: saved case did not verify: ${verified.stdout.slice(-300)}`);
+    }
+    const duplicate = join(scratch, "duplicate.json");
+    writeFileSync(duplicate, '{"summary":"a","summary":"b"}');
+    const errored = run(process.execPath, ["./bin/aas.mjs", "demo", "--response-file", duplicate, "--json"]);
+    check(errored.status === 1, `response file: duplicate members exited ${errored.status}, expected a decide error`);
+    if (errored.stdout.trim() !== "") {
+      const report = JSON.parse(errored.stdout);
+      check(report.stages.decide?.status === "error" && /INVALID_JSON_INPUT/.test(report.stages.decide?.reason ?? ""),
+        "response file: duplicate members not recorded as the testbench's decide error");
+    }
+    const bom = join(scratch, "bom.json");
+    writeFileSync(bom, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), readFileSync(failFixture)]));
+    const before = readFileSync(join(root, ".out", "latest.json"));
+    const usage = run(process.execPath, ["./bin/aas.mjs", "demo", "--response-file", bom]);
+    check(usage.status === 2 && /byte order mark/.test(usage.stderr), `response file: BOM exited ${usage.status}`);
+    check(readFileSync(join(root, ".out", "latest.json")).equals(before), "response file: a refused input moved the latest pointer");
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 function existingRunIds() {
   try {
     return readdirSync(join(root, ".out", "runs"), { withFileTypes: true })
@@ -455,6 +511,7 @@ async function main() {
   }
 
   checkFaultMatrix();
+  checkResponseFile();
   checkVerifyAll(components, priorRuns);
 
   const cases = run(process.execPath, ["./bin/aas.mjs", "cases", "--json"]);

@@ -216,6 +216,11 @@ export function renderCaseMarkdown(review) {
     const value = review.requested_options?.[key];
     lines.push('- '+key+': '+markdownText(typeof value === 'string' || typeof value === 'boolean' ? value : null));
   }
+  // Present only for --response-file runs; the response content stays out of the review.
+  const responseFile = review.requested_options?.response_file;
+  if (responseFile && typeof responseFile === 'object') {
+    lines.push('- response_file: '+markdownText(typeof responseFile.name === 'string' ? responseFile.name : null)+'; '+markdownText(typeof responseFile.digest === 'string' ? responseFile.digest : null)+'; '+markdownText(Number.isInteger(responseFile.bytes) ? responseFile.bytes : null)+' bytes');
+  }
   lines.push('', '## Policy failures', '');
   if (!review.policy_failures?.total) lines.push('No failed rule records are available; this alone does not prove a policy pass.');
   for (const rule of review.policy_failures?.rules ?? []) lines.push('- '+markdownText(rule.rule_id)+': '+markdownText(rule.path)+'; '+markdownText(rule.kind)+'; '+markdownText(rule.reason_code));

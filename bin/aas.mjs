@@ -24,7 +24,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import {
@@ -137,7 +137,7 @@ export function stackVersion() {
 
 const STAGE_NAMES = ["decide", "act", "prove"];
 const DEMO_FLAG_OPTIONS = new Set(["--dispute", "--json"]);
-const DEMO_VALUE_OPTIONS = new Set(["--response", "--fault", "--prove", "--domain"]);
+const DEMO_VALUE_OPTIONS = new Set(["--response", "--response-file", "--fault", "--prove", "--domain"]);
 const DEMO_DOMAINS = new Set(["refund", "inventory"]);
 const PROVE_MODES = new Set(["simulate", "rail"]);
 const STDERR_LIMIT = 800;
@@ -148,6 +148,13 @@ export const DEFAULT_CHILD_TIMEOUT_MS = 30_000;
 export const CHILD_TIMEOUT_MAX_MS = 600_000;
 /** Loopback port for `aas-gui`. Override with AAS_GUI_PORT. */
 export const DEFAULT_GUI_PORT = 8787;
+/**
+ * The testbench's own input ceiling (MAX_JSON_INPUT_BYTES), not
+ * CHILD_JSON_LIMIT: a larger response file would pass a stack check and then
+ * fail inside decide.
+ */
+export const RESPONSE_FILE_LIMIT = 1_000_000;
+const BYTE_ORDER_MARKS = [[0xef, 0xbb, 0xbf], [0xff, 0xfe], [0xfe, 0xff]];
 /**
  * Every synthetic fault the pinned Consequence Rail demo accepts, per domain,
  * in the rail's own order (`crctl demo list --json`). The integration
@@ -325,7 +332,7 @@ export function helpText() {
   return `Agent Action Stack
 
 Usage:
-  aas demo [--response pass|fail] [--fault <name>] [--dispute] [--prove simulate|rail] [--domain refund|inventory] [--json]
+  aas demo [--response pass|fail] [--response-file <path>] [--fault <name>] [--dispute] [--prove simulate|rail] [--domain refund|inventory] [--json]
   aas export <run-id> [--root output-dir] [--out <path>] [--overwrite] [--json]
   aas replay <bundle-file|-> [--json]
   aas latest [--root output-dir] [--json]
@@ -355,6 +362,12 @@ Commands:
 
 Options:
   --response pass|fail     Policy fixture to evaluate (default: pass)
+  --response-file <path>   Gate your own response JSON at decide instead of a
+                           fixture (not with --response): one JSON object, UTF-8
+                           without a byte order mark, at most 1,000,000 bytes.
+                           Gates orchestration only; act still runs the rail's
+                           fixed synthetic proposal. The case records its
+                           basename, sha256 digest, and size, not its content
   --fault <name>           Rail demo fault for the selected domain (default: none;
                            see Faults below)
   --dispute                Force MandateBound prove after a settled act
@@ -1683,6 +1696,23 @@ function stageRecord(status, fields = {}) {
   return { status, ...fields };
 }
 
+function printable(value) {
+  return String(value ?? "unknown").replace(/[\u0000-\u001F\u007F]/g, " ");
+}
+
+const FAILED_RULE_LIMIT = 50;
+
+/** The failed rule ids of a policy refusal, capped, or null for any other decide result. */
+function failedRuleIds(decide) {
+  if (!decide || decide.status !== "failed" || !Array.isArray(decide.rule_results)) return null;
+  const ids = decide.rule_results
+    .filter((rule) => rule && rule.passed === false && typeof rule.rule_id === "string")
+    .map((rule) => printable(rule.rule_id).slice(0, 200));
+  if (ids.length === 0) return null;
+  const shown = ids.slice(0, FAILED_RULE_LIMIT).join(", ");
+  return ids.length > FAILED_RULE_LIMIT ? `${shown} +${ids.length - FAILED_RULE_LIMIT} more` : shown;
+}
+
 /**
  * Print the CLI human report. Field order is part of the public surface and
  * must match the pass-path sample in README.md.
@@ -1707,6 +1737,12 @@ export function printHuman(report, bundleDir = null) {
     `flow: ${report.flow}`,
   ];
   // Conditional lines follow flow: so the fixed block above keeps its positions.
+  const responseFile = report.requested_options?.response_file;
+  if (responseFile && typeof responseFile === "object") {
+    lines.push(`response_file: ${printable(responseFile.name)} ${printable(responseFile.digest)}`);
+  }
+  const failedRules = failedRuleIds(report.stages.decide);
+  if (failedRules !== null) lines.push(`decide_failed_rules: ${failedRules}`);
   const act = report.stages.act ?? {};
   if (typeof act.rejection_code === "string") lines.push(`act_rejection: ${clipChildStderr(act.rejection_code, 200)}`);
   if (typeof act.tamper_code === "string") lines.push(`act_tamper: ${clipChildStderr(act.tamper_code, 200)}`);
@@ -1731,8 +1767,12 @@ export function printHuman(report, bundleDir = null) {
  */
 export function parseDemoOptions(args) {
   validateDemoArgs(args);
-  const responseName = option(args, "--response", "pass");
-  if (responseName !== "pass" && responseName !== "fail") {
+  const responseFile = option(args, "--response-file", null);
+  if (responseFile !== null && has(args, "--response")) {
+    throw new UsageError("Choose either --response or --response-file, not both");
+  }
+  const responseName = responseFile !== null ? "file" : option(args, "--response", "pass");
+  if (responseName !== "pass" && responseName !== "fail" && responseName !== "file") {
     throw new UsageError("--response must be pass or fail");
   }
   const domain = option(args, "--domain", "refund");
@@ -1752,7 +1792,71 @@ export function parseDemoOptions(args) {
   if (proveMode === "rail" && NO_RECEIPT_FAULTS[domain].includes(fault)) {
     throw new UsageError(`fault ${fault} produces no settlement receipt, so --prove rail has no same-case evidence; use --prove simulate`);
   }
-  return { responseName, fault, forceDispute, asJson, proveMode, domain };
+  return { responseName, responseFile, fault, forceDispute, asJson, proveMode, domain };
+}
+
+/**
+ * Read a caller's response file under the testbench's own input contract, so
+ * an input it would refuse is a usage error (exit 2) before any stage runs or
+ * any case is written: a regular file read through a nonblocking descriptor
+ * (a named pipe cannot hold the reader open), at most RESPONSE_FILE_LIMIT
+ * bytes, no byte order mark, strict UTF-8, and one JSON object. Errors never
+ * echo file content. Returns the exact bytes decide will evaluate.
+ *
+ * @param {string} path
+ * @returns {{bytes: Buffer, name: string, digest: string}}
+ */
+export function readResponseFile(path) {
+  let fd;
+  try {
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+  } catch (error) {
+    throw new UsageError(`--response-file cannot be read (${error.code ?? "read error"}): ${path}`);
+  }
+  let bytes;
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) throw new UsageError(`--response-file must name a regular file: ${path}`);
+    const tooLarge = () => new UsageError(`--response-file exceeds the decide stage's ${RESPONSE_FILE_LIMIT}-byte input limit`);
+    if (stat.size > RESPONSE_FILE_LIMIT) throw tooLarge();
+    const buffer = Buffer.alloc(RESPONSE_FILE_LIMIT + 1);
+    let size = 0;
+    while (size < buffer.length) {
+      const read = readSync(fd, buffer, size, buffer.length - size, null);
+      if (read === 0) break;
+      size += read;
+    }
+    if (size > RESPONSE_FILE_LIMIT) throw tooLarge();
+    bytes = Buffer.from(buffer.subarray(0, size));
+  } catch (error) {
+    if (error instanceof UsageError) throw error;
+    throw new UsageError(`--response-file cannot be read (${error.code ?? "read error"}): ${path}`);
+  } finally {
+    closeSync(fd);
+  }
+  if (BYTE_ORDER_MARKS.some((mark) => mark.every((byte, index) => bytes[index] === byte))) {
+    throw new UsageError("--response-file starts with a byte order mark; the decide stage requires UTF-8 JSON without one");
+  }
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new UsageError("--response-file is not valid UTF-8");
+  }
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new UsageError("--response-file does not contain valid JSON");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new UsageError("--response-file must contain one JSON object");
+  }
+  return {
+    bytes,
+    name: basename(path).slice(0, 200),
+    digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+  };
 }
 
 /**
@@ -1763,7 +1867,10 @@ export function parseDemoOptions(args) {
  * @returns {Promise<DemoResult>}
  */
 export async function runDemo(args = [], options = {}) {
-  const { responseName, fault, forceDispute, asJson, proveMode, domain } = parseDemoOptions(args);
+  const { responseName, responseFile, fault, forceDispute, asJson, proveMode, domain } = parseDemoOptions(args);
+  // Read before any stage or provenance probe: an input the decide stage would
+  // refuse is a usage error that writes nothing.
+  const responseInput = responseFile === null ? null : readResponseFile(responseFile);
   const childTimeoutMs = options.childTimeoutMs ?? resolveChildTimeoutMs();
   const runner = options.runner ?? ((command, args, opts = {}) =>
     runCapture(command, args, { timeout: childTimeoutMs, ...opts }));
@@ -1771,12 +1878,12 @@ export async function runDemo(args = [], options = {}) {
     ...DEFAULT_PATHS,
     ...(options.paths ?? {}),
   };
-  const responseFile =
+  const fixtureFile =
     domain === "inventory"
       ? `inventory.response.${responseName}.json`
       : `response.${responseName}.json`;
-  const responsePath = join(paths.fixtures, responseFile);
-  if (!existsSync(responsePath) && !options.runDecideFn) throw new Error(`Missing fixture: ${responsePath}`);
+  let responsePath = responseInput === null ? join(paths.fixtures, fixtureFile) : null;
+  if (responsePath !== null && !existsSync(responsePath) && !options.runDecideFn) throw new Error(`Missing fixture: ${responsePath}`);
   const runId = options.runId ?? createRunId(options.now ? new Date(options.now) : new Date());
   const componentProvenance = options.componentResolver
     ? await options.componentResolver(paths)
@@ -1791,7 +1898,16 @@ export async function runDemo(args = [], options = {}) {
     stack: "agent-action-stack",
     stack_version: stackVersion(),
     response: responseName,
-    requested_options: { response: responseName, domain, fault, prove: proveMode, dispute: forceDispute },
+    requested_options: {
+      response: responseName,
+      ...(responseInput === null
+        ? {}
+        : { response_file: { name: responseInput.name, digest: responseInput.digest, bytes: responseInput.bytes.length } }),
+      domain,
+      fault,
+      prove: proveMode,
+      dispute: forceDispute,
+    },
     domain,
     flow: "decide",
     run_id: runId,
@@ -1821,14 +1937,28 @@ export async function runDemo(args = [], options = {}) {
     });
     return { report, manifest: persisted.manifest, bundleDir: persisted.bundleDir, exitCode, asJson };
   };
+  // A response file is evaluated from a private copy of the exact bytes that
+  // were checked and digested, so a later edit of the original cannot change
+  // what decide sees.
+  let responseScratch = null;
   try {
-    const decide = await (options.runDecideFn ?? runDecide)(responsePath, {
-      depsDir: paths.deps,
-      fixturesDir: paths.fixtures,
-      runner,
-      domain,
-      ...(options.python ? { python: options.python } : {}),
-    });
+    let decide;
+    try {
+      if (responseInput !== null) {
+        responseScratch = mkdtempSync(join(tmpdir(), "aas-response-"));
+        responsePath = join(responseScratch, "response.json");
+        writeFileSync(responsePath, responseInput.bytes);
+      }
+      decide = await (options.runDecideFn ?? runDecide)(responsePath, {
+        depsDir: paths.deps,
+        fixturesDir: paths.fixtures,
+        runner,
+        domain,
+        ...(options.python ? { python: options.python } : {}),
+      });
+    } finally {
+      if (responseScratch !== null) rmSync(responseScratch, { recursive: true, force: true });
+    }
     const decideStderr = clipChildStderr(decide.stderr);
     stages.decide = stageRecord(decide.ok ? "passed" : "failed", {
       raw: decide.raw,
@@ -2442,7 +2572,10 @@ export async function main(argv = process.argv.slice(2), options = {}) {
     return;
   }
   try {
-    parseDemoOptions(argv.slice(1));
+    const demoOptions = parseDemoOptions(argv.slice(1));
+    // A refused response file is a usage error even on a broken runtime, and
+    // costs no interpreter probe. runDemo reads and digests it again for use.
+    if (demoOptions.responseFile !== null) readResponseFile(demoOptions.responseFile);
     assertFullStackNodeVersion(
       options.nodeVersion === undefined ? {} : { version: options.nodeVersion },
     );
