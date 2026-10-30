@@ -213,13 +213,15 @@ starts the synthetic action.
 ```bash
 npm test
 npm run check
+npm run gui:smoke
 ```
 
-`npm run check` mirrors the CI test job: the unit suite, the syntax gate, and
-the version consistency check (`npm run check:version`).
+`npm run check` runs the unit suite, the syntax gate, and the version
+consistency check (`npm run check:version`). Together with
+`npm run gui:smoke`, that is the CI test job.
 
-`npm test` is the unit suite (orchestrator and GUI models). `npm run check`
-runs the unit suite and then the syntax gate, which parses every tracked
+`npm test` is the unit suite (orchestrator and GUI models). The syntax gate
+(`npm run check:syntax`) parses every tracked
 JavaScript module with `node --check`; the module list comes from
 `git ls-files`, so a new script is covered without editing CI. `npm run
 integration` proves the pinned components from a clean checkout, and
