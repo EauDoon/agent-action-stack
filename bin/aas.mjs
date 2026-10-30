@@ -30,9 +30,12 @@ import { isDeepStrictEqual } from "node:util";
 import {
   assertDependencyDirectory,
   assertFullStackNodeVersion,
+  classifyDependency,
   inspectDependencyDirectory,
   isEntrypoint,
   loadComponentLock,
+  MIN_FULL_STACK_NODE,
+  readCheckoutCommit,
 } from "../scripts/bootstrap.mjs";
 
 /**
@@ -209,6 +212,11 @@ const PROVE_SCENARIOS = new Set([
   "conflict",
   "appeal",
 ]);
+/** The two components replay runs, and the entrypoint each needs. */
+export const VERIFIER_ENTRYPOINTS = Object.freeze([
+  Object.freeze(["consequence-rail", "cmd/crctl.js"]),
+  Object.freeze(["mandatebound", "dist/cli.js"]),
+]);
 /** Minimum Python required by the locked Constitutional Agent Testbench. */
 export const MIN_PYTHON = Object.freeze([3, 11]);
 const PYTHON_VERSION_PROBE = "import sys; print(\"%d.%d\" % (sys.version_info[0], sys.version_info[1]))";
@@ -343,6 +351,7 @@ Usage:
   aas cases [--root output-dir] [--before run-id] [--limit 1..50] [--domain refund|inventory|unknown] [--outcome settled|compensated|disputed|none] [--search text] [--json]
   aas compare <run-id> <run-id> [--root output-dir] [--json|--markdown]
   aas prune --keep <n> [--root output-dir] [--dry-run] [--json]
+  aas doctor [--for demo|replay] [--json]
   aas --version [--json]
   aas help
 
@@ -357,6 +366,8 @@ Commands:
   cases   List bounded case summaries (outcome, policy, review, digest)
   compare Compare two cases and classify identical, different, or not comparable
   prune   Remove oldest runs beyond --keep (latest stays; --dry-run previews)
+  doctor  Report, read-only, whether this checkout can run demo or replay,
+          with a remedy for each blocker
   version Print the orchestrator version (also --version)
   help    Show this help (also -h or --help)
 
@@ -389,6 +400,7 @@ Options:
   --search text            Filter a cases page by case metadata (1 to 200 characters)
   --keep <n>               prune: keep the n newest runs, plus the latest pointer's run
   --dry-run                prune: report what would be removed without deleting
+  --for demo|replay        doctor: the workflow to check (default: demo)
   --markdown               Print the readable Markdown form (compare, inspect)
   --json                   Print machine-readable JSON
   --version                Print the orchestrator version
@@ -411,6 +423,7 @@ ${helpFaultList("inventory")}
 
 First-time setup:
   npm run bootstrap
+  aas doctor               (aas doctor --for replay on an offline replay machine)
 
 Requires Node.js 22.12+ and Python 3.11+.
 
@@ -2388,6 +2401,156 @@ async function runReplayCommand(args, { asJson, nodeVersion, stdin } = {}) {
   process.exitCode = result.ok ? 0 : 1;
 }
 
+const DOCTOR_USAGE = "Usage: aas doctor [--for demo|replay] [--json]";
+const DOCTOR_MODES = new Set(["demo", "replay"]);
+const PYTHON_REMEDY = `Install Python ${MIN_PYTHON.join(".")}+ or set AAS_PYTHON to its interpreter`;
+
+function shortSha(commit) {
+  return typeof commit === "string" && commit !== "" ? commit.slice(0, 7) : "unknown";
+}
+
+function doctorDependencyCheck(classified) {
+  const { name } = classified;
+  const remove = `remove deps/${name} and run npm run bootstrap`;
+  switch (classified.state) {
+    case "ready":
+      return ["ok", `${classified.commit} detached clean, at the locked commit`, null];
+    case "missing":
+      return ["blocked", `deps/${name} is missing`, "npm run bootstrap"];
+    case "stale":
+      return ["blocked", `deps/${name} is at ${shortSha(classified.commit)} but the lock pins ${shortSha(classified.locked_commit)}`, "npm run bootstrap:update"];
+    case "missing-entrypoints":
+      return ["blocked", `deps/${name} is missing ${classified.missing_entrypoints.join(", ")}`, "npm run bootstrap"];
+    case "dirty":
+      return ["blocked", `deps/${name} has local changes`, remove];
+    case "substituted":
+      return ["blocked", `deps/${name} has origin ${classified.origin}, not the locked repository`, remove];
+    case "attached":
+      return ["blocked", `deps/${name} is on a branch, not detached at the locked commit`, remove];
+    default:
+      return ["blocked", `deps/${name} cannot be used (${classified.detail ?? classified.state})`, remove];
+  }
+}
+
+/**
+ * Read-only readiness for one workflow. `demo` checks the Node.js floor, a
+ * Python 3.11+ interpreter, the lock, and every pinned checkout (spawning git
+ * and Python version probes); `replay` checks the Node.js floor and the two
+ * verifier entrypoints, and compares each verifier's .git/HEAD with the lock
+ * as a warning only, spawning nothing, so it also works on an offline copy.
+ * Never clones, installs, builds, runs a stage, or writes a file.
+ */
+export function runDoctor({
+  mode = "demo",
+  nodeVersion,
+  env = process.env,
+  pythonRunner = runCapture,
+  command,
+  depsDir = DEFAULT_PATHS.deps,
+  lockPath = DEFAULT_PATHS.lock,
+} = {}) {
+  if (!DOCTOR_MODES.has(mode)) throw new UsageError(`--for must be demo or replay. ${DOCTOR_USAGE}`);
+  const checks = [];
+  const add = (name, status, detail, remedy = null) => checks.push({ name, status, detail, remedy });
+  const floor = MIN_FULL_STACK_NODE.join(".");
+  try {
+    const parsed = assertFullStackNodeVersion(nodeVersion === undefined ? {} : { version: nodeVersion });
+    add("node", "ok", `Node.js ${parsed.join(".")} (needs ${floor}+)`);
+  } catch (error) {
+    add("node", "blocked", error.message, `Install Node.js ${floor} or newer`);
+  }
+  if (mode === "demo") {
+    try {
+      const python = selectPython({ runner: pythonRunner, env });
+      if (python === null) add("python", "blocked", "No Python interpreter was found for the decide stage", PYTHON_REMEDY);
+      else add("python", "ok", `${[python.bin, ...python.prefix].join(" ")} is Python ${python.version.join(".")} (needs ${MIN_PYTHON.join(".")}+)`);
+    } catch (error) {
+      add("python", "blocked", error.message, PYTHON_REMEDY);
+    }
+  } else {
+    add("python", "not-needed", "replay does not run the decide stage");
+  }
+  let components = null;
+  try {
+    components = loadComponentLock(lockPath);
+    add("component-lock", "ok", `stack-lock.json pins ${components.map((component) => `${component.name} ${shortSha(component.commit)}`).join(", ")}`);
+  } catch (error) {
+    // Replay never reads the lock; it only informs the revision comparison.
+    add("component-lock", mode === "demo" ? "blocked" : "warning", error.message, "Restore stack-lock.json from the repository");
+  }
+  if (mode === "demo") {
+    let depsUsable = true;
+    try {
+      assertDependencyDirectory(depsDir);
+    } catch (error) {
+      depsUsable = false;
+      add("deps-directory", "blocked", error.message, "remove deps and run npm run bootstrap");
+    }
+    if (depsUsable && components !== null) {
+      for (const component of components) {
+        const classified = classifyDependency(join(depsDir, component.name), {
+          ...component,
+          expected_entrypoints: [...component.expected_entrypoints, ...(component.post_build_entrypoints ?? [])],
+        }, command === undefined ? {} : { command });
+        const [status, detail, remedy] = doctorDependencyCheck(classified);
+        add(`dependency:${component.name}`, status, detail, remedy);
+      }
+    }
+  } else {
+    for (const [name, entrypoint] of VERIFIER_ENTRYPOINTS) {
+      const present = existsSync(join(depsDir, name, entrypoint));
+      add(`verifier:${name}`, present ? "ok" : "blocked", `deps/${name}/${entrypoint} ${present ? "is present" : "is missing"}`, present ? null : "npm run bootstrap");
+      const checkout = readCheckoutCommit(join(depsDir, name));
+      const locked = components?.find((component) => component.name === name)?.commit ?? null;
+      if (checkout === null) {
+        add(`verifier-revision:${name}`, "warning", "revision unknown: no readable detached .git/HEAD (an offline copy, for example); replay does not need it");
+      } else if (locked === null) {
+        add(`verifier-revision:${name}`, "warning", `${checkout}; the lock is unreadable, so it cannot be compared`);
+      } else if (checkout === locked) {
+        add(`verifier-revision:${name}`, "ok", `${checkout}, at the locked commit`);
+      } else {
+        add(`verifier-revision:${name}`, "warning", `${checkout} differs from the lock's ${locked}; cases recorded under other pins still replay`, "npm run bootstrap:update");
+      }
+    }
+  }
+  return {
+    schema_version: "agent-action-stack.doctor/v1",
+    ok: checks.every((check) => check.status !== "blocked"),
+    for: mode,
+    checks,
+  };
+}
+
+function parseDoctorArgs(args) {
+  let mode = "demo";
+  let seenFor = false;
+  let seenJson = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === "--json" && !seenJson) {
+      seenJson = true;
+    } else if (token === "--for" && !seenFor) {
+      seenFor = true;
+      const value = args[index + 1];
+      if (value === undefined || !DOCTOR_MODES.has(value)) throw new UsageError(`--for must be demo or replay. ${DOCTOR_USAGE}`);
+      mode = value;
+      index += 1;
+    } else {
+      throw new UsageError(`Unsupported doctor argument: ${token}. ${DOCTOR_USAGE}`);
+    }
+  }
+  return mode;
+}
+
+function printDoctor(result) {
+  const lines = [`doctor: ${result.ok ? "ready" : "not ready"} for ${result.for}`];
+  for (const check of result.checks) {
+    lines.push(`${check.status.padEnd(10)} ${check.name}: ${check.detail}`);
+    if (check.remedy) lines.push(`${" ".repeat(11)}remedy: ${check.remedy}`);
+  }
+  process.stdout.write(`${lines.join("\n")}\n`);
+}
+
 const VERIFY_ALL_USAGE = "Usage: aas verify --all [--root output-dir] [--before run-id] [--limit 1..50] [--json]";
 
 /**
@@ -2515,6 +2678,20 @@ export async function main(argv = process.argv.slice(2), options = {}) {
     } catch (error) {
       const usage = error instanceof UsageError;
       writeCliError(error, {asJson, usage}); process.exitCode = usage ? 2 : 1;
+    }
+    return;
+  }
+  if (command === "doctor") {
+    try {
+      const mode = parseDoctorArgs(argv.slice(1));
+      const result = runDoctor({ mode, nodeVersion: options.nodeVersion, ...(options.doctorOptions ?? {}) });
+      if (asJson) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      else printDoctor(result);
+      process.exitCode = result.ok ? 0 : 1;
+    } catch (error) {
+      const usage = error instanceof UsageError;
+      writeCliError(error, { asJson, usage });
+      process.exitCode = usage ? 2 : 1;
     }
     return;
   }

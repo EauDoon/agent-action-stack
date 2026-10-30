@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { loadComponentLock, readCheckoutCommit } from "../scripts/bootstrap.mjs";
-import { assertRunsDirectory, clipChildStderr, DEFAULT_PATHS, UsageError, exportRunBundle, isValidRunId, replayBundle, summarizeRun } from "./aas.mjs";
+import { assertRunsDirectory, clipChildStderr, DEFAULT_PATHS, UsageError, exportRunBundle, isValidRunId, replayBundle, summarizeRun, VERIFIER_ENTRYPOINTS } from "./aas.mjs";
 
 function assertPageOptions(before, limit) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error("History limit must be an integer from 1 to 50.");
@@ -45,11 +45,6 @@ export function listCasePage({ outputRoot = DEFAULT_PATHS.outputRoot, before = n
   return { cases, next_cursor, scanned: candidates.length, unavailable };
 }
 
-/** The two components replay runs, and the entrypoint each needs. */
-const VERIFIER_COMPONENTS = Object.freeze([
-  ["consequence-rail", "cmd/crctl.js"],
-  ["mandatebound", "dist/cli.js"],
-]);
 export const VERIFY_STATUSES = Object.freeze(["verified", "unavailable", "conflicting", "unsupported", "unreadable", "error"]);
 /** Statuses that make `aas verify --all` exit 1. Unavailable is reported only. */
 export const VERIFY_FAILING_STATUSES = Object.freeze(["conflicting", "unsupported", "unreadable", "error"]);
@@ -67,7 +62,7 @@ export function verifierRevisions({ depsDir = DEFAULT_PATHS.deps, lockPath = DEF
   } catch {
     locked = {};
   }
-  return VERIFIER_COMPONENTS.map(([name]) => {
+  return VERIFIER_ENTRYPOINTS.map(([name]) => {
     const checkout = readCheckoutCommit(join(depsDir, name));
     const lockedCommit = typeof locked[name] === "string" ? locked[name] : null;
     return {
@@ -93,7 +88,7 @@ function replayStatus(result) {
  */
 export function verifyCasePage({ outputRoot = DEFAULT_PATHS.outputRoot, before = null, limit = 25, depsDir = DEFAULT_PATHS.deps, lockPath = DEFAULT_PATHS.lock, runner } = {}) {
   assertPageOptions(before, limit);
-  for (const [name, entrypoint] of VERIFIER_COMPONENTS) {
+  for (const [name, entrypoint] of VERIFIER_ENTRYPOINTS) {
     if (!existsSync(join(depsDir, name, entrypoint))) {
       throw new Error(`Missing verifier deps/${name}/${entrypoint}. Run: npm run bootstrap`);
     }
@@ -112,7 +107,7 @@ export function verifyCasePage({ outputRoot = DEFAULT_PATHS.outputRoot, before =
     }
     if (entry === undefined) {
       const provenance = Array.isArray(bundle.manifest?.component_provenance) ? bundle.manifest.component_provenance : [];
-      const recorded = VERIFIER_COMPONENTS.map(([name]) => {
+      const recorded = VERIFIER_ENTRYPOINTS.map(([name]) => {
         const commit = provenance.find((item) => item?.name === name)?.commit;
         return { name, commit: typeof commit === "string" ? commit : null };
       });

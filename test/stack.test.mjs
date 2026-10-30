@@ -17,6 +17,7 @@ import {
   NO_RECEIPT_FAULTS,
   parseDemoOptions,
   readResponseFile,
+  runDoctor,
   RESPONSE_FILE_LIMIT,
   CHILD_JSON_LIMIT,
   exportRunBundle,
@@ -3597,4 +3598,173 @@ test("inspect lists the response file under requested settings in Markdown and J
   assert.match(markdown, /- response_file: agent\\_\\\[1\\\]\\\.json; sha256:[0-9a-f]{64}; 16 bytes\n/);
   await runDemo([], stubOptions(outputRoot, { runId: "inspect-fixture" }));
   assert.doesNotMatch(renderCaseMarkdown(inspectCase("inspect-fixture", { outputRoot })), /response_file/);
+});
+
+/**
+ * A deps directory with all three locked checkouts, each with its expected and
+ * post-build entrypoints and a detached .git/HEAD, plus a fake git that
+ * answers for each checkout. `overrides[name]` changes one checkout.
+ */
+function doctorDeps(overrides = {}) {
+  const components = loadComponentLock(LOCK);
+  const deps = tempRoot();
+  const states = {};
+  for (const component of components) {
+    const state = { commit: component.commit, origin: component.repository, clean: true, detached: true, omit: [], absent: false, ...(overrides[component.name] ?? {}) };
+    states[component.name] = state;
+    if (state.absent) continue;
+    const target = join(deps, component.name);
+    mkdirSync(join(target, ".git"), { recursive: true });
+    writeFileSync(join(target, ".git", "HEAD"), `${state.commit}\n`);
+    for (const entrypoint of [...component.expected_entrypoints, ...(component.post_build_entrypoints ?? [])]) {
+      if (state.omit.includes(entrypoint)) continue;
+      mkdirSync(join(target, entrypoint, ".."), { recursive: true });
+      writeFileSync(join(target, entrypoint), "fixture\n");
+    }
+  }
+  const calls = { git: 0, python: 0 };
+  const command = (name, args) => {
+    calls.git += 1;
+    assert.equal(name, "git");
+    const state = states[args[1].split(/[\\/]/).pop()];
+    const sub = args[2];
+    if (sub === "config") return { status: 0, stdout: `${state.origin}\n`, stderr: "", error: null };
+    if (sub === "rev-parse") return { status: 0, stdout: `${state.commit}\n`, stderr: "", error: null };
+    if (sub === "symbolic-ref") return { status: state.detached ? 1 : 0, stdout: state.detached ? "" : "main\n", stderr: "", error: null };
+    if (sub === "status") return { status: 0, stdout: state.clean ? "" : " M file\n", stderr: "", error: null };
+    throw new Error(`unexpected git command: ${args.join(" ")}`);
+  };
+  const pythonRunner = (bin, args) => {
+    calls.python += 1;
+    return { status: 0, stdout: "3.12\n", stderr: "", error: null };
+  };
+  return { deps, command, pythonRunner, calls };
+}
+
+const NO_PYTHON = () => ({ status: null, stdout: "", stderr: "", error: Object.assign(new Error("spawn"), { code: "ENOENT" }) });
+
+function doctorCheck(result, name) {
+  return result.checks.find((check) => check.name === name);
+}
+
+test("doctor reports a ready checkout for demo and replay and exits 0", async () => {
+  const fixture = doctorDeps();
+  const demo = runDoctor({ depsDir: fixture.deps, lockPath: LOCK, command: fixture.command, pythonRunner: fixture.pythonRunner, nodeVersion: "22.12.0", env: {} });
+  assert.equal(demo.schema_version, "agent-action-stack.doctor/v1");
+  assert.equal(demo.ok, true);
+  assert.equal(demo.for, "demo");
+  assert.deepEqual(demo.checks.map((check) => [check.name, check.status]), [
+    ["node", "ok"],
+    ["python", "ok"],
+    ["component-lock", "ok"],
+    ["dependency:constitutional-agent-testbench", "ok"],
+    ["dependency:consequence-rail", "ok"],
+    ["dependency:mandatebound", "ok"],
+  ]);
+  for (const check of demo.checks) assert.deepEqual(Object.keys(check), ["name", "status", "detail", "remedy"]);
+  assert.equal(doctorCheck(demo, "node").detail, "Node.js 22.12.0 (needs 22.12.0+)");
+  const cli = await captureMain(["doctor", "--json"], { nodeVersion: "24.0.0", doctorOptions: { depsDir: fixture.deps, lockPath: LOCK, command: fixture.command, pythonRunner: fixture.pythonRunner, env: {} } });
+  assert.equal(cli.exitCode, 0);
+  assert.equal(JSON.parse(cli.stdout).ok, true);
+  const human = await captureMain(["doctor"], { nodeVersion: "24.0.0", doctorOptions: { depsDir: fixture.deps, lockPath: LOCK, command: fixture.command, pythonRunner: fixture.pythonRunner, env: {} } });
+  assert.match(human.stdout, /^doctor: ready for demo\nok {9}node: Node\.js 24\.0\.0 \(needs 22\.12\.0\+\)\n/);
+  const replay = runDoctor({ mode: "replay", depsDir: fixture.deps, lockPath: LOCK, command: fixture.command, pythonRunner: fixture.pythonRunner, nodeVersion: "22.12.0" });
+  assert.equal(replay.ok, true);
+  assert.deepEqual(replay.checks.map((check) => [check.name, check.status]), [
+    ["node", "ok"],
+    ["python", "not-needed"],
+    ["component-lock", "ok"],
+    ["verifier:consequence-rail", "ok"],
+    ["verifier-revision:consequence-rail", "ok"],
+    ["verifier:mandatebound", "ok"],
+    ["verifier-revision:mandatebound", "ok"],
+  ]);
+});
+
+test("doctor names a remedy for every blocker", () => {
+  const run = (overrides, options = {}) => {
+    const fixture = doctorDeps(overrides);
+    return runDoctor({ depsDir: fixture.deps, lockPath: LOCK, command: fixture.command, pythonRunner: fixture.pythonRunner, nodeVersion: "22.12.0", env: {}, ...options });
+  };
+  const missing = run({ "consequence-rail": { absent: true } });
+  assert.equal(missing.ok, false);
+  assert.deepEqual(doctorCheck(missing, "dependency:consequence-rail"), { name: "dependency:consequence-rail", status: "blocked", detail: "deps/consequence-rail is missing", remedy: "npm run bootstrap" });
+  const stale = run({ mandatebound: { commit: "1".repeat(40) } });
+  assert.equal(doctorCheck(stale, "dependency:mandatebound").remedy, "npm run bootstrap:update");
+  assert.match(doctorCheck(stale, "dependency:mandatebound").detail, /is at 1111111 but the lock pins 32d5256/);
+  for (const [override, detail] of [[{ clean: false }, /local changes/], [{ origin: "https://github.com/example/fork.git" }, /not the locked repository/], [{ detached: false }, /on a branch/]]) {
+    const result = run({ "consequence-rail": override });
+    assert.equal(doctorCheck(result, "dependency:consequence-rail").status, "blocked");
+    assert.match(doctorCheck(result, "dependency:consequence-rail").detail, detail);
+    assert.equal(doctorCheck(result, "dependency:consequence-rail").remedy, "remove deps/consequence-rail and run npm run bootstrap");
+  }
+  const unbuilt = run({ mandatebound: { omit: ["dist/cli.js"] } });
+  assert.deepEqual(doctorCheck(unbuilt, "dependency:mandatebound"), { name: "dependency:mandatebound", status: "blocked", detail: "deps/mandatebound is missing dist/cli.js", remedy: "npm run bootstrap" });
+  const oldNode = run({}, { nodeVersion: "20.11.0" });
+  assert.equal(doctorCheck(oldNode, "node").status, "blocked");
+  assert.equal(doctorCheck(oldNode, "node").remedy, "Install Node.js 22.12.0 or newer");
+  const noLock = run({}, { lockPath: join(tempRoot(), "absent-lock.json") });
+  assert.equal(doctorCheck(noLock, "component-lock").status, "blocked");
+  assert.equal(noLock.checks.some((check) => check.name.startsWith("dependency:")), false);
+});
+
+test("without Python, demo is not ready but replay is, and replay spawns neither git nor Python", () => {
+  const fixture = doctorDeps();
+  const demo = runDoctor({ depsDir: fixture.deps, lockPath: LOCK, command: fixture.command, pythonRunner: NO_PYTHON, nodeVersion: "22.12.0", env: {} });
+  assert.equal(demo.ok, false);
+  assert.deepEqual(doctorCheck(demo, "python"), { name: "python", status: "blocked", detail: "No Python interpreter was found for the decide stage", remedy: "Install Python 3.11+ or set AAS_PYTHON to its interpreter" });
+  const badOverride = runDoctor({ depsDir: fixture.deps, lockPath: LOCK, command: fixture.command, pythonRunner: NO_PYTHON, nodeVersion: "22.12.0", env: { AAS_PYTHON: "missing-python" } });
+  assert.match(doctorCheck(badOverride, "python").detail, /AAS_PYTHON \(missing-python\) did not report a usable Python version/);
+  const before = { ...fixture.calls };
+  let pythonCalls = 0;
+  const replay = runDoctor({ mode: "replay", depsDir: fixture.deps, lockPath: LOCK, command: fixture.command, pythonRunner: () => { pythonCalls += 1; return NO_PYTHON(); }, nodeVersion: "22.12.0" });
+  assert.equal(replay.ok, true);
+  assert.deepEqual(fixture.calls, before, "replay mode spawned git");
+  assert.equal(pythonCalls, 0, "replay mode probed Python");
+});
+
+test("replay readiness needs the verifier entrypoints, and a revision that differs or is unknown is only a warning", () => {
+  const unbuilt = doctorDeps({ mandatebound: { omit: ["dist/cli.js"] } });
+  const notReady = runDoctor({ mode: "replay", depsDir: unbuilt.deps, lockPath: LOCK, command: unbuilt.command, nodeVersion: "22.12.0" });
+  assert.equal(notReady.ok, false);
+  assert.deepEqual(doctorCheck(notReady, "verifier:mandatebound"), { name: "verifier:mandatebound", status: "blocked", detail: "deps/mandatebound/dist/cli.js is missing", remedy: "npm run bootstrap" });
+
+  const other = "3".repeat(40);
+  const moved = doctorDeps({ "consequence-rail": { commit: other } });
+  const warned = runDoctor({ mode: "replay", depsDir: moved.deps, lockPath: LOCK, command: moved.command, nodeVersion: "22.12.0" });
+  assert.equal(warned.ok, true);
+  assert.equal(doctorCheck(warned, "verifier-revision:consequence-rail").status, "warning");
+  assert.match(doctorCheck(warned, "verifier-revision:consequence-rail").detail, /differs from the lock's 78d6f8a23dbce69bb443b453c8d471645f67daac; cases recorded under other pins still replay/);
+  assert.equal(doctorCheck(warned, "verifier-revision:consequence-rail").remedy, "npm run bootstrap:update");
+
+  // An offline copy: entrypoints only, no Git metadata, no lock.
+  const offline = tempRoot();
+  for (const [name, entrypoint] of [["consequence-rail", "cmd/crctl.js"], ["mandatebound", "dist/cli.js"]]) {
+    mkdirSync(join(offline, name, entrypoint, ".."), { recursive: true });
+    writeFileSync(join(offline, name, entrypoint), "fixture\n");
+  }
+  const copy = runDoctor({ mode: "replay", depsDir: offline, lockPath: join(tempRoot(), "absent-lock.json"), nodeVersion: "22.12.0" });
+  assert.equal(copy.ok, true);
+  assert.equal(doctorCheck(copy, "component-lock").status, "warning");
+  assert.match(doctorCheck(copy, "verifier-revision:mandatebound").detail, /^revision unknown/);
+  assert.equal(doctorCheck(copy, "verifier-revision:mandatebound").status, "warning");
+});
+
+test("doctor usage errors exit 2, and doctor writes nothing", async () => {
+  for (const argv of [["doctor", "--for"], ["doctor", "--for", "bogus"], ["doctor", "extra"], ["doctor", "--for", "demo", "--for", "replay"], ["doctor", "--json", "--json"]]) {
+    const result = await captureMain(argv);
+    assert.equal(result.exitCode, 2, argv.join(" "));
+    assert.match(result.stderr, /Usage: aas doctor \[--for demo\|replay\] \[--json\]/);
+  }
+  assert.throws(() => runDoctor({ mode: "everything" }), /--for must be demo or replay/);
+  const fixture = doctorDeps({ mandatebound: { commit: "1".repeat(40) } });
+  const snapshot = () => JSON.stringify(readdirSync(fixture.deps, { recursive: true }).sort());
+  const before = snapshot();
+  const cli = await captureMain(["doctor", "--json"], { nodeVersion: "22.12.0", doctorOptions: { depsDir: fixture.deps, lockPath: LOCK, command: fixture.command, pythonRunner: fixture.pythonRunner, env: {} } });
+  assert.equal(cli.exitCode, 1);
+  await captureMain(["doctor", "--for", "replay"], { nodeVersion: "22.12.0", doctorOptions: { depsDir: fixture.deps, lockPath: LOCK } });
+  assert.equal(snapshot(), before);
+  assert.equal(existsSync(join(fixture.deps, ".out")), false);
+  assert.match(helpText(), /^ {2}aas doctor \[--for demo\|replay\] \[--json\]$/m);
+  assert.match(helpText(), /^ {2}--for demo\|replay {8}doctor: /m);
 });

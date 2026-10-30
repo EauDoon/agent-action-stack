@@ -96,6 +96,26 @@ function checkIndependentReplay(sourcePath) {
       cwd: isolated,
       env: { ...process.env, PATH: "", Path: "", AAS_PYTHON: "unavailable-offline-python" },
     });
+    const offlineEnv = { ...process.env, PATH: "", Path: "", AAS_PYTHON: "unavailable-offline-python" };
+    const doctor = (args) => run(process.execPath, [join(isolated, "bin/aas.mjs"), "doctor", ...args, "--json"], { cwd: isolated, env: offlineEnv });
+    const replayReady = doctor(["--for", "replay"]);
+    check(replayReady.status === 0, `offline doctor --for replay exited ${replayReady.status}: ${replayReady.stdout.slice(-500)}${replayReady.stderr.slice(-300)}`);
+    if (replayReady.stdout.trim() !== "") {
+      const report = JSON.parse(replayReady.stdout);
+      check(report.ok === true && report.for === "replay", "offline doctor did not report replay readiness");
+      check(report.checks.filter((entry) => entry.name.startsWith("verifier-revision:")).every((entry) => entry.status === "warning" && /revision unknown/.test(entry.detail)),
+        "offline doctor inferred a verifier revision without Git metadata");
+    }
+    const demoReady = doctor([]);
+    check(demoReady.status === 1 && demoReady.stderr === "", `offline doctor for demo exited ${demoReady.status}: ${demoReady.stderr.slice(-300)}`);
+    if (demoReady.stdout.trim() !== "") {
+      const report = JSON.parse(demoReady.stdout);
+      const blocked = report.checks.filter((entry) => entry.status === "blocked").map((entry) => entry.name);
+      check(blocked.includes("python") && blocked.includes("dependency:constitutional-agent-testbench"),
+        `offline doctor for demo did not name the missing testbench and Python: ${blocked.join(", ")}`);
+    }
+    check(!existsSync(join(isolated, ".out")), "offline doctor created a case store");
+
     const intact = invoke();
     check(intact.status === 0, `independent replay failed: ${intact.stdout.slice(-600)}${intact.stderr.slice(-300)}`);
     if (intact.status === 0) check(JSON.parse(intact.stdout).ok === true, "independent replay was not verified");
@@ -315,6 +335,10 @@ async function main() {
       check(existsSync(join(target, entrypoint)), `deps/${component.name} is missing ${entrypoint}`);
     }
   }
+
+  const doctor = run(process.execPath, ["./bin/aas.mjs", "doctor", "--json"]);
+  check(doctor.status === 0, `doctor after bootstrap exited ${doctor.status}: ${doctor.stdout.slice(-600)}${doctor.stderr.slice(-300)}`);
+  if (doctor.status === 0) check(JSON.parse(doctor.stdout).ok === true, "doctor after bootstrap is not ready");
 
   const compatibility = run(process.execPath, ["--test", "test/component-compatibility.test.mjs"]);
   check(compatibility.status === 0,

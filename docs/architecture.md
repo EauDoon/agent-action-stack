@@ -142,6 +142,7 @@ and browser tests. The commands do not publish, deploy, or operate real accounts
 | `npm run integration` | Root install, dependency bootstrap/build, the demo writes above (including Python bytecode), and temporary copied verifier runtimes; invokes npm and Git |
 | Playwright install and `npm run test:browser` | Configured browser cache, `test-results/`, `playwright-report/`, temporary test case stores, and the GUI **Run stack** writes above (including `.out/` and Python bytecode) |
 | `aas runs`, `cases`, `compare`, `inspect`, `latest` | Read saved cases only; shell redirection can write the printed report |
+| `aas doctor` | Writes nothing. `--for demo` (the default) reads `stack-lock.json` and `deps/`, runs read-only Git inspection in each checkout, and probes Python versions; `--for replay` reads the verifier entrypoints and `.git/HEAD` files and spawns nothing |
 | `aas replay`, `verify`, `verify --all`, GUI verification | Read the case store or import, write temporary verifier inputs, and remove scratch files afterward; do not execute an action or alter saved cases. `verify --all` also reads `deps/<name>/.git/HEAD` and `stack-lock.json` to name the verifier revisions |
 | `aas export --out` | Writes the named export; existing files require explicit `--overwrite` |
 | `aas prune --keep` | Deletes eligible old runs under the selected output root; `--dry-run` previews without deletion |

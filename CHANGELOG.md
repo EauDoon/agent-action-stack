@@ -61,6 +61,19 @@ project adheres to [Semantic Versioning](https://semver.org/).
   size, shown by `aas inspect` and the Markdown review and printed as
   `response_file:` after `flow:`. The response gates orchestration only; act
   still runs the rail's fixed synthetic proposal.
+- `aas doctor [--for demo|replay] [--json]` reports, read-only, whether a
+  checkout can run a workflow, with a remedy for every blocker. `demo` (the
+  default) checks the Node.js floor, a Python 3.11+ interpreter, the lock,
+  and each pinned checkout (missing: `npm run bootstrap`; at an older pin:
+  `npm run bootstrap:update`; local changes, another origin, or a branch:
+  remove it and bootstrap; unbuilt MandateBound: `npm run bootstrap`).
+  `replay` checks only the Node.js floor and the two verifier entrypoints and
+  spawns neither git nor Python, so it confirms an offline replay machine or
+  a copied verifier runtime; a verifier commit that differs from the lock is
+  a warning, because cases recorded under other pins still replay. It never
+  clones, installs, builds, runs a stage, or writes a file, and exits 0
+  ready, 1 not ready, 2 usage. `--json` prints
+  `agent-action-stack.doctor/v1`.
 - Every policy refusal now names its failed rule ids in the human output, as
   `decide_failed_rules:` after `flow:` (at most 50, then `+N more`). Before,
   a refusal printed no reason, although the report carried the rules.

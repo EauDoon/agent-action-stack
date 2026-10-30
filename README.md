@@ -42,8 +42,18 @@ Private repositories are never cloned or modified.
 
 ```bash
 npm run bootstrap
+node ./bin/aas.mjs doctor
 node ./bin/aas.mjs demo --fault duplicate --prove rail
 ```
+
+`aas doctor` checks, without running anything or writing a file, whether this
+checkout can run the demo: the Node.js floor, a Python 3.11+ interpreter, the
+lock, and each pinned checkout in `deps/` (present, at the locked commit,
+detached, clean, and built). Every blocker names its remedy, such as
+`npm run bootstrap`, `npm run bootstrap:update` for a checkout left at an
+older pin, or setting `AAS_PYTHON`. It exits 0 when ready, 1 when not, and 2
+for a usage error; `--json` prints the `agent-action-stack.doctor/v1` report
+(`ok`, `for`, and `checks` with `name`, `status`, `detail`, and `remedy`).
 
 `node ./bin/aas.mjs --version` prints the orchestrator version. Every run
 records it as `stack_version` in its report and manifest, and
@@ -150,7 +160,19 @@ On a separate machine, bootstrap the same pinned stack while online before
 disconnecting and copying in `case.json`. Replay needs the prepared rail and
 MandateBound verifier components, but does not need Python, action fixtures,
 or the originating `.out` case store. The export is evidence, not a bundled
-verifier installation.
+verifier installation. Before disconnecting, confirm the machine is ready:
+
+```bash
+node ./bin/aas.mjs doctor --for replay
+```
+
+Replay readiness needs only the Node.js floor and the two verifier
+entrypoints (`deps/consequence-rail/cmd/crctl.js` and
+`deps/mandatebound/dist/cli.js`); it spawns neither git nor Python, so it also
+runs on a copied verifier runtime. It reports each verifier's commit from its
+`.git/HEAD` beside the lock's as a warning only, because a case recorded under
+other pins still replays, and reports the revision as unknown when there is no
+Git metadata.
 
 ## Reproducibility and run bundles
 
