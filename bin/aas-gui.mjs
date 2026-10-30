@@ -46,7 +46,14 @@ async function readJsonRequest(request, { maxBytes = CHILD_JSON_LIMIT } = {}) {
     chunks.push(chunk);
   }
   if (tooLarge) throw Object.assign(new Error("Imported case is too large."), { status: 413 });
-  const text = Buffer.concat(chunks).toString("utf8");
+  // Decode exactly as `aas replay` does. Buffer#toString replaced invalid
+  // bytes with U+FFFD, so a file the CLI refuses could verify here.
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks));
+  } catch {
+    throw Object.assign(new Error("Imported case must be valid UTF-8."), { status: 400 });
+  }
   if (text.trim() === "") throw Object.assign(new Error("Imported case is empty."), { status: 400 });
   // Child stdout may recover a JSON value from surrounding logs. An upload
   // is one document: a prefix, a second value, or other trailing text is
@@ -481,14 +488,16 @@ replayButton.addEventListener('click',async()=>{
   const file=caseFile.files&&caseFile.files[0];
   if(!file){ importStatus.textContent='Choose an exported case file first.'; replayButton.disabled=false; return; }
   if(file.size>${CHILD_JSON_LIMIT}) { importStatus.textContent='Imported case is too large (maximum ${CHILD_JSON_LIMIT} bytes).'; replayButton.disabled=false; return; }
-  let text;
-  try { text=await file.text(); }
+  // Upload the file's own bytes. file.text() replaced invalid UTF-8 before the
+  // server could refuse it the way aas replay does.
+  let bytes;
+  try { bytes=await file.arrayBuffer(); }
   catch(error){ if(token!==importToken) return; importStatus.textContent='Cannot read that file.'; replayButton.disabled=false; return; }
   if(token!==importToken) return;
   importStatus.textContent='Replaying (verification only, no execution)...';
   let body;
   try {
-    const response=await fetch('/api/replay',{method:'POST',headers:{'content-type':'application/json'},body:text});
+    const response=await fetch('/api/replay',{method:'POST',headers:{'content-type':'application/json'},body:bytes});
     body=await response.json();
   } catch(error){ if(token!==importToken) return; importStatus.textContent='Replay request failed.'; replayButton.disabled=false; return; }
   if(token!==importToken) return;

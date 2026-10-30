@@ -132,6 +132,22 @@ test("malformed and unavailable imports report explicit reasons", async ({ page 
   await expect(page.locator("#import-result")).toContainText("unavailable");
 });
 
+test("an import with invalid UTF-8 is refused, as aas replay refuses it", async ({ page }) => {
+  await page.goto("/");
+  await runStack(page, { fault: "duplicate", prove: "rail" });
+  const downloading = page.waitForEvent("download");
+  await page.click("#download");
+  const exported = readFileSync(await (await downloading).path());
+  // One invalid byte in a report string, outside the digested evidence: a
+  // lossy decode would replace it and the case would still verify.
+  const corrupt = Buffer.from(exported);
+  corrupt[exported.indexOf(Buffer.from('"flow": "decide')) + '"flow": "'.length] = 0xff;
+  await page.setInputFiles("#case-file", caseFile("invalid-utf8.json", corrupt));
+  await page.click("#replay");
+  await expect(page.locator("#import-status")).toContainText("Replay rejected: Imported case must be valid UTF-8.");
+  await expect(page.locator("#import-result")).toBeEmpty();
+});
+
 test("an oversized import is rejected by the server", async ({ page }) => {
   await page.goto("/");
   const oversized = JSON.stringify({ pad: "x".repeat(1024 * 1024 + 1024) });

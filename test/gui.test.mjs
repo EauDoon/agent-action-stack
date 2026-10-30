@@ -576,6 +576,42 @@ test("GUI replay reports conflicting, unavailable, malformed, and oversized impo
   }
 });
 
+test("GUI replay decodes uploads like aas replay: invalid UTF-8 is refused, a BOM is not", async () => {
+  const railBundle = { action: { action_id: "act_utf8" }, settlement_receipt: { outcome: "compensated" } };
+  const digest = `sha256:${createHash("sha256").update(Buffer.from(JSON.stringify(railBundle), "utf8")).digest("hex")}`;
+  const review = { verdict: "recorded", reviewId: "r", actionId: "act_utf8", evidenceDigest: digest, legalEffect: "not-determined", upstream: { valid: true, verifier: "consequence-rail:bundle-verify", outcome: "compensated", trustedKeyIds: ["k"] }, reviewDigest: "sha256:x" };
+  // The invalid byte sits in a report string, outside the digested evidence,
+  // so a lossy decode would replace it and still verify the case.
+  const doc = { report: { run_id: "utf8-run", flow: "decide -> act -> prove" }, stages: { act: { action_id: "act_utf8", rail_bundle: railBundle }, prove: { result: review } } };
+  const valid = Buffer.from(JSON.stringify(doc), "utf8");
+  const invalid = Buffer.from(valid);
+  invalid[valid.indexOf(Buffer.from("decide ->"))] = 0xff;
+  const seen = [];
+  const server = createGuiServer({
+    replayRunner: (bin, args) => {
+      seen.push(args.join(" "));
+      if (args.includes("bundle")) {
+        return { status: 0, stdout: `${JSON.stringify({ valid: true, action_id: "act_utf8", outcome: "compensated", trusted_key_id: "k", trusted_connector_key_id: "c" })}\n`, stderr: "", error: null };
+      }
+      return { status: 0, stdout: `${JSON.stringify({ ok: true, result: { ...review } })}\n`, stderr: "", error: null };
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const refused = await replayPost(server, invalid);
+    assert.equal(refused.status, 400);
+    assert.match(JSON.parse(refused.body).error, /valid UTF-8/);
+    assert.deepEqual(seen, [], "an undecodable upload must not reach verification");
+
+    // aas replay strips a leading byte order mark before parsing; so does the GUI.
+    const withBom = await replayPost(server, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), valid]));
+    assert.equal(withBom.status, 200);
+    assert.equal(JSON.parse(withBom.body).ok, true);
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
 test("replay status mapping and result rendering stay stable", () => {
   assert.equal(replayHttpStatus({ ok: true }), 200);
   assert.match(replayResultModel({ ok: true, run_id: "r", checks: [{ name: "digest-binding", passed: true, detail: "ok" }] }), /replay verified under synthetic demo keys/);
@@ -899,20 +935,37 @@ test("page reports actionable API failures and refuses mismatched bundle exports
 
 test("import file changes release stale requests and reject oversized files before reading", async () => {
   const document = stubDocument();
-  let resolveText, reads = 0, calls = 0;
+  let resolveBytes, reads = 0, calls = 0;
   const run = new Function("document", "fetch", "crypto", pageScript());
   run(document, async () => { calls++; return { json: async () => ({}) }; }, globalThis.crypto);
-  document.elements['case-file'].files = [{ size: 10, text: () => new Promise((resolve) => { resolveText = resolve; }) }];
+  document.elements['case-file'].files = [{ size: 10, arrayBuffer: () => new Promise((resolve) => { resolveBytes = resolve; }) }];
   const pending = document.elements.replay.listeners.click();
   assert.equal(document.elements.replay.disabled, true);
   document.elements['case-file'].listeners.change();
   assert.equal(document.elements.replay.disabled, false);
-  resolveText('{}'); await pending;
+  resolveBytes(new TextEncoder().encode('{}').buffer); await pending;
   assert.equal(calls, 0);
-  document.elements['case-file'].files = [{ size: 2 * 1024 * 1024, text: () => { reads++; return '{}'; } }];
+  document.elements['case-file'].files = [{ size: 2 * 1024 * 1024, arrayBuffer: () => { reads++; return new ArrayBuffer(2); } }];
   await document.elements.replay.listeners.click();
   assert.equal(reads, 0);
   assert.match(document.elements['import-status'].textContent, /too large/);
+  assert.equal(document.elements.replay.disabled, false);
+});
+
+test("import uploads the file's own bytes so the server can refuse invalid UTF-8", async () => {
+  const document = stubDocument();
+  const sent = [];
+  const fetch = async (url, init) => { sent.push({ url, init }); return { json: async () => ({ error: "Imported case must be valid UTF-8." }) }; };
+  new Function("document", "fetch", "crypto", pageScript())(document, fetch, globalThis.crypto);
+  const bytes = Uint8Array.from([0x7b, 0x22, 0x61, 0x22, 0x3a, 0x22, 0xff, 0x22, 0x7d]);
+  // No text(): decoding in the page replaced invalid bytes before upload.
+  document.elements['case-file'].files = [{ size: bytes.length, arrayBuffer: async () => bytes.buffer.slice(0) }];
+  await document.elements.replay.listeners.click();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].url, "/api/replay");
+  assert.equal(sent[0].init.headers["content-type"], "application/json");
+  assert.deepEqual(new Uint8Array(sent[0].init.body), bytes);
+  assert.match(document.elements['import-status'].textContent, /Replay rejected: Imported case must be valid UTF-8/);
   assert.equal(document.elements.replay.disabled, false);
 });
 
