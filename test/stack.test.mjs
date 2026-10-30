@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { assertFullStackNodeVersion, compareVersionTuples, isEntrypoint, loadComponentLock, inspectDependencyDirectory, main as bootstrapMain, MIN_FULL_STACK_NODE, moveIntoPlace, npmInvocation, parseNodeVersion, prepareDependencies } from "../scripts/bootstrap.mjs";
+import { assertFullStackNodeVersion, classifyDependency, compareVersionTuples, isEntrypoint, loadComponentLock, inspectDependencyDirectory, main as bootstrapMain, parseBootstrapArgs, readCheckoutCommit, MIN_FULL_STACK_NODE, moveIntoPlace, npmInvocation, parseNodeVersion, prepareDependencies } from "../scripts/bootstrap.mjs";
 import { checkSyntax, listSyntaxTargets } from "../scripts/check-syntax.mjs";
 import { checkReleaseConsistency, loadReleaseInputs, parseChangelog, releaseNotes } from "../scripts/check-version.mjs";
 import {
@@ -3012,4 +3012,224 @@ test("CLI help lists every fault per domain and the disputed outcome filter", ()
   assert.doesNotMatch(inventory, /permit-replay|action-mutation|tampered-bundle/);
   assert.match(text, /--outcome settled\|compensated\|disputed\|none/);
   for (const line of faults.split("\n")) assert.ok(line.length <= 80, `fault help line too long: ${line}`);
+});
+
+const OLD_COMMIT = "1111111111111111111111111111111111111111";
+
+/**
+ * A fake git for an existing checkout of `component`. It starts at `commit`;
+ * a `checkout` moves it to the requested commit. `failOn` makes that
+ * subcommand exit 128 with git-like stderr.
+ */
+function existingCheckout(component, { commit = OLD_COMMIT, origin = component.repository, detached = true, clean = true, failOn = null } = {}) {
+  const deps = tempRoot();
+  const target = join(deps, component.name);
+  mkdirSync(join(target, ".git"), { recursive: true });
+  for (const entrypoint of component.expected_entrypoints) {
+    mkdirSync(join(target, entrypoint, ".."), { recursive: true });
+    writeFileSync(join(target, entrypoint), "fixture\n");
+  }
+  const state = { commit };
+  const calls = [];
+  const command = (name, args) => {
+    assert.equal(name, "git");
+    calls.push(args.slice(2).join(" "));
+    const sub = args[2];
+    if (sub === failOn) return { status: 128, stdout: "", stderr: "fatal: remote error: upload-pack: not our ref", error: null };
+    if (sub === "config") return { status: 0, stdout: `${origin}\n`, stderr: "", error: null };
+    if (sub === "rev-parse") return { status: 0, stdout: `${state.commit}\n`, stderr: "", error: null };
+    if (sub === "symbolic-ref") return { status: detached ? 1 : 0, stdout: detached ? "" : "main\n", stderr: "", error: null };
+    if (sub === "status") return { status: 0, stdout: clean ? "" : " M fixture\n", stderr: "", error: null };
+    if (sub === "fetch") return { status: 0, stdout: "", stderr: "", error: null };
+    if (sub === "checkout") {
+      state.commit = args.at(-1);
+      return { status: 0, stdout: "", stderr: "", error: null };
+    }
+    throw new Error(`unexpected git command: ${args.join(" ")}`);
+  };
+  return { deps, target, command, calls, state };
+}
+
+function captureBootstrap(argv, options) {
+  const stdout = [];
+  const stderr = [];
+  const originalStdout = process.stdout.write;
+  const originalStderr = process.stderr.write;
+  const originalExitCode = process.exitCode;
+  process.stdout.write = (chunk) => { stdout.push(String(chunk)); return true; };
+  process.stderr.write = (chunk) => { stderr.push(String(chunk)); return true; };
+  process.exitCode = undefined;
+  try {
+    bootstrapMain(argv, options);
+    return { stdout: stdout.join(""), stderr: stderr.join(""), exitCode: process.exitCode ?? 0 };
+  } finally {
+    process.stdout.write = originalStdout;
+    process.stderr.write = originalStderr;
+    process.exitCode = originalExitCode;
+  }
+}
+
+test("a stale checkout is refused with both commits and the bootstrap:update remedy, and nothing is fetched", () => {
+  const component = loadComponentLock(LOCK).find((entry) => entry.name === "constitutional-agent-testbench");
+  const checkout = existingCheckout(component);
+  const expected = `Pre-existing dependency commit does not match the lock: ${component.name} (checkout 1111111, lock ${component.commit.slice(0, 7)}). Run npm run bootstrap:update to move this clean checkout to the locked commit, or remove deps/${component.name} and run npm run bootstrap.`;
+  assert.throws(() => prepareDependencies({ deps: checkout.deps, components: [component], command: checkout.command }), { message: expected });
+  assert.equal(checkout.calls.some((call) => call.startsWith("fetch") || call.startsWith("checkout")), false);
+  assert.equal(checkout.state.commit, OLD_COMMIT);
+  // `aas demo` and the GUI resolve provenance through the same inspection.
+  assert.throws(() => inspectDependencyDirectory(checkout.target, component, { command: checkout.command }), { message: expected });
+  const classified = classifyDependency(checkout.target, component, { command: checkout.command });
+  assert.equal(classified.state, "stale");
+  assert.equal(classified.commit, OLD_COMMIT);
+  assert.equal(classified.locked_commit, component.commit);
+});
+
+test("bootstrap --update fetches then checks out the locked commit for a clean detached stale checkout", () => {
+  const component = loadComponentLock(LOCK).find((entry) => entry.name === "constitutional-agent-testbench");
+  const checkout = existingCheckout(component);
+  const prepared = prepareDependencies({ deps: checkout.deps, components: [component], command: checkout.command, update: true });
+  const fetchIndex = checkout.calls.indexOf(`fetch --depth 1 origin ${component.commit}`);
+  const checkoutIndex = checkout.calls.indexOf(`checkout --detach --quiet ${component.commit}`);
+  assert.ok(fetchIndex >= 0 && checkoutIndex > fetchIndex, checkout.calls.join("\n"));
+  assert.equal(prepared[0].commit, component.commit);
+  assert.equal(prepared[0].updated_from, OLD_COMMIT);
+
+  const again = existingCheckout(component);
+  const output = captureBootstrap(["--update"], { deps: again.deps, components: [component], command: again.command });
+  assert.equal(output.exitCode, 0, output.stderr);
+  assert.equal(output.stdout, `deps/${component.name}: ${component.commit} detached clean (updated from ${OLD_COMMIT})\nBootstrap complete.\n`);
+  // A checkout already at the lock is left alone even with --update.
+  const current = existingCheckout(component, { commit: component.commit });
+  const unchanged = prepareDependencies({ deps: current.deps, components: [component], command: current.command, update: true });
+  assert.equal(unchanged[0].updated_from, undefined);
+  assert.equal(current.calls.some((call) => call.startsWith("fetch")), false);
+});
+
+test("bootstrap --update still refuses dirty, substituted, and attached checkouts", () => {
+  const component = loadComponentLock(LOCK).find((entry) => entry.name === "constitutional-agent-testbench");
+  for (const [options, pattern, state] of [
+    [{ clean: false }, /has local changes: constitutional-agent-testbench\. Remove deps\/constitutional-agent-testbench and run npm run bootstrap\./, "dirty"],
+    [{ origin: "https://github.com/example/substitute.git" }, /origin does not match the lock: constitutional-agent-testbench\. Remove deps\//, "substituted"],
+    [{ detached: false }, /is not detached at the locked commit: constitutional-agent-testbench\. Remove deps\//, "attached"],
+  ]) {
+    const checkout = existingCheckout(component, options);
+    assert.throws(() => prepareDependencies({ deps: checkout.deps, components: [component], command: checkout.command, update: true }), pattern);
+    assert.equal(checkout.calls.some((call) => call.startsWith("fetch") || call.startsWith("checkout")), false, JSON.stringify(options));
+    assert.equal(classifyDependency(checkout.target, component, { command: checkout.command }).state, state);
+  }
+});
+
+test("a failed update fetch leaves the old commit and reports git's own text", () => {
+  const component = loadComponentLock(LOCK).find((entry) => entry.name === "constitutional-agent-testbench");
+  const checkout = existingCheckout(component, { failOn: "fetch" });
+  assert.throws(
+    () => prepareDependencies({ deps: checkout.deps, components: [component], command: checkout.command, update: true }),
+    (error) => {
+      assert.match(error.message, new RegExp(`^Could not update ${component.name} from ${OLD_COMMIT} to ${component.commit}: Command failed: git .* fetch --depth 1 origin ${component.commit} \\(exit 128\\): fatal: remote error: upload-pack: not our ref\\. deps/${component.name} was left at ${OLD_COMMIT}\\.$`));
+      return true;
+    },
+  );
+  assert.equal(checkout.state.commit, OLD_COMMIT);
+  assert.equal(checkout.calls.some((call) => call.startsWith("checkout")), false);
+});
+
+test("bootstrap honours --help and rejects unknown arguments instead of running a full bootstrap", () => {
+  let calls = 0;
+  const command = () => { calls += 1; throw new Error("must not spawn"); };
+  for (const argv of [["--help"], ["-h"], ["--update", "--help"]]) {
+    const help = captureBootstrap(argv, { deps: tempRoot(), command });
+    assert.equal(help.exitCode, 0);
+    assert.match(help.stdout, /^Usage: npm run bootstrap\n {7}npm run bootstrap:update\n/);
+    assert.match(help.stdout, /--update {4}Move a clean, detached checkout/);
+    assert.equal(help.stderr, "");
+  }
+  for (const [argv, message] of [[["--bogus"], "Unsupported bootstrap argument: --bogus"], [["extra"], "Unsupported bootstrap argument: extra"], [["--update", "--update"], "Duplicate bootstrap option: --update"]]) {
+    const rejected = captureBootstrap(argv, { deps: tempRoot(), command });
+    assert.equal(rejected.exitCode, 2, argv.join(" "));
+    assert.ok(rejected.stderr.startsWith(`${message}\nUsage: npm run bootstrap\n`), rejected.stderr);
+    assert.equal(rejected.stdout, "");
+  }
+  assert.equal(calls, 0);
+  assert.equal(parseBootstrapArgs([]).update, false);
+  assert.equal(parseBootstrapArgs(["--update"]).update, true);
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+  assert.equal(pkg.scripts["bootstrap:update"], "node ./scripts/bootstrap.mjs --update");
+  assert.equal(pkg.scripts.bootstrap, "node ./scripts/bootstrap.mjs");
+});
+
+test("dependency classification names every state without throwing", (t) => {
+  const component = loadComponentLock(LOCK)[0];
+  assert.equal(classifyDependency(join(tempRoot(), "absent"), component).state, "missing");
+  const file = join(tempRoot(), component.name);
+  writeFileSync(file, "not a directory\n");
+  assert.deepEqual([classifyDependency(file, component).state, classifyDependency(file, component).detail], ["unusable", "not-directory"]);
+  const noGit = join(tempRoot(), component.name);
+  mkdirSync(noGit);
+  assert.deepEqual([classifyDependency(noGit, component).state, classifyDependency(noGit, component).detail], ["unusable", "no-git"]);
+  assert.throws(() => inspectDependencyDirectory(noGit, component), /without Git metadata: constitutional-agent-testbench\. Remove deps\//);
+  const ready = existingCheckout(component, { commit: component.commit });
+  assert.equal(classifyDependency(ready.target, component, { command: ready.command }).state, "ready");
+  const unbuilt = { ...component, expected_entrypoints: [...component.expected_entrypoints, "dist/cli.js"] };
+  const missing = classifyDependency(ready.target, unbuilt, { command: ready.command });
+  assert.equal(missing.state, "missing-entrypoints");
+  assert.deepEqual(missing.missing_entrypoints, ["dist/cli.js"]);
+  assert.throws(() => inspectDependencyDirectory(ready.target, unbuilt, { command: ready.command }), /missing expected entrypoints: constitutional-agent-testbench \(dist\/cli\.js\)\. Run npm run bootstrap to rebuild it/);
+  const broken = () => ({ status: 128, stdout: "", stderr: "fatal", error: null });
+  assert.deepEqual([classifyDependency(ready.target, component, { command: broken }).state, classifyDependency(ready.target, component, { command: broken }).detail], ["unusable", "git-failed"]);
+  const link = join(tempRoot(), component.name);
+  if (!linkOrSkip(t, ready.target, link, "junction")) return;
+  assert.equal(classifyDependency(link, component, { command: ready.command }).state, "unusable");
+});
+
+test("checkout revisions are read from .git/HEAD without spawning git", () => {
+  const sha = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
+  const detached = tempRoot();
+  mkdirSync(join(detached, ".git"));
+  writeFileSync(join(detached, ".git", "HEAD"), `${sha}\n`);
+  assert.equal(readCheckoutCommit(detached), sha);
+  const attached = tempRoot();
+  mkdirSync(join(attached, ".git"));
+  writeFileSync(join(attached, ".git", "HEAD"), "ref: refs/heads/main\n");
+  assert.equal(readCheckoutCommit(attached), null);
+  assert.equal(readCheckoutCommit(tempRoot()), null, "no Git metadata");
+  assert.equal(readCheckoutCommit(join(tempRoot(), "absent")), null);
+  const worktree = tempRoot();
+  writeFileSync(join(worktree, ".git"), "gitdir: /elsewhere\n");
+  assert.equal(readCheckoutCommit(worktree), null, ".git file");
+  const short = tempRoot();
+  mkdirSync(join(short, ".git"));
+  writeFileSync(join(short, ".git", "HEAD"), "abc123\n");
+  assert.equal(readCheckoutCommit(short), null);
+});
+
+test("bootstrap --update moves a real checkout to a new commit over a file URL", () => {
+  const git = (cwd, args) => execFileSync("git", ["-c", "user.name=AAS Test", "-c", "user.email=aas@example.invalid", "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main", ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const work = tempRoot();
+  git(work, ["init", "--quiet"]);
+  writeFileSync(join(work, "entry.txt"), "first\n");
+  git(work, ["add", "entry.txt"]);
+  git(work, ["commit", "--quiet", "-m", "first"]);
+  const first = git(work, ["rev-parse", "HEAD"]);
+  writeFileSync(join(work, "entry.txt"), "second\n");
+  writeFileSync(join(work, "added.txt"), "only in the second commit\n");
+  git(work, ["add", "entry.txt", "added.txt"]);
+  git(work, ["commit", "--quiet", "-m", "second"]);
+  const second = git(work, ["rev-parse", "HEAD"]);
+  const bare = join(tempRoot(), "component.git");
+  git(work, ["clone", "--quiet", "--bare", work, bare]);
+  const repository = pathToFileURL(bare).href;
+  const deps = tempRoot();
+  const component = (commit, entrypoints = ["entry.txt"]) => ({ name: "fixture-component", repository, commit, expected_entrypoints: entrypoints });
+  const cloned = prepareDependencies({ deps, components: [component(first)] });
+  assert.equal(cloned[0].commit, first);
+  const target = join(deps, "fixture-component");
+  assert.equal(readCheckoutCommit(target), first);
+  assert.throws(() => prepareDependencies({ deps, components: [component(second, ["entry.txt", "added.txt"])] }), /bootstrap:update/);
+  assert.equal(readCheckoutCommit(target), first);
+  const updated = prepareDependencies({ deps, components: [component(second, ["entry.txt", "added.txt"])], update: true });
+  assert.equal(updated[0].commit, second);
+  assert.equal(updated[0].updated_from, first);
+  assert.equal(readCheckoutCommit(target), second);
+  assert.equal(readFileSync(join(target, "entry.txt"), "utf8").replaceAll("\r\n", "\n"), "second\n");
+  assert.equal(git(target, ["status", "--porcelain"]), "");
 });

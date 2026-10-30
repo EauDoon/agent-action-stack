@@ -26,8 +26,22 @@ project adheres to [Semantic Versioning](https://semver.org/).
   gains `disputed` and `none`, and a fifth preset, **Disputed outcome
   review**, runs `stale-evidence` with same-case review. Cases saved by
   0.3.0 load unchanged.
+- `npm run bootstrap:update` (`node scripts/bootstrap.mjs --update`) moves
+  a clean, detached checkout of the locked repository to a new lock pin in
+  place: `git fetch --depth 1 origin <commit>`, a detached checkout, then
+  MandateBound's install and build. Checkouts with local changes, another
+  origin, or a branch are still refused, and a failed fetch leaves the old
+  commit. The refusal of a stale checkout, which `npm run bootstrap`,
+  `aas demo`, and the GUI all report, now names both short commits and the
+  remedy instead of only the component, and every other refusal names its
+  remedy too. Use the npm script on Windows, where bootstrap needs npm to
+  locate its own CLI.
 
 ### Fixed
+- `node scripts/bootstrap.mjs` ignored its arguments, so `--help` ran a full
+  bootstrap including MandateBound's `npm ci` and build. It now prints its
+  usage for `--help` or `-h` without running anything, and rejects any
+  other argument with exit 2.
 - Case persistence now checks the exact formatted UTF-8 replay budget before writing files. Oversized combined evidence is rejected without publishing an unreadable case or replacing the previous latest pointer.
 - GUI import replay now decodes an uploaded case the way `aas replay` does. The page uploads the file's bytes unchanged and the server refuses invalid UTF-8 with HTTP 400; before, both sides replaced invalid bytes with U+FFFD, so a case file the CLI refuses could show "replay verified" in the GUI. A leading byte order mark is accepted, as the CLI accepts it.
 - `aas cases` no longer prints "no readable cases in this page" when `--domain`, `--outcome`, or `--search` excluded every readable case. It now prints "no cases in this page match the filters", and keeps the unreadable message for a page whose every scanned entry is unavailable.

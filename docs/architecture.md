@@ -136,6 +136,7 @@ and browser tests. The commands do not publish, deploy, or operate real accounts
 | --- | --- |
 | `npm ci --ignore-scripts` | Root `node_modules/` and npm's configured cache/log directory |
 | `npm run bootstrap` | Pinned public clones under `deps/`, MandateBound `node_modules/` and `dist/`, and npm cache/log files |
+| `npm run bootstrap:update` | The bootstrap writes above, plus a `git fetch --depth 1` and detached checkout inside an existing clean `deps/<name>` whose commit differs from the lock (objects and the working tree of that checkout) |
 | `aas demo`, GUI **Run stack**, integrator examples | `.out/runs/`, `.out/latest.json`, temporary handoff directories under the OS temporary directory, and Python bytecode caches under `deps/constitutional-agent-testbench/src/constitutional_agent_testbench/__pycache__/` unless bytecode writing is disabled |
 | `npm test`, `npm run gui:smoke` | Test fixtures, temporary case stores, and child-process scratch files under the OS temporary directory where needed |
 | `npm run integration` | Root install, dependency bootstrap/build, the demo writes above (including Python bytecode), and temporary copied verifier runtimes; invokes npm and Git |

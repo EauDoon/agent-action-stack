@@ -159,6 +159,20 @@ expected entrypoints. Bootstrap uses detached checkouts, rejects substituted or
 dirty pre-existing directories, runs `npm ci --ignore-scripts` for MandateBound,
 then runs its explicit build command.
 
+When a release moves the pins, an existing checkout is refused with both
+commits named, for example `Pre-existing dependency commit does not match the
+lock: consequence-rail (checkout 78d6f8a, lock 1a2b3c4)`. Update in place:
+
+```bash
+npm run bootstrap:update
+```
+
+It fetches each locked commit into its clean, detached `deps/<name>` checkout,
+checks it out, and reruns MandateBound's install and build. A checkout with
+local changes, another origin, or a branch is still refused; remove it and run
+`npm run bootstrap`. `node scripts/bootstrap.mjs --help` prints the options
+without running anything; on Windows, run bootstrap through npm.
+
 Each decide, act, and prove child is bounded by `AAS_CHILD_TIMEOUT_MS`
 (default 30000). A hung child fails the stage instead of blocking the run.
 Empty `AAS_CHILD_TIMEOUT_MS` and `AAS_GUI_PORT` values keep those defaults;
