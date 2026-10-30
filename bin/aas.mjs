@@ -330,6 +330,7 @@ Usage:
   aas replay <bundle-file|-> [--json]
   aas latest [--root output-dir] [--json]
   aas verify <run-id> [--root output-dir] [--json]
+  aas verify --all [--root output-dir] [--before run-id] [--limit 1..50] [--json]
   aas inspect <run-id> [--root output-dir] [--json|--markdown]
   aas runs [--root output-dir] [--json]
   aas cases [--root output-dir] [--before run-id] [--limit 1..50] [--domain refund|inventory|unknown] [--outcome settled|compensated|disputed|none] [--search text] [--json]
@@ -342,7 +343,8 @@ Commands:
   demo    Run decide, act, and prove and persist one run bundle
   export  Print one run bundle as portable JSON (or write it with --out)
   replay  Re-verify an exported bundle offline without rerunning the action
-  verify  Re-verify one saved case without exporting or rerunning actions
+  verify  Re-verify one saved case, or a page of them with --all, without
+          exporting or rerunning actions
   latest  Print the latest complete saved run identity
   runs    List persisted runs newest-first
   cases   List bounded case summaries (outcome, policy, review, digest)
@@ -363,8 +365,12 @@ Options:
                            compare, export, and prune (default: .out)
   --out <path>             Write an export to this file (refuses to replace; see --overwrite)
   --overwrite              Allow --out to replace an existing file
-  --before run-id          Start a cases page older than this run id
-  --limit 1..50            Cases page size (default: 25)
+  --all                    verify: re-verify a newest-first page of saved cases and
+                           name the verifier revisions (exit 1 on a conflicting,
+                           unsupported, unreadable, or failed case; unavailable
+                           cases are reported only)
+  --before run-id          Start a cases or verify --all page older than this run id
+  --limit 1..50            Page size for cases and verify --all (default: 25)
   --outcome settled|compensated|disputed|none
                            Filter a cases page by saved act outcome
   --search text            Filter a cases page by case metadata (1 to 200 characters)
@@ -2252,6 +2258,64 @@ async function runReplayCommand(args, { asJson, nodeVersion, stdin } = {}) {
   process.exitCode = result.ok ? 0 : 1;
 }
 
+const VERIFY_ALL_USAGE = "Usage: aas verify --all [--root output-dir] [--before run-id] [--limit 1..50] [--json]";
+
+/**
+ * `aas verify --all`: re-verify one page of saved cases. Exits 1 when any case
+ * is conflicting, unsupported, unreadable, or could not be verified; an
+ * unavailable case (simulate-only or refused) is reported but does not fail.
+ */
+async function runVerifyAllCommand(args, { asJson, outputRoot, nodeVersion, verifyOptions = {} } = {}) {
+  let before = null;
+  let limit;
+  const seen = new Set();
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (seen.has(token)) throw new UsageError(`Duplicate verify option: ${token}. ${VERIFY_ALL_USAGE}`);
+    if (token === "--all" || token === "--json") {
+      seen.add(token);
+    } else if (token === "--before" || token === "--limit") {
+      seen.add(token);
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith("-")) throw new UsageError(`Missing value for verify option: ${token}. ${VERIFY_ALL_USAGE}`);
+      index += 1;
+      if (token === "--limit") {
+        if (!/^[1-9][0-9]?$/.test(value) || Number(value) > 50) throw new UsageError(`--limit must be an integer from 1 to 50. ${VERIFY_ALL_USAGE}`);
+        limit = Number(value);
+      } else {
+        if (!isValidRunId(value) || value.length > 200) throw new UsageError(`Invalid --before run id. ${VERIFY_ALL_USAGE}`);
+        before = value;
+      }
+    } else {
+      throw new UsageError(`verify --all takes no run id or other option: ${token}. ${VERIFY_ALL_USAGE}`);
+    }
+  }
+  assertFullStackNodeVersion(nodeVersion === undefined ? {} : { version: nodeVersion });
+  const { verifyCasePage, VERIFY_FAILING_STATUSES } = await import("./case-review.mjs");
+  const page = verifyCasePage({ outputRoot, before, ...(limit === undefined ? {} : { limit }), ...verifyOptions });
+  const ok = VERIFY_FAILING_STATUSES.every((status) => page.counts[status] === 0);
+  if (asJson) {
+    process.stdout.write(`${JSON.stringify({ ok, ...page }, null, 2)}\n`);
+  } else {
+    const lines = page.verifier.map((entry) => `verifier ${entry.name}: ${entry.checkout_commit ?? "revision unknown"} (lock ${entry.locked_commit ?? "unreadable"})`
+      + (entry.matches_lock === false ? " differs from lock" : ""));
+    if (page.results.length === 0) lines.push("no cases in this page");
+    for (const entry of page.results) {
+      const differ = Array.isArray(entry.pins_differ) && entry.pins_differ.length > 0 ? ` (recorded under other pins: ${entry.pins_differ.join(", ")})` : "";
+      // Replay reasons already start with their class ("unavailable: ...").
+      const text = entry.reason ? clipChildStderr(entry.reason, 300).replace(/\s+/g, " ") : "";
+      const reason = text.startsWith(`${entry.status}: `) ? text.slice(entry.status.length + 2) : text;
+      lines.push(`${entry.run_id} ${entry.status}${reason ? `: ${reason}` : ""}${differ}`);
+    }
+    lines.push(`counts: ${Object.entries(page.counts).map(([status, count]) => `${status}=${count}`).join(" ")}`);
+    lines.push(`scanned: ${page.scanned}`);
+    lines.push(`next_cursor: ${page.next_cursor ?? "none"}`);
+    if (page.next_cursor) lines.push(`Continue with --before ${page.next_cursor} and the same root and page options.`);
+    process.stdout.write(`${lines.join("\n")}\n`);
+  }
+  process.exitCode = ok ? 0 : 1;
+}
+
 function parseRootArgs(args) {
   const remaining = [];
   let outputRoot = DEFAULT_PATHS.outputRoot, seen = false;
@@ -2307,6 +2371,11 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   if (command === "verify") {
     try {
       const { args, outputRoot } = parseRootArgs(argv.slice(1));
+      if (args.includes("--all")) {
+        await runVerifyAllCommand(args, { asJson, outputRoot, nodeVersion: options.nodeVersion, verifyOptions: options.verifyOptions });
+        return;
+      }
+      if (args.includes("--before") || args.includes("--limit")) throw new UsageError(`--before and --limit page a whole store and need --all. ${VERIFY_ALL_USAGE}`);
       const ids = args.filter(token => token !== "--json");
       if (ids.length !== 1 || !isValidRunId(ids[0]) || args.filter(token => token === "--json").length > 1) throw new UsageError("Usage: aas verify <run-id> [--root output-dir] [--json]");
       assertFullStackNodeVersion(options.nodeVersion === undefined ? {} : {version:options.nodeVersion});

@@ -421,6 +421,32 @@ Use aas compare left-id right-id --root output-directory --markdown to print the
 
 Use aas verify run-id --root output-directory --json to verify a saved case directly. It performs the same receipt and review checks as imported replay, with the same pinned component requirements, and never executes an action or modifies the case store. Refused or simulation-only cases without same-case evidence return unavailable and exit 1.
 
+After a pin refresh, re-verify a whole store a page at a time:
+
+```bash
+node ./bin/aas.mjs verify --all --root .out --limit 50
+node ./bin/aas.mjs verify --all --root .out --limit 50 --before <next_cursor>
+```
+
+Each case on the newest-first page is exported and replayed exactly as
+`aas verify <run-id>` does, and classified `verified`, `unavailable`,
+`conflicting`, `unsupported`, `unreadable` (the saved files cannot be read), or
+`error` (a verifier could not run). The command exits 1 when any case is
+conflicting, unsupported, unreadable, or an error. Unlike single-case
+`aas verify`, an unavailable case (simulate-only or refused) is reported but
+does not fail the page, because a store normally holds such cases. The output
+starts with the verifier block: the commit each verifier checkout in `deps/`
+is actually at, read from its `.git/HEAD`, beside the commit `stack-lock.json`
+names, marked `differs from lock` when they disagree (the revision is unknown
+when the checkout has no Git metadata, and is never inferred from the lock).
+Each case also lists the rail and MandateBound commits it was recorded under
+and `pins_differ`, the verifiers whose checkout differs from them, so a
+cross-pin replay is visible. Replay runs two component processes per case and
+a page holds at most 50 cases, so a large store takes longer than `aas cases`.
+The command never executes an action or writes to the store. `--json` prints
+the `agent-action-stack.verify-batch/v1` page with `ok`, `verifier`,
+`results`, `counts`, `scanned`, and `next_cursor`.
+
 Use aas latest --root output-directory to print the ID named by the latest complete-bundle pointer, or add --json for machine output. It validates the referenced saved bundle and fails closed for missing, inconsistent, or unreadable pointers/cases. It never guesses by sorting directory names.
 
 Case-review Markdown now carries all five requested settings and a policy-failure summary with rule identity, path, kind, and reason code. It includes at most 50 failed rules with bounded text fields and an explicit omitted count; raw response values remain in the original artifact only. Missing rule records never imply a policy pass.

@@ -187,6 +187,49 @@ function checkFaultMatrix() {
   check(readFileSync(join(root, ".out", "latest.json")).equals(before), "no-receipt rail review moved the latest pointer");
 }
 
+function existingRunIds() {
+  try {
+    return readdirSync(join(root, ".out", "runs"), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Re-verify every case this proof saved, in a store of their own so cases left
+ * by earlier local runs cannot change the result: rail-review cases verify,
+ * simulate and refused cases are unavailable, and the verifier is the pin.
+ */
+function checkVerifyAll(components, priorRuns) {
+  const store = mkdtempSync(join(tmpdir(), "aas-verify-all-"));
+  try {
+    const saved = existingRunIds().filter((runId) => !priorRuns.has(runId));
+    for (const runId of saved) {
+      cpSync(join(root, ".out", "runs", runId), join(store, "runs", runId), { recursive: true });
+    }
+    const result = run(process.execPath, ["./bin/aas.mjs", "verify", "--all", "--root", store, "--limit", "50", "--json"]);
+    check(result.status === 0, `verify --all exited ${result.status}: ${result.stdout.slice(-600)}${result.stderr.slice(-300)}`);
+    if (result.status !== 0 && result.stdout.trim() === "") return;
+    const page = JSON.parse(result.stdout);
+    check(page.ok === true && page.scanned === saved.length, `verify --all scanned ${page.scanned} of ${saved.length} saved cases`);
+    for (const entry of page.results) {
+      const report = readJson(join(store, "runs", entry.run_id, "report.json"));
+      const expected = report.stages.prove?.review_verdict === "recorded" ? "verified" : "unavailable";
+      check(entry.status === expected, `verify --all: ${entry.run_id} is ${entry.status}, expected ${expected}`);
+    }
+    check(page.counts.verified >= 5, `verify --all verified only ${page.counts.verified} rail-review cases`);
+    for (const verifier of page.verifier) {
+      const pin = components.find((component) => component.name === verifier.name)?.commit;
+      check(verifier.checkout_commit === pin && verifier.matches_lock === true,
+        `verify --all: ${verifier.name} verifier ${verifier.checkout_commit} is not the pin ${pin}`);
+    }
+  } finally {
+    rmSync(store, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   assertFullStackNodeVersion();
 
@@ -197,6 +240,7 @@ async function main() {
   check(bootstrap.status === 0, `bootstrap failed: ${bootstrap.stderr.slice(-400)}`);
 
   const components = loadComponentLock(join(root, "stack-lock.json"));
+  const priorRuns = new Set(existingRunIds());
   for (const component of components) {
     const target = join(root, "deps", component.name);
     const head = git(target, ["rev-parse", "HEAD"]);
@@ -411,6 +455,7 @@ async function main() {
   }
 
   checkFaultMatrix();
+  checkVerifyAll(components, priorRuns);
 
   const cases = run(process.execPath, ["./bin/aas.mjs", "cases", "--json"]);
   check(cases.status === 0, `cases failed: ${cases.stderr.slice(-300)}`);

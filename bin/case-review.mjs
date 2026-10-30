@@ -1,21 +1,36 @@
 import { createHash } from "node:crypto";
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { assertRunsDirectory, clipChildStderr, DEFAULT_PATHS, UsageError, exportRunBundle, isValidRunId, summarizeRun } from "./aas.mjs";
+import { loadComponentLock, readCheckoutCommit } from "../scripts/bootstrap.mjs";
+import { assertRunsDirectory, clipChildStderr, DEFAULT_PATHS, UsageError, exportRunBundle, isValidRunId, replayBundle, summarizeRun } from "./aas.mjs";
 
-export function listCasePage({ outputRoot = DEFAULT_PATHS.outputRoot, before = null, limit = 25, domain = null, outcome = null, search = null } = {}) {
+function assertPageOptions(before, limit) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error("History limit must be an integer from 1 to 50.");
   if (before !== null && (!isValidRunId(before) || before.length > 200)) throw new Error("Invalid history cursor.");
-  if (domain !== null && !['refund','inventory','unknown'].includes(domain)) throw new Error('Domain filter must be refund, inventory, or unknown.');
-  if (outcome !== null && !['settled','compensated','disputed','none'].includes(outcome)) throw new Error('Outcome filter must be settled, compensated, disputed, or none.');
-  if (search !== null && (typeof search !== 'string' || !search.trim() || search.length > 200)) throw new Error('Search must contain 1 to 200 characters.');
+}
+
+/**
+ * One newest-first page of saved run ids: at most `limit` candidates older
+ * than `before`, and the cursor for the next page. Shared by `aas cases` and
+ * `aas verify --all` so both page a store identically.
+ */
+function listRunIdPage(outputRoot, before, limit) {
   assertRunsDirectory(outputRoot);
   let entries;
   try { entries = readdirSync(join(outputRoot, "runs"), { withFileTypes: true }); }
-  catch (error) { if (error.code === "ENOENT") return { cases: [], next_cursor: null, scanned: 0, unavailable: [] }; throw error; }
+  catch (error) { if (error.code === "ENOENT") return { candidates: [], next_cursor: null }; throw error; }
   const ids = entries.filter((entry) => entry.isDirectory() && isValidRunId(entry.name) && (!before || entry.name < before))
     .map((entry) => entry.name).sort().reverse();
   const candidates = ids.slice(0, limit);
+  return { candidates, next_cursor: ids.length > limit ? candidates.at(-1) : null };
+}
+
+export function listCasePage({ outputRoot = DEFAULT_PATHS.outputRoot, before = null, limit = 25, domain = null, outcome = null, search = null } = {}) {
+  assertPageOptions(before, limit);
+  if (domain !== null && !['refund','inventory','unknown'].includes(domain)) throw new Error('Domain filter must be refund, inventory, or unknown.');
+  if (outcome !== null && !['settled','compensated','disputed','none'].includes(outcome)) throw new Error('Outcome filter must be settled, compensated, disputed, or none.');
+  if (search !== null && (typeof search !== 'string' || !search.trim() || search.length > 200)) throw new Error('Search must contain 1 to 200 characters.');
+  const { candidates, next_cursor } = listRunIdPage(outputRoot, before, limit);
   const cases = [], unavailable = [];
   for (const runId of candidates) {
     try {
@@ -27,7 +42,106 @@ export function listCasePage({ outputRoot = DEFAULT_PATHS.outputRoot, before = n
     }
     catch { unavailable.push(runId); }
   }
-  return { cases, next_cursor: ids.length > limit ? candidates.at(-1) : null, scanned: candidates.length, unavailable };
+  return { cases, next_cursor, scanned: candidates.length, unavailable };
+}
+
+/** The two components replay runs, and the entrypoint each needs. */
+const VERIFIER_COMPONENTS = Object.freeze([
+  ["consequence-rail", "cmd/crctl.js"],
+  ["mandatebound", "dist/cli.js"],
+]);
+export const VERIFY_STATUSES = Object.freeze(["verified", "unavailable", "conflicting", "unsupported", "unreadable", "error"]);
+/** Statuses that make `aas verify --all` exit 1. Unavailable is reported only. */
+export const VERIFY_FAILING_STATUSES = Object.freeze(["conflicting", "unsupported", "unreadable", "error"]);
+
+/**
+ * Which revisions will verify: each verifier checkout's actual detached commit,
+ * read from its .git/HEAD, beside the commit stack-lock.json names. Replay runs
+ * whatever checkout is in deps/ (that is what makes cross-pin replay work), so
+ * the lock commit is never reported as the revision that ran.
+ */
+export function verifierRevisions({ depsDir = DEFAULT_PATHS.deps, lockPath = DEFAULT_PATHS.lock } = {}) {
+  let locked = {};
+  try {
+    locked = Object.fromEntries(loadComponentLock(lockPath).map((component) => [component.name, component.commit]));
+  } catch {
+    locked = {};
+  }
+  return VERIFIER_COMPONENTS.map(([name]) => {
+    const checkout = readCheckoutCommit(join(depsDir, name));
+    const lockedCommit = typeof locked[name] === "string" ? locked[name] : null;
+    return {
+      name,
+      checkout_commit: checkout,
+      locked_commit: lockedCommit,
+      matches_lock: checkout !== null && lockedCommit !== null ? checkout === lockedCommit : null,
+    };
+  });
+}
+
+function replayStatus(result) {
+  if (result.ok) return "verified";
+  const prefix = /^(unavailable|conflicting|unsupported):/.exec(String(result.reason ?? ""));
+  return prefix ? prefix[1] : "unsupported";
+}
+
+/**
+ * Re-verify one newest-first page of a saved-case store: export each case and
+ * replay it exactly as `aas verify <run-id>` does. Never runs an action and
+ * never writes to the store. Throws once, before any case, when a verifier
+ * entrypoint is missing.
+ */
+export function verifyCasePage({ outputRoot = DEFAULT_PATHS.outputRoot, before = null, limit = 25, depsDir = DEFAULT_PATHS.deps, lockPath = DEFAULT_PATHS.lock, runner } = {}) {
+  assertPageOptions(before, limit);
+  for (const [name, entrypoint] of VERIFIER_COMPONENTS) {
+    if (!existsSync(join(depsDir, name, entrypoint))) {
+      throw new Error(`Missing verifier deps/${name}/${entrypoint}. Run: npm run bootstrap`);
+    }
+  }
+  const verifier = verifierRevisions({ depsDir, lockPath });
+  const { candidates, next_cursor } = listRunIdPage(outputRoot, before, limit);
+  const counts = Object.fromEntries(VERIFY_STATUSES.map((status) => [status, 0]));
+  const results = [];
+  for (const runId of candidates) {
+    let bundle;
+    let entry;
+    try {
+      bundle = exportRunBundle(runId, { outputRoot });
+    } catch (error) {
+      entry = { run_id: runId, status: "unreadable", reason: error.message, recorded_pins: [], pins_differ: null };
+    }
+    if (entry === undefined) {
+      const provenance = Array.isArray(bundle.manifest?.component_provenance) ? bundle.manifest.component_provenance : [];
+      const recorded = VERIFIER_COMPONENTS.map(([name]) => {
+        const commit = provenance.find((item) => item?.name === name)?.commit;
+        return { name, commit: typeof commit === "string" ? commit : null };
+      });
+      const compared = recorded.filter((pin) => {
+        const checkout = verifier.find((item) => item.name === pin.name)?.checkout_commit ?? null;
+        return pin.commit !== null && checkout !== null;
+      });
+      const pinsDiffer = compared.length === 0
+        ? null
+        : compared.filter((pin) => pin.commit !== verifier.find((item) => item.name === pin.name).checkout_commit).map((pin) => pin.name);
+      try {
+        const result = replayBundle(bundle, { depsDir, ...(runner ? { runner } : {}) });
+        const status = replayStatus(result);
+        entry = { run_id: runId, status, reason: result.ok ? null : result.reason ?? null, recorded_pins: recorded, pins_differ: pinsDiffer };
+      } catch (error) {
+        entry = { run_id: runId, status: "error", reason: error.message, recorded_pins: recorded, pins_differ: pinsDiffer };
+      }
+    }
+    counts[entry.status] += 1;
+    results.push(entry);
+  }
+  return {
+    schema_version: "agent-action-stack.verify-batch/v1",
+    verifier,
+    results,
+    counts,
+    scanned: candidates.length,
+    next_cursor,
+  };
 }
 
 export function parseCasePageArgs(args) {

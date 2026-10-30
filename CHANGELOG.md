@@ -36,6 +36,19 @@ project adheres to [Semantic Versioning](https://semver.org/).
   remedy instead of only the component, and every other refusal names its
   remedy too. Use the npm script on Windows, where bootstrap needs npm to
   locate its own CLI.
+- `aas verify --all [--root dir] [--before run-id] [--limit 1..50] [--json]`
+  re-verifies a newest-first page of a saved-case store, paged like
+  `aas cases`, and classifies each case `verified`, `unavailable`,
+  `conflicting`, `unsupported`, `unreadable`, or `error`. It exits 1 on any
+  conflicting, unsupported, unreadable, or error case; unavailable
+  (simulate-only or refused) cases are reported but, unlike single-case
+  `aas verify`, do not fail the page. The output names the commit each
+  verifier checkout is actually at, read from `deps/<name>/.git/HEAD` without
+  spawning git, beside the lock's commit (`differs from lock` when they
+  disagree, unknown without Git metadata), and each case's recorded rail and
+  MandateBound commits with `pins_differ`. A missing verifier aborts once
+  with the bootstrap hint. `aas verify <run-id>`, `aas replay`, and the GUI
+  are unchanged.
 
 ### Fixed
 - `node scripts/bootstrap.mjs` ignored its arguments, so `--help` ran a full

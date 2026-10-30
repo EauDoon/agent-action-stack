@@ -9,6 +9,7 @@ import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertFullStackNodeVersion, classifyDependency, compareVersionTuples, isEntrypoint, loadComponentLock, inspectDependencyDirectory, main as bootstrapMain, parseBootstrapArgs, readCheckoutCommit, MIN_FULL_STACK_NODE, moveIntoPlace, npmInvocation, parseNodeVersion, prepareDependencies } from "../scripts/bootstrap.mjs";
 import { checkSyntax, listSyntaxTargets } from "../scripts/check-syntax.mjs";
+import { verifierRevisions, verifyCasePage } from "../bin/case-review.mjs";
 import { checkReleaseConsistency, loadReleaseInputs, parseChangelog, releaseNotes } from "../scripts/check-version.mjs";
 import {
   buildRailReviewRequest,
@@ -3232,4 +3233,198 @@ test("bootstrap --update moves a real checkout to a new commit over a file URL",
   assert.equal(readCheckoutCommit(target), second);
   assert.equal(readFileSync(join(target, "entry.txt"), "utf8").replaceAll("\r\n", "\n"), "second\n");
   assert.equal(git(target, ["status", "--porcelain"]), "");
+});
+
+const RAIL_PIN = PROVENANCE.find((entry) => entry.name === "consequence-rail").commit;
+const MB_PIN = PROVENANCE.find((entry) => entry.name === "mandatebound").commit;
+
+/** A deps directory holding only the two verifier entrypoints and their HEADs. */
+function verifierDeps({ rail = RAIL_PIN, mandatebound = MB_PIN, omit = null } = {}) {
+  const deps = tempRoot();
+  for (const [name, entrypoint, head] of [["consequence-rail", "cmd/crctl.js", rail], ["mandatebound", "dist/cli.js", mandatebound]]) {
+    if (omit === name) continue;
+    mkdirSync(join(deps, name, entrypoint, ".."), { recursive: true });
+    writeFileSync(join(deps, name, entrypoint), "// fixture\n");
+    if (head !== null) {
+      mkdirSync(join(deps, name, ".git"), { recursive: true });
+      writeFileSync(join(deps, name, ".git", "HEAD"), `${head}\n`);
+    }
+  }
+  return deps;
+}
+
+/**
+ * A store with one case per verify status, newest first:
+ * 2035-05 verified, 2035-04 unavailable (simulate), 2035-03 conflicting
+ * (digest altered), 2035-02 unsupported (rail verifier rejects), 2035-01
+ * unreadable (corrupt manifest).
+ */
+async function verifyStore({ only = null } = {}) {
+  const outputRoot = tempRoot();
+  const { railBundle, digest } = replayBundleFixture();
+  const review = {
+    verdict: "recorded",
+    reviewId: "review-replay-1",
+    actionId: "act_replay_1",
+    evidenceDigest: digest,
+    legalEffect: "not-determined",
+    receipt: { outcome: "compensated" },
+    upstream: { valid: true, verifier: "consequence-rail:bundle-verify", outcome: "compensated", trustedKeyIds: ["k"] },
+    reviewDigest: "sha256:replayed",
+  };
+  const railCase = (runId, recorded) => runDemo(["--fault", "duplicate", "--prove", "rail"], stubOptions(outputRoot, {
+    runId,
+    runActFn: async () => ({ ok: true, raw: { outcome: "compensated", state: "CLOSED", fault: "duplicate", action_id: "act_replay_1", rail_bundle: structuredClone(railBundle) }, status: 0 }),
+    runProveRailFn: async () => ({ ok: true, raw: { ok: true, result: recorded }, status: 0 }),
+  }));
+  const wanted = (name) => only === null || only.includes(name);
+  if (wanted("verified")) await railCase("2035-05-verified", review);
+  if (wanted("unavailable")) await runDemo([], stubOptions(outputRoot, { runId: "2035-04-unavailable" }));
+  if (wanted("conflicting")) await railCase("2035-03-conflicting", { ...review, evidenceDigest: `sha256:${"0".repeat(64)}` });
+  if (wanted("unsupported")) await railCase("2035-02-unsupported", { ...review, upstream: { ...review.upstream, outcome: "settled" } });
+  if (wanted("unreadable")) {
+    mkdirSync(join(outputRoot, "runs", "2035-01-unreadable"), { recursive: true });
+    writeFileSync(join(outputRoot, "runs", "2035-01-unreadable", "manifest.json"), "{not json");
+  }
+  const verification = { valid: true, action_id: "act_replay_1", outcome: "compensated", trusted_key_id: "k", trusted_connector_key_id: "c" };
+  return { outputRoot, runner: replayRunnerFixture(verification, review) };
+}
+
+test("verify --all classifies every case of a page and fails on conflicting, unsupported, or unreadable cases", async () => {
+  const { outputRoot, runner } = await verifyStore();
+  const depsDir = verifierDeps();
+  const page = verifyCasePage({ outputRoot, depsDir, lockPath: LOCK, runner });
+  assert.equal(page.schema_version, "agent-action-stack.verify-batch/v1");
+  assert.deepEqual(page.results.map((entry) => [entry.run_id, entry.status]), [
+    ["2035-05-verified", "verified"],
+    ["2035-04-unavailable", "unavailable"],
+    ["2035-03-conflicting", "conflicting"],
+    ["2035-02-unsupported", "unsupported"],
+    ["2035-01-unreadable", "unreadable"],
+  ]);
+  assert.deepEqual(page.counts, { verified: 1, unavailable: 1, conflicting: 1, unsupported: 1, unreadable: 1, error: 0 });
+  assert.equal(page.scanned, 5);
+  assert.equal(page.next_cursor, null);
+  assert.equal(page.results[0].reason, null);
+  assert.match(page.results[2].reason, /^conflicting: /);
+  assert.equal(page.results[4].reason, "Case file contains invalid JSON.");
+  assert.deepEqual(page.results[0].recorded_pins, [{ name: "consequence-rail", commit: RAIL_PIN }, { name: "mandatebound", commit: MB_PIN }]);
+  assert.deepEqual(page.results[0].pins_differ, []);
+  assert.deepEqual(page.results[4].recorded_pins, []);
+  assert.equal(page.results[4].pins_differ, null);
+  assert.deepEqual(page.verifier, [
+    { name: "consequence-rail", checkout_commit: RAIL_PIN, locked_commit: RAIL_PIN, matches_lock: true },
+    { name: "mandatebound", checkout_commit: MB_PIN, locked_commit: MB_PIN, matches_lock: true },
+  ]);
+
+  const cli = await captureMain(["verify", "--all", "--root", outputRoot], { verifyOptions: { depsDir, lockPath: LOCK, runner } });
+  assert.equal(cli.exitCode, 1);
+  const lines = cli.stdout.trimEnd().split("\n");
+  assert.equal(lines[0], `verifier consequence-rail: ${RAIL_PIN} (lock ${RAIL_PIN})`);
+  assert.equal(lines[2], "2035-05-verified verified");
+  assert.match(lines[3], /^2035-04-unavailable unavailable: this run persisted no rail bundle/);
+  assert.ok(lines.includes("counts: verified=1 unavailable=1 conflicting=1 unsupported=1 unreadable=1 error=0"));
+  assert.ok(lines.includes("scanned: 5"));
+  assert.equal(lines.at(-1), "next_cursor: none");
+  const json = await captureMain(["verify", "--all", "--root", outputRoot, "--json"], { verifyOptions: { depsDir, lockPath: LOCK, runner } });
+  assert.equal(json.exitCode, 1);
+  assert.equal(JSON.parse(json.stdout).ok, false);
+  assert.deepEqual(JSON.parse(json.stdout).counts, page.counts);
+});
+
+test("verify --all exits 0 when every case verified or is only unavailable", async () => {
+  const depsDir = verifierDeps();
+  for (const only of [["verified"], ["unavailable"], ["verified", "unavailable"]]) {
+    const { outputRoot, runner } = await verifyStore({ only });
+    const result = await captureMain(["verify", "--all", "--root", outputRoot, "--json"], { verifyOptions: { depsDir, lockPath: LOCK, runner } });
+    assert.equal(result.exitCode, 0, only.join(","));
+    assert.equal(JSON.parse(result.stdout).ok, true);
+  }
+  const empty = await captureMain(["verify", "--all", "--root", tempRoot()], { verifyOptions: { depsDir, lockPath: LOCK } });
+  assert.equal(empty.exitCode, 0);
+  assert.match(empty.stdout, /no cases in this page\n/);
+});
+
+test("verify --all pages a store with the cases cursor", async () => {
+  const { outputRoot, runner } = await verifyStore();
+  const depsDir = verifierDeps();
+  const seen = [];
+  let before = null;
+  const cursors = [];
+  for (let page = 0; page < 3; page += 1) {
+    const result = verifyCasePage({ outputRoot, depsDir, lockPath: LOCK, runner, limit: 2, before });
+    seen.push(...result.results.map((entry) => entry.run_id));
+    cursors.push(result.next_cursor);
+    before = result.next_cursor;
+  }
+  assert.deepEqual(seen, ["2035-05-verified", "2035-04-unavailable", "2035-03-conflicting", "2035-02-unsupported", "2035-01-unreadable"]);
+  assert.deepEqual(cursors, ["2035-04-unavailable", "2035-02-unsupported", null]);
+  const cli = await captureMain(["verify", "--all", "--root", outputRoot, "--limit", "2"], { verifyOptions: { depsDir, lockPath: LOCK, runner } });
+  assert.match(cli.stdout, /next_cursor: 2035-04-unavailable\nContinue with --before 2035-04-unavailable and the same root and page options\.\n$/);
+  const second = await captureMain(["verify", "--all", "--root", outputRoot, "--limit", "2", "--before", "2035-04-unavailable", "--json"], { verifyOptions: { depsDir, lockPath: LOCK, runner } });
+  assert.deepEqual(JSON.parse(second.stdout).results.map((entry) => entry.run_id), ["2035-03-conflicting", "2035-02-unsupported"]);
+});
+
+test("verify --all usage errors exit 2 before any verification", async () => {
+  let calls = 0;
+  const runner = () => { calls += 1; throw new Error("must not run"); };
+  for (const argv of [
+    ["verify", "--all", "some-run"],
+    ["verify", "--all", "--all"],
+    ["verify", "--all", "--limit", "0"],
+    ["verify", "--all", "--limit", "51"],
+    ["verify", "--all", "--limit"],
+    ["verify", "--all", "--before", "../escape"],
+    ["verify", "--all", "--bogus"],
+    ["verify", "--before", "2035-01-a"],
+    ["verify", "some-run", "--limit", "5"],
+  ]) {
+    const result = await captureMain(argv, { nodeVersion: "20.0.0", verifyOptions: { runner } });
+    assert.equal(result.exitCode, 2, argv.join(" "));
+    assert.match(result.stderr, /aas verify --all \[--root output-dir\]/, argv.join(" "));
+  }
+  assert.equal(calls, 0);
+});
+
+test("verify --all aborts once with the bootstrap hint when a verifier is missing", async () => {
+  const { outputRoot, runner } = await verifyStore({ only: ["verified", "unavailable"] });
+  for (const omit of ["consequence-rail", "mandatebound"]) {
+    const depsDir = verifierDeps({ omit });
+    assert.throws(() => verifyCasePage({ outputRoot, depsDir, lockPath: LOCK, runner }), /^Error: Missing verifier deps\/(consequence-rail\/cmd\/crctl|mandatebound\/dist\/cli)\.js\. Run: npm run bootstrap$/);
+    const cli = await captureMain(["verify", "--all", "--root", outputRoot], { verifyOptions: { depsDir, lockPath: LOCK, runner } });
+    assert.equal(cli.exitCode, 1);
+    assert.equal(cli.stdout, "");
+    assert.equal(cli.stderr.match(/npm run bootstrap/g).length, 1);
+  }
+});
+
+test("verify --all reports the verifier's own checkout commits, never the lock's, and recorded pins that differ", async () => {
+  const { outputRoot, runner } = await verifyStore({ only: ["verified"] });
+  const other = "2".repeat(40);
+  const stale = verifierRevisions({ depsDir: verifierDeps({ mandatebound: other }), lockPath: LOCK });
+  assert.deepEqual(stale[1], { name: "mandatebound", checkout_commit: other, locked_commit: MB_PIN, matches_lock: false });
+  const page = verifyCasePage({ outputRoot, depsDir: verifierDeps({ mandatebound: other }), lockPath: LOCK, runner });
+  assert.deepEqual(page.results[0].pins_differ, ["mandatebound"]);
+  const cli = await captureMain(["verify", "--all", "--root", outputRoot], { verifyOptions: { depsDir: verifierDeps({ mandatebound: other }), lockPath: LOCK, runner } });
+  assert.match(cli.stdout, new RegExp(`^verifier mandatebound: ${other} \\(lock ${MB_PIN}\\) differs from lock$`, "m"));
+  assert.match(cli.stdout, /^2035-05-verified verified \(recorded under other pins: mandatebound\)$/m);
+  // No Git metadata (an offline verifier copy) or an attached HEAD: unknown,
+  // never inferred from the lock.
+  const unknown = verifyCasePage({ outputRoot, depsDir: verifierDeps({ rail: null, mandatebound: null }), lockPath: LOCK, runner });
+  assert.deepEqual(unknown.verifier.map((entry) => [entry.checkout_commit, entry.matches_lock]), [[null, null], [null, null]]);
+  assert.equal(unknown.results[0].pins_differ, null);
+  const attachedDeps = verifierDeps();
+  writeFileSync(join(attachedDeps, "consequence-rail", ".git", "HEAD"), "ref: refs/heads/main\n");
+  assert.equal(verifierRevisions({ depsDir: attachedDeps, lockPath: LOCK })[0].checkout_commit, null);
+  const noLock = verifierRevisions({ depsDir: verifierDeps(), lockPath: join(tempRoot(), "missing-lock.json") });
+  assert.deepEqual(noLock.map((entry) => [entry.locked_commit, entry.matches_lock]), [[null, null], [null, null]]);
+});
+
+test("verify --all records a verifier that cannot run as an error without stopping the page", async () => {
+  const { outputRoot } = await verifyStore({ only: ["verified", "unavailable"] });
+  const runner = () => ({ status: null, stdout: "", stderr: "", error: Object.assign(new Error("spawn failed"), { code: "ENOENT" }) });
+  const page = verifyCasePage({ outputRoot, depsDir: verifierDeps(), lockPath: LOCK, runner });
+  assert.deepEqual(page.results.map((entry) => entry.status), ["error", "unavailable"]);
+  assert.match(page.results[0].reason, /replay child process error \(ENOENT\)/);
+  assert.equal(page.counts.error, 1);
 });
