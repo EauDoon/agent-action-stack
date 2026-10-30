@@ -148,7 +148,49 @@ export const DEFAULT_CHILD_TIMEOUT_MS = 30_000;
 export const CHILD_TIMEOUT_MAX_MS = 600_000;
 /** Loopback port for `aas-gui`. Override with AAS_GUI_PORT. */
 export const DEFAULT_GUI_PORT = 8787;
-const DEMO_FAULTS = new Set(["none", "duplicate"]);
+/**
+ * Every synthetic fault the pinned Consequence Rail demo accepts, per domain,
+ * in the rail's own order (`crctl demo list --json`). The integration
+ * compatibility test pins these lists to the rail catalog, and a unit test pins
+ * the GUI's embedded copy to this one.
+ */
+export const DEMO_FAULTS_BY_DOMAIN = Object.freeze({
+  refund: Object.freeze([
+    "none",
+    "duplicate",
+    "lost-response-after-commit",
+    "lost-response-before-commit",
+    "stale-evidence",
+    "remedy-failure",
+    "remedy-lost-response-after-commit",
+    "remedy-lost-response-before-commit",
+    "post-remedy-stale-evidence",
+    "post-remedy-false-evidence",
+    "permit-replay",
+    "action-mutation",
+    "tampered-bundle",
+  ]),
+  inventory: Object.freeze([
+    "none",
+    "duplicate",
+    "remedy-failure",
+    "remedy-lost-response-before-commit",
+    "remedy-lost-response-after-commit",
+    "post-remedy-stale-evidence",
+    "post-remedy-false-evidence",
+    "lost-response-before-commit",
+    "lost-response-after-commit",
+    "stale-evidence",
+  ]),
+});
+/**
+ * Faults whose rail run ends without a settlement receipt (outcome null). The
+ * rail cannot export a bundle for them, so same-case review has no evidence.
+ */
+export const NO_RECEIPT_FAULTS = Object.freeze({
+  refund: Object.freeze(["lost-response-before-commit", "action-mutation"]),
+  inventory: Object.freeze(["lost-response-before-commit"]),
+});
 const PROVE_SCENARIOS = new Set([
   "principal",
   "operator",
@@ -263,18 +305,34 @@ function validateDemoArgs(args) {
   }
 }
 
+function helpFaultList(domain) {
+  const faults = DEMO_FAULTS_BY_DOMAIN[domain];
+  const lines = [];
+  let line = `  ${domain}:`;
+  faults.forEach((fault, index) => {
+    const token = index < faults.length - 1 ? `${fault},` : fault;
+    if (line.trim() !== "" && line.length + 1 + token.length > 78) {
+      lines.push(line);
+      line = "   ";
+    }
+    line += ` ${token}`;
+  });
+  lines.push(line);
+  return lines.join("\n");
+}
+
 export function helpText() {
   return `Agent Action Stack
 
 Usage:
-  aas demo [--response pass|fail] [--fault none|duplicate] [--dispute] [--prove simulate|rail] [--domain refund|inventory] [--json]
+  aas demo [--response pass|fail] [--fault <name>] [--dispute] [--prove simulate|rail] [--domain refund|inventory] [--json]
   aas export <run-id> [--root output-dir] [--out <path>] [--overwrite] [--json]
   aas replay <bundle-file|-> [--json]
   aas latest [--root output-dir] [--json]
   aas verify <run-id> [--root output-dir] [--json]
   aas inspect <run-id> [--root output-dir] [--json|--markdown]
   aas runs [--root output-dir] [--json]
-  aas cases [--root output-dir] [--before run-id] [--limit 1..50] [--domain refund|inventory|unknown] [--outcome settled|compensated|none] [--search text] [--json]
+  aas cases [--root output-dir] [--before run-id] [--limit 1..50] [--domain refund|inventory|unknown] [--outcome settled|compensated|disputed|none] [--search text] [--json]
   aas compare <run-id> <run-id> [--root output-dir] [--json|--markdown]
   aas prune --keep <n> [--root output-dir] [--dry-run] [--json]
   aas --version [--json]
@@ -295,7 +353,8 @@ Commands:
 
 Options:
   --response pass|fail     Policy fixture to evaluate (default: pass)
-  --fault none|duplicate   Rail demo fault (default: none)
+  --fault <name>           Rail demo fault for the selected domain (default: none;
+                           see Faults below)
   --dispute                Force MandateBound prove after a settled act
   --prove simulate|rail    Prove path: canned operator simulation (default)
                            or review of the same-case rail bundle
@@ -306,7 +365,7 @@ Options:
   --overwrite              Allow --out to replace an existing file
   --before run-id          Start a cases page older than this run id
   --limit 1..50            Cases page size (default: 25)
-  --outcome settled|compensated|none
+  --outcome settled|compensated|disputed|none
                            Filter a cases page by saved act outcome
   --search text            Filter a cases page by case metadata (1 to 200 characters)
   --keep <n>               prune: keep the n newest runs, plus the latest pointer's run
@@ -321,6 +380,15 @@ Flow:
   on pass -> consequence-rail demo <domain>
   on dispute -> mandatebound simulate --scenario operator
   on dispute --prove rail -> rail bundle verify + mandatebound review
+
+Faults (--fault, per --domain; any outcome other than settled goes to prove):
+${helpFaultList("refund")}
+${helpFaultList("inventory")}
+  No settlement receipt, so --prove rail is refused (use --prove simulate):
+    refund: ${NO_RECEIPT_FAULTS.refund.join(", ")}
+    inventory: ${NO_RECEIPT_FAULTS.inventory.join(", ")}
+  permit-replay, action-mutation, and tampered-bundle also print the rail's own
+  rejection or tamper code as act_rejection or act_tamper.
 
 First-time setup:
   npm run bootstrap
@@ -751,6 +819,17 @@ export function runAct(
       optionalField(payload, "action_id", ["string", "null"], "act");
       optionalField(payload, "assurance_mode", ["string", "null"], "act");
       optionalField(payload, "bundle_verification", ["string", "null"], "act");
+      // The rail reports its own rejections (a consumed permit, a mutated
+      // action) and tamper detection in these objects, not in the outcome.
+      optionalField(payload, "expected_rejection", ["object", "null"], "act");
+      optionalField(payload, "tamper_detection", ["object", "null"], "act");
+      if (payload.expected_rejection && typeof payload.expected_rejection.code !== "string") {
+        throw new Error("act did not return a valid expected_rejection field");
+      }
+      const tamper = payload.tamper_detection;
+      if (tamper && (typeof tamper.detected !== "boolean" || (tamper.detected && typeof tamper.code !== "string"))) {
+        throw new Error("act did not return a valid tamper_detection field");
+      }
     } catch (error) {
       throw attachChildDiagnostics(error, {
         stage: "act",
@@ -1621,6 +1700,10 @@ export function printHuman(report, bundleDir = null) {
     `prove_mode: ${report.stages.prove.mode ?? "none"}`,
     `flow: ${report.flow}`,
   ];
+  // Conditional lines follow flow: so the fixed block above keeps its positions.
+  const act = report.stages.act ?? {};
+  if (typeof act.rejection_code === "string") lines.push(`act_rejection: ${clipChildStderr(act.rejection_code, 200)}`);
+  if (typeof act.tamper_code === "string") lines.push(`act_tamper: ${clipChildStderr(act.tamper_code, 200)}`);
   for (const name of STAGE_NAMES) {
     const stage = report.stages[name];
     if (!stage || (stage.status !== "error" && stage.status !== "failed")) continue;
@@ -1646,9 +1729,13 @@ export function parseDemoOptions(args) {
   if (responseName !== "pass" && responseName !== "fail") {
     throw new UsageError("--response must be pass or fail");
   }
+  const domain = option(args, "--domain", "refund");
+  if (!DEMO_DOMAINS.has(domain)) {
+    throw new UsageError("--domain must be refund or inventory");
+  }
   const fault = option(args, "--fault", "none");
-  if (!DEMO_FAULTS.has(fault)) {
-    throw new UsageError("--fault must be none or duplicate");
+  if (!DEMO_FAULTS_BY_DOMAIN[domain].includes(fault)) {
+    throw new UsageError(`--fault must be one of the ${domain} faults: ${DEMO_FAULTS_BY_DOMAIN[domain].join(", ")}`);
   }
   const forceDispute = has(args, "--dispute");
   const asJson = has(args, "--json");
@@ -1656,9 +1743,8 @@ export function parseDemoOptions(args) {
   if (!PROVE_MODES.has(proveMode)) {
     throw new UsageError("--prove must be simulate or rail");
   }
-  const domain = option(args, "--domain", "refund");
-  if (!DEMO_DOMAINS.has(domain)) {
-    throw new UsageError("--domain must be refund or inventory");
+  if (proveMode === "rail" && NO_RECEIPT_FAULTS[domain].includes(fault)) {
+    throw new UsageError(`fault ${fault} produces no settlement receipt, so --prove rail has no same-case evidence; use --prove simulate`);
   }
   return { responseName, fault, forceDispute, asJson, proveMode, domain };
 }
@@ -1795,6 +1881,10 @@ export async function runDemo(args = [], options = {}) {
       action_id: act.raw?.action_id ?? null,
       assurance_mode: act.raw?.assurance_mode ?? null,
       bundle_verification: act.raw?.bundle_verification ?? null,
+      rejection_code: typeof act.raw?.expected_rejection?.code === "string" ? act.raw.expected_rejection.code : null,
+      tamper_code: act.raw?.tamper_detection?.detected === true && typeof act.raw.tamper_detection.code === "string"
+        ? act.raw.tamper_detection.code
+        : null,
       ...(actStderr ? { stderr: actStderr } : {}),
     };
     if (!act.ok) {

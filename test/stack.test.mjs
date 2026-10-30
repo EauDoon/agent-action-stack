@@ -12,6 +12,9 @@ import { checkSyntax, listSyntaxTargets } from "../scripts/check-syntax.mjs";
 import { checkReleaseConsistency, loadReleaseInputs, parseChangelog, releaseNotes } from "../scripts/check-version.mjs";
 import {
   buildRailReviewRequest,
+  DEMO_FAULTS_BY_DOMAIN,
+  NO_RECEIPT_FAULTS,
+  parseDemoOptions,
   CHILD_JSON_LIMIT,
   exportRunBundle,
   CHILD_TIMEOUT_MAX_MS,
@@ -943,7 +946,7 @@ test("demo arguments reject unknown, duplicate, missing-value, and empty options
     /Duplicate/,
   );
   await assert.rejects(() => runDemo(["--response", "maybe"], stubOptions(tempRoot())), /must be pass or fail/);
-  await assert.rejects(() => runDemo(["--fault", "explode"], stubOptions(tempRoot())), /must be none or duplicate/);
+  await assert.rejects(() => runDemo(["--fault", "explode"], stubOptions(tempRoot())), /--fault must be one of the refund faults: none, duplicate, /);
 });
 
 test("prove rejects an empty or unknown scenario before spawning a child", () => {
@@ -1120,7 +1123,7 @@ test("CLI reports unknown commands, flags, and empty values as usage errors", as
 
   const badFault = await captureMain(["demo", "--fault", "explode"]);
   assert.equal(badFault.exitCode, 2);
-  assert.match(badFault.stderr, /--fault must be none or duplicate/);
+  assert.match(badFault.stderr, /--fault must be one of the refund faults: none, duplicate, /);
   assert.match(badFault.stderr, /Try `aas help` for usage/);
 });
 
@@ -2829,4 +2832,184 @@ test("runDemo preserves the previous case when finalization fails in any stage",
     assert.equal(readFileSync(join(outputRoot, "latest.json"), "utf8"), previous, scenario.name);
     assert.deepEqual(readdirSync(join(outputRoot, "runs")), ["previous"], scenario.name);
   }
+});
+
+function captureHuman(report, bundleDir = null) {
+  const chunks = [];
+  const originalWrite = process.stdout.write;
+  process.stdout.write = (chunk, encoding, callback) => {
+    chunks.push(String(chunk));
+    if (typeof encoding === "function") encoding();
+    else if (typeof callback === "function") callback();
+    return true;
+  };
+  try {
+    printHuman(report, bundleDir);
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+  return chunks.join("").split("\n").filter((line) => line !== "");
+}
+
+test("every rail demo fault parses for its own domain and is refused for the other", () => {
+  assert.equal(DEMO_FAULTS_BY_DOMAIN.refund.length, 13);
+  assert.equal(DEMO_FAULTS_BY_DOMAIN.inventory.length, 10);
+  for (const [domain, faults] of Object.entries(DEMO_FAULTS_BY_DOMAIN)) {
+    for (const fault of faults) {
+      const prove = NO_RECEIPT_FAULTS[domain].includes(fault) ? "simulate" : "rail";
+      assert.deepEqual(
+        parseDemoOptions(["--domain", domain, "--fault", fault, "--prove", prove]),
+        { responseName: "pass", fault, forceDispute: false, asJson: false, proveMode: prove, domain },
+      );
+    }
+  }
+  for (const fault of ["permit-replay", "action-mutation", "tampered-bundle"]) {
+    assert.throws(
+      () => parseDemoOptions(["--domain", "inventory", "--fault", fault]),
+      (error) => error.name === "UsageError" && /--fault must be one of the inventory faults: none, duplicate, /.test(error.message),
+    );
+  }
+  assert.throws(() => parseDemoOptions(["--fault", "explode"]), /refund faults/);
+  assert.throws(() => parseDemoOptions(["--domain", "inventory", "--fault", "explode"]), /inventory faults/);
+});
+
+test("same-case review of a no-receipt fault is a usage error before any probe or bundle", async () => {
+  for (const [domain, faults] of Object.entries(NO_RECEIPT_FAULTS)) {
+    for (const fault of faults) {
+      const outputRoot = tempRoot();
+      let actCalls = 0;
+      await assert.rejects(
+        () => runDemo(["--domain", domain, "--fault", fault, "--prove", "rail"], stubOptions(outputRoot, {
+          runActFn: async () => { actCalls += 1; return { ok: true, raw: { outcome: null }, status: 0 }; },
+        })),
+        (error) => error.name === "UsageError"
+          && error.message === `fault ${fault} produces no settlement receipt, so --prove rail has no same-case evidence; use --prove simulate`,
+      );
+      assert.equal(actCalls, 0);
+      assert.equal(existsSync(join(outputRoot, "runs")), false, `${domain} ${fault} wrote a case`);
+      assert.equal(existsSync(join(outputRoot, "latest.json")), false);
+    }
+  }
+  // main validates before the Node.js floor and the Python probe: an
+  // unusable runtime still reports the usage error with exit 2.
+  const result = await captureMain(["demo", "--fault", "action-mutation", "--prove", "rail"], { nodeVersion: "20.0.0" });
+  assert.equal(result.exitCode, 2);
+  assert.match(result.stderr, /fault action-mutation produces no settlement receipt/);
+  assert.equal(result.stdout, "");
+});
+
+test("a no-receipt fault with the canned simulation goes to prove with a null outcome", async () => {
+  const outputRoot = tempRoot();
+  const result = await runDemo(["--fault", "lost-response-before-commit"], stubOptions(outputRoot, {
+    runId: "no-receipt-run",
+    runActFn: async () => ({ ok: true, raw: { outcome: null, state: "FAILED", fault: "lost-response-before-commit", action_id: "act-n", expected_rejection: null, tamper_detection: null }, status: 0 }),
+  }));
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.report.stages.act.outcome, null);
+  assert.equal(result.report.stages.prove.status, "passed");
+  assert.equal(result.report.stages.prove.mode, "simulate");
+  assert.equal(result.report.stages.prove.triggered_by, "act_outcome=null");
+  const lines = captureHuman(result.report);
+  assert.ok(lines.includes("act_outcome: none"));
+  assert.ok(lines.includes("act_state: FAILED"));
+});
+
+test("a disputed rail outcome records a same-case review and the case history can filter it", async () => {
+  const outputRoot = tempRoot();
+  let reviewed = null;
+  const disputed = await runDemo(["--fault", "stale-evidence", "--prove", "rail"], stubOptions(outputRoot, {
+    runId: "2035-disputed-run",
+    runActFn: async () => ({ ok: true, raw: { outcome: "disputed", state: "CLOSED", fault: "stale-evidence", action_id: "act-d", expected_rejection: null, tamper_detection: null, rail_bundle: { action: { action_id: "act-d" } } }, status: 0 }),
+    runProveRailFn: async (bundle) => {
+      reviewed = bundle;
+      return { ok: true, raw: { ok: true, result: { verdict: "recorded", reviewId: "review-d", actionId: "act-d" } }, status: 0 };
+    },
+  }));
+  assert.equal(disputed.exitCode, 0);
+  assert.deepEqual(reviewed, { action: { action_id: "act-d" } });
+  assert.equal(disputed.report.stages.act.outcome, "disputed");
+  assert.equal(disputed.report.stages.act.rejection_code, null);
+  assert.equal(disputed.report.stages.act.tamper_code, null);
+  assert.equal(disputed.report.stages.prove.mode, "rail-review");
+  assert.equal(disputed.report.stages.prove.triggered_by, "act_outcome=disputed");
+  assert.equal(disputed.report.stages.prove.review_verdict, "recorded");
+  assert.equal(disputed.report.requested_options.fault, "stale-evidence");
+  await runDemo([], stubOptions(outputRoot, { runId: "2035-settled-run" }));
+  const filtered = await captureMain(["cases", "--root", outputRoot, "--outcome", "disputed", "--json"]);
+  assert.equal(filtered.exitCode, 0);
+  assert.deepEqual(JSON.parse(filtered.stdout).cases.map((entry) => entry.run_id), ["2035-disputed-run"]);
+  const settled = await captureMain(["cases", "--root", outputRoot, "--outcome", "settled", "--json"]);
+  assert.deepEqual(JSON.parse(settled.stdout).cases.map((entry) => entry.run_id), ["2035-settled-run"]);
+  const bogus = await captureMain(["cases", "--root", outputRoot, "--outcome", "unresolved"]);
+  assert.equal(bogus.exitCode, 2);
+  assert.match(bogus.stderr, /Invalid outcome filter/);
+});
+
+test("the rail's rejection and tamper codes reach the report and print only when present", async () => {
+  const outputRoot = tempRoot();
+  const permit = await runDemo(["--fault", "permit-replay"], stubOptions(outputRoot, {
+    runId: "permit-run",
+    runActFn: async () => ({ ok: true, raw: { outcome: "settled", state: "CLOSED", fault: "permit-replay", action_id: "act-p", expected_rejection: { code: "PERMIT_USED", message: "consumed" }, tamper_detection: null }, status: 0 }),
+  }));
+  assert.equal(permit.report.stages.act.rejection_code, "PERMIT_USED");
+  assert.equal(permit.report.stages.act.tamper_code, null);
+  assert.equal(permit.report.stages.prove.status, "skipped");
+  const permitLines = captureHuman(permit.report, permit.bundleDir);
+  assert.equal(permitLines[12], "flow: decide -> act");
+  assert.equal(permitLines[13], "act_rejection: PERMIT_USED");
+  assert.equal(permitLines.some((line) => line.startsWith("act_tamper:")), false);
+  assert.equal(permitLines.at(-1), `bundle: ${permit.bundleDir}`);
+
+  const tampered = await runDemo(["--fault", "tampered-bundle"], stubOptions(outputRoot, {
+    runId: "tamper-run",
+    runActFn: async () => ({ ok: true, raw: { outcome: "settled", state: "CLOSED", fault: "tampered-bundle", action_id: "act-t", expected_rejection: null, tamper_detection: { detected: true, code: "BUNDLE_TAMPERED" } }, status: 0 }),
+  }));
+  assert.equal(tampered.report.stages.act.tamper_code, "BUNDLE_TAMPERED");
+  assert.equal(tampered.report.stages.act.rejection_code, null);
+  const tamperedLines = captureHuman(tampered.report);
+  assert.equal(tamperedLines[13], "act_tamper: BUNDLE_TAMPERED");
+  assert.equal(tamperedLines.some((line) => line.startsWith("act_rejection:")), false);
+
+  const undetected = await runDemo([], stubOptions(outputRoot, {
+    runId: "undetected-run",
+    runActFn: async () => ({ ok: true, raw: { outcome: "settled", state: "CLOSED", fault: "none", action_id: "act-u", tamper_detection: { detected: false, code: null } }, status: 0 }),
+  }));
+  assert.equal(undetected.report.stages.act.tamper_code, null);
+  const plain = captureHuman(undetected.report);
+  assert.equal(plain.length, 13);
+  assert.equal(plain.some((line) => /^act_(rejection|tamper):/.test(line)), false);
+});
+
+test("act rejects malformed rejection and tamper objects from the rail", () => {
+  const act = (extra) => runAct("none", {
+    depsDir: tempRoot(),
+    runner: () => ({ status: 0, stdout: JSON.stringify({ outcome: "settled", state: "CLOSED", ...extra }), stderr: "", error: null }),
+  });
+  for (const [extra, field] of [
+    [{ expected_rejection: "PERMIT_USED" }, "expected_rejection"],
+    [{ expected_rejection: { code: 7 } }, "expected_rejection"],
+    [{ tamper_detection: [] }, "tamper_detection"],
+    [{ tamper_detection: { detected: "yes" } }, "tamper_detection"],
+    [{ tamper_detection: { detected: true } }, "tamper_detection"],
+  ]) {
+    assert.throws(() => act(extra), (error) => {
+      assert.match(error.message, new RegExp(`valid ${field} field`));
+      assert.equal(error.code, DIAGNOSTIC.CHILD_JSON);
+      return true;
+    }, JSON.stringify(extra));
+  }
+  assert.equal(act({ expected_rejection: null, tamper_detection: { detected: false, code: null } }).ok, true);
+  assert.equal(act({ expected_rejection: { code: "DIGEST_MISMATCH", message: "m" } }).ok, true);
+});
+
+test("CLI help lists every fault per domain and the disputed outcome filter", () => {
+  const text = helpText();
+  const faults = text.split("Faults (")[1].split("First-time setup:")[0];
+  const refund = faults.split("refund:")[1].split("inventory:")[0];
+  const inventory = faults.split("inventory:")[1].split("No settlement receipt")[0];
+  for (const fault of DEMO_FAULTS_BY_DOMAIN.refund) assert.match(refund, new RegExp(`(?:^|[\\s,])${fault}(?:,|\\s|$)`), fault);
+  for (const fault of DEMO_FAULTS_BY_DOMAIN.inventory) assert.match(inventory, new RegExp(`(?:^|[\\s,])${fault}(?:,|\\s|$)`), fault);
+  assert.doesNotMatch(inventory, /permit-replay|action-mutation|tampered-bundle/);
+  assert.match(text, /--outcome settled\|compensated\|disputed\|none/);
+  for (const line of faults.split("\n")) assert.ok(line.length <= 80, `fault help line too long: ${line}`);
 });

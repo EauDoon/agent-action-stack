@@ -130,6 +130,63 @@ function checkIndependentReplay(sourcePath) {
   }
 }
 
+/**
+ * The rail faults beyond none and duplicate: a disputed outcome reviewed and
+ * replayed, an inventory remedy failure, an action that never got a receipt,
+ * the rail's own rejection code, and the up-front refusal of same-case review
+ * for a fault with no receipt.
+ */
+function checkFaultMatrix() {
+  runDemo(["--fault", "stale-evidence", "--prove", "rail"]);
+  {
+    const { bundleDir, manifest } = latestBundle();
+    const report = readJson(join(bundleDir, "report.json"));
+    check(report.stages.act?.outcome === "disputed", `disputed path: act outcome ${report.stages.act?.outcome}`);
+    check(manifest.stages.prove?.status === "passed", "disputed path: prove did not pass");
+    check(report.stages.prove?.mode === "rail-review" && report.stages.prove?.review_verdict === "recorded",
+      "disputed path: same-case review not recorded");
+    check(report.stages.prove?.triggered_by === "act_outcome=disputed", "disputed path: wrong trigger");
+    const casePath = join(root, ".out", `disputed-${manifest.run_id}.json`);
+    const exported = run(process.execPath, ["./bin/aas.mjs", "export", manifest.run_id, "--out", casePath]);
+    check(exported.status === 0, `disputed path: export failed: ${exported.stderr.slice(-300)}`);
+    const replayed = run(process.execPath, ["./bin/aas.mjs", "replay", casePath, "--json"]);
+    check(replayed.status === 0 && JSON.parse(replayed.stdout).ok === true,
+      `disputed path: replay failed: ${replayed.stdout.slice(-400)}${replayed.stderr.slice(-300)}`);
+  }
+
+  runDemo(["--domain", "inventory", "--fault", "remedy-failure", "--prove", "rail"]);
+  {
+    const { bundleDir, manifest } = latestBundle();
+    const report = readJson(join(bundleDir, "report.json"));
+    check(report.stages.act?.outcome === "disputed", `inventory remedy-failure: act outcome ${report.stages.act?.outcome}`);
+    check(manifest.stages.prove?.status === "passed" && report.stages.prove?.review_verdict === "recorded",
+      "inventory remedy-failure: same-case review not recorded");
+  }
+
+  runDemo(["--fault", "lost-response-before-commit"]);
+  {
+    const { bundleDir } = latestBundle();
+    const report = readJson(join(bundleDir, "report.json"));
+    check(report.stages.act?.outcome === null && report.stages.act?.state === "FAILED",
+      `no-receipt path: act outcome ${report.stages.act?.outcome} state ${report.stages.act?.state}`);
+    check(report.stages.prove?.mode === "simulate" && report.stages.prove?.triggered_by === "act_outcome=null",
+      "no-receipt path: prove did not run the canned simulation for a null outcome");
+  }
+
+  const permit = runDemo(["--fault", "permit-replay"]);
+  if (permit.status === 0) {
+    const report = JSON.parse(permit.stdout);
+    check(report.stages.act?.rejection_code === "PERMIT_USED", `permit-replay: rejection_code ${report.stages.act?.rejection_code}`);
+    check(report.stages.act?.tamper_code === null, "permit-replay: unexpected tamper_code");
+  }
+
+  const before = readFileSync(join(root, ".out", "latest.json"));
+  const refused = run(process.execPath, ["./bin/aas.mjs", "demo", "--fault", "action-mutation", "--prove", "rail"]);
+  check(refused.status === 2 && /produces no settlement receipt/.test(refused.stderr),
+    `no-receipt rail review: expected a usage refusal, got ${refused.status}: ${refused.stderr.slice(-300)}`);
+  check(readFileSync(join(root, ".out", "latest.json")).equals(before), "no-receipt rail review moved the latest pointer");
+}
+
 async function main() {
   assertFullStackNodeVersion();
 
@@ -353,6 +410,8 @@ async function main() {
     );
   }
 
+  checkFaultMatrix();
+
   const cases = run(process.execPath, ["./bin/aas.mjs", "cases", "--json"]);
   check(cases.status === 0, `cases failed: ${cases.stderr.slice(-300)}`);
   if (cases.status === 0) {
@@ -381,7 +440,7 @@ async function main() {
     process.exit(1);
   }
   process.stdout.write(
-    `integration check: ${components.length} pinned dependencies verified across pass, refusal, dispute, settled-review, and rail-review paths\n`,
+    `integration check: ${components.length} pinned dependencies verified across pass, refusal, dispute, settled-review, rail-review, disputed, and no-receipt paths\n`,
   );
 }
 

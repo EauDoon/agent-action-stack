@@ -308,16 +308,51 @@ selector. Everything remains synthetic: no warehouse,
 merchant, payment, or external provider integration is involved, and a
 recorded review proves the handoff rather than any real-world reversibility.
 
+### Rail faults
+
+`--fault` accepts every synthetic fault the pinned rail demo offers for the
+selected domain: 13 for `refund` and 10 for `inventory`. `aas help` lists
+them, and a fault the other domain does not offer is a usage error (exit 2).
+Any outcome other than `settled` goes to prove:
+
+| Rail outcome | Refund faults | Inventory faults |
+| --- | --- | --- |
+| `settled` | `none`, `lost-response-after-commit`, `permit-replay`, `tampered-bundle` | `none`, `lost-response-after-commit` |
+| `compensated` | `duplicate`, `remedy-lost-response-after-commit` | the same two |
+| `disputed` | `stale-evidence`, `remedy-failure`, `remedy-lost-response-before-commit`, `post-remedy-stale-evidence`, `post-remedy-false-evidence` | the same five |
+| none (no receipt) | `lost-response-before-commit`, `action-mutation` | `lost-response-before-commit` |
+
+```bash
+node ./bin/aas.mjs demo --fault stale-evidence --prove rail
+node ./bin/aas.mjs cases --outcome disputed
+```
+
+A disputed outcome is reviewed, exported, and replayed exactly like a
+compensated one. A fault with no receipt has no rail bundle to review, so
+`--prove rail` is refused with exit 2 before anything runs; the canned
+simulation (`--prove simulate`, the default) still runs, triggered by
+`act_outcome=null`. Three refund faults exist to show the rail refusing
+something: `permit-replay` (a consumed permit, `PERMIT_USED`),
+`action-mutation` (changed parameters, `DIGEST_MISMATCH`), and
+`tampered-bundle` (a tampered copy of the bundle, `BUNDLE_TAMPERED`). Their
+outcome alone would look like an ordinary run, so the report carries the
+rail's code as `stages.act.rejection_code` or `stages.act.tamper_code`
+(null otherwise), and the human output adds `act_rejection:` or
+`act_tamper:` after `flow:` only when there is a code.
+
 ## Guided case workbench
 
-The local GUI includes four explicit synthetic scenario presets: clean settlement,
-policy refusal, duplicate compensation with same-case review, and settled-action
-review. Apply a preset, select refund or inventory, then press **Run stack**.
-Applying a preset never starts work. Domain identity is persisted in new reports;
+The local GUI includes five explicit synthetic scenario presets: clean settlement,
+policy refusal, duplicate compensation with same-case review, settled-action
+review, and disputed outcome review (`stale-evidence` with same-case review).
+Apply a preset, select refund or inventory, then press **Run stack**.
+Applying a preset never starts work. The Fault selector lists the selected
+domain's rail faults; switching domain keeps the chosen fault when the new
+domain offers it and otherwise resets it to `none`. Domain identity is persisted in new reports;
 older bundles display an unknown domain instead of guessing.
 
 Load recent case history to search run identity, policy, domain, or review metadata
-and filter settled or compensated outcomes. Filters affect the displayed list;
+and filter settled, compensated, or disputed outcomes, or cases with no outcome. Filters affect the displayed list;
 comparison selectors retain all loaded cases. History is bounded and may omit older
 or unreadable cases. **Inspect left case** loads a saved report and its bindings in
 a separate panel and enables an identity-checked download. Inspection does not
@@ -378,4 +413,4 @@ Case-review Markdown now carries all five requested settings and a policy-failur
 
 Case reviews classify verification readiness as unavailable, conflicting, or ready and explain the next read-only step. Ready means that recorded action identity and recomputed digest agree; it does not mean receipts are verified. Missing rail evidence, missing reviews, and conflicting bindings receive separate recovery guidance.
 
-Terminal case history supports --domain refund|inventory|unknown, --outcome settled|compensated|none, and --search text (case-insensitive, 1 to 200 characters). Filters combine and inspect summary metadata only. They apply within each bounded page: an empty filtered page can still have next_cursor, and callers must keep the same filters when continuing.
+Terminal case history supports --domain refund|inventory|unknown, --outcome settled|compensated|disputed|none, and --search text (case-insensitive, 1 to 200 characters). Filters combine and inspect summary metadata only. They apply within each bounded page: an empty filtered page can still have next_cursor, and callers must keep the same filters when continuing.

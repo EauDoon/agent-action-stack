@@ -6,6 +6,27 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- `aas demo --fault` accepts every synthetic fault the pinned rail demo
+  offers: 13 for `refund` and 10 for `inventory`, validated against the
+  selected `--domain` (before, only `none` and `duplicate`). Disputed
+  outcomes (`stale-evidence`, `remedy-failure`, and three post-remedy
+  faults) now reach same-case review, export, and replay, and an action
+  that ends without a receipt (`lost-response-before-commit`,
+  `action-mutation`) reaches the canned simulation with `act_outcome=null`.
+  `--prove rail` with a fault that has no receipt is refused with exit 2
+  before anything runs or is written. The report gains optional
+  `stages.act.rejection_code` and `stages.act.tamper_code` (the rail's
+  `PERMIT_USED`, `DIGEST_MISMATCH`, and `BUNDLE_TAMPERED`, null otherwise),
+  and the human output prints them as `act_rejection:` and `act_tamper:`
+  after `flow:` only when present, so `permit-replay` and `tampered-bundle`
+  no longer look identical to `none`. `aas cases --outcome disputed` filters
+  disputed cases. The GUI's Fault selector follows the selected domain,
+  `/api/run` validates the fault per domain, the history Outcome filter
+  gains `disputed` and `none`, and a fifth preset, **Disputed outcome
+  review**, runs `stale-evidence` with same-case review. Cases saved by
+  0.3.0 load unchanged.
+
 ### Fixed
 - Case persistence now checks the exact formatted UTF-8 replay budget before writing files. Oversized combined evidence is rejected without publishing an unreadable case or replacing the previous latest pointer.
 - GUI import replay now decodes an uploaded case the way `aas replay` does. The page uploads the file's bytes unchanged and the server refuses invalid UTF-8 with HTTP 400; before, both sides replaced invalid bytes with U+FFFD, so a case file the CLI refuses could show "replay verified" in the GUI. A leading byte order mark is accepted, as the CLI accepts it.

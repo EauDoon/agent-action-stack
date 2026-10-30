@@ -12,8 +12,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { stageDetailsModel, validatedRunSettings, scenarioPreset, filterHistory, bindingsModel, compareModel, createGuiServer, historyModel, renderPage, replayHttpStatus, replayResultModel, startGui, summaryModel } from "../bin/aas-gui.mjs";
-import { compareRuns, exportRunBundle, runDemo, selectPython } from "../bin/aas.mjs";
+import { demoFaults, faultOptions, stageDetailsModel, validatedRunSettings, scenarioPreset, filterHistory, bindingsModel, compareModel, createGuiServer, historyModel, renderPage, replayHttpStatus, replayResultModel, startGui, summaryModel } from "../bin/aas-gui.mjs";
+import { compareRuns, DEMO_FAULTS_BY_DOMAIN, exportRunBundle, runDemo, selectPython } from "../bin/aas.mjs";
 
 const provenance = [
   { name: "constitutional-agent-testbench", repository: "https://github.com/EauDoon/constitutional-agent-testbench.git", commit: "a7a51907eaaab68a52b66edef28b3ee0fcb3ff97", detached: true, clean: true, entrypoints: [] },
@@ -1422,4 +1422,129 @@ test("GUI history answers store refusals with 422, worker failures with 500, and
     release();
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test("the page's embedded fault lists equal the orchestrator's per-domain lists", () => {
+  assert.deepEqual(Object.keys(DEMO_FAULTS_BY_DOMAIN).sort(), ["inventory", "refund"]);
+  for (const [domain, faults] of Object.entries(DEMO_FAULTS_BY_DOMAIN)) {
+    assert.deepEqual(demoFaults(domain), [...faults], domain);
+    assert.equal(faultOptions(domain), faults.map((fault) => `<option value="${fault}">${fault}</option>`).join(""));
+  }
+  assert.deepEqual(demoFaults("__proto__"), []);
+  assert.deepEqual(demoFaults("unknown"), []);
+  // The rendered page starts with the refund list, the default domain.
+  assert.match(renderPage(), new RegExp(`<select id="fault">${faultOptions("refund")}</select>`));
+  assert.match(renderPage(), /<option value="disputed">Disputed outcome review<\/option>/);
+  assert.match(renderPage(), /<option value="disputed">disputed<\/option><option value="none">none \(no outcome\)<\/option>/);
+});
+
+test("GUI runs accept every fault of the selected domain and refuse cross-domain or no-receipt rail runs", async () => {
+  const seen = [];
+  const server = createGuiServer({
+    outputRoot: mkdtempSync(join(tmpdir(), "agent-action-stack-gui-faults-")),
+    runDemoFn: (args, options) => {
+      seen.push(args);
+      return runDemo(args, {
+        ...options,
+        componentResolver: () => provenance,
+        runDecideFn: async () => ({ ok: true, raw: { passed: true }, status: 0 }),
+        runActFn: async () => ({ ok: true, raw: { outcome: "settled", state: "CLOSED" }, status: 0 }),
+        runProveRailFn: async () => ({ ok: true, raw: { ok: true, result: { verdict: "recorded" } }, status: 0 }),
+      });
+    },
+    runOptions: { python: { bin: "python3", prefix: [], version: [3, 12] } },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const headers = { origin: `http://127.0.0.1:${server.address().port}` };
+  try {
+    const accepted = await requestServer(server, "/api/run?domain=inventory&fault=stale-evidence&prove=rail", { method: "POST", headers });
+    assert.equal(accepted.status, 200, accepted.body);
+    assert.deepEqual(seen.at(-1), ["--response", "pass", "--fault", "stale-evidence", "--json", "--domain", "inventory", "--prove", "rail"]);
+    const simulated = await requestServer(server, "/api/run?fault=lost-response-before-commit", { method: "POST", headers });
+    assert.equal(simulated.status, 200, simulated.body);
+    const calls = seen.length;
+    for (const query of ["domain=inventory&fault=permit-replay", "domain=inventory&fault=tampered-bundle", "fault=explode", "domain=refund&fault="]) {
+      const refused = await requestServer(server, `/api/run?${query}`, { method: "POST", headers });
+      assert.equal(refused.status, 400, query);
+      assert.deepEqual(JSON.parse(refused.body), { error: "Invalid options" }, query);
+    }
+    for (const query of ["fault=action-mutation&prove=rail", "fault=lost-response-before-commit&prove=rail", "domain=inventory&fault=lost-response-before-commit&prove=rail"]) {
+      const refused = await requestServer(server, `/api/run?${query}`, { method: "POST", headers });
+      assert.equal(refused.status, 400, query);
+      assert.match(JSON.parse(refused.body).error, /produces no settlement receipt, so same-case rail review has no evidence/, query);
+    }
+    assert.equal(seen.length, calls, "a refused option combination started a run");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("switching domain rebuilds the fault choices and keeps only a fault the new domain offers", () => {
+  const document = stubDocument();
+  new Function("document", "fetch", "crypto", pageScript())(document, () => { throw new Error("must not fetch"); }, globalThis.crypto);
+  document.elements.domain.value = "inventory";
+  document.elements.fault.value = "permit-replay";
+  document.elements.domain.listeners.change();
+  assert.equal(document.elements.fault.innerHTML, faultOptions("inventory"));
+  assert.equal(document.elements.fault.value, "none");
+  document.elements.fault.value = "stale-evidence";
+  document.elements.domain.value = "refund";
+  document.elements.domain.listeners.change();
+  assert.equal(document.elements.fault.innerHTML, faultOptions("refund"));
+  assert.equal(document.elements.fault.value, "stale-evidence");
+});
+
+test("saved settings restore the domain before its fault, and presets cover the disputed review", async () => {
+  const outputRoot = mkdtempSync(join(tmpdir(), "aas-settings-faults-"));
+  const result = await runDemo(["--domain", "inventory", "--fault", "remedy-failure", "--prove", "rail"], {
+    paths: { outputRoot }, componentResolver: () => [], runId: "restore-faults",
+    runDecideFn: async () => ({ ok: false, raw: { passed: false }, status: 0 }),
+  });
+  assert.deepEqual(validatedRunSettings(result.report), { domain: "inventory", response: "pass", fault: "remedy-failure", prove: "rail", dispute: false });
+  assert.equal(validatedRunSettings({ requested_options: { ...result.report.requested_options, fault: "permit-replay" } }), null);
+  assert.deepEqual(validatedRunSettings({ requested_options: { ...result.report.requested_options, domain: "refund", fault: "permit-replay" } }).fault, "permit-replay");
+
+  const document = stubDocument();
+  const bundle = exportRunBundle("restore-faults", { outputRoot });
+  new Function("document", "fetch", "crypto", pageScript())(document, async () => ({ json: async () => bundle }), globalThis.crypto);
+  document.elements["saved-case-id"].value = "restore-faults";
+  await document.elements["lookup-case"].listeners.click();
+  assert.equal(document.elements["restore-settings"].disabled, false);
+  document.elements.domain.value = "refund";
+  document.elements.fault.value = "none";
+  document.elements["restore-settings"].listeners.click();
+  assert.equal(document.elements.domain.value, "inventory");
+  assert.equal(document.elements.fault.innerHTML, faultOptions("inventory"));
+  assert.equal(document.elements.fault.value, "remedy-failure");
+  assert.equal(document.elements.prove.value, "rail");
+
+  assert.deepEqual(
+    { ...scenarioPreset("disputed"), note: undefined },
+    { response: "pass", fault: "stale-evidence", prove: "rail", dispute: false, note: undefined },
+  );
+  for (const domain of ["refund", "inventory"]) assert.ok(demoFaults(domain).includes(scenarioPreset("disputed").fault));
+  document.elements.scenario.value = "disputed";
+  document.elements["apply-scenario"].listeners.click();
+  assert.equal(document.elements.fault.value, "stale-evidence");
+  assert.match(document.elements["scenario-note"].textContent, /disputed/);
+});
+
+test("history outcome filter covers disputed and cases without an outcome", () => {
+  const cases = [
+    { run_id: "A", outcome: "settled" },
+    { run_id: "B", outcome: "disputed" },
+    { run_id: "C", outcome: null },
+    { run_id: "D" },
+  ];
+  assert.deepEqual(filterHistory(cases, "", "disputed").map((entry) => entry.run_id), ["B"]);
+  assert.deepEqual(filterHistory(cases, "", "none").map((entry) => entry.run_id), ["C", "D"]);
+  assert.deepEqual(filterHistory(cases, "", "").map((entry) => entry.run_id), ["A", "B", "C", "D"]);
+  assert.deepEqual(filterHistory(cases, "c", "none").map((entry) => entry.run_id), ["C"]);
+});
+
+test("the run summary names the rail's rejection and tamper codes", () => {
+  const html = summaryModel({ flow: "decide -> act", stages: { act: { status: "passed", outcome: "settled", rejection_code: "PERMIT_USED", tamper_code: "BUNDLE_<TAMPERED>" } } });
+  assert.match(html, /rail rejection PERMIT_USED/);
+  assert.match(html, /rail tamper detection BUNDLE_&lt;TAMPERED&gt;/);
+  assert.doesNotMatch(summaryModel({ stages: { act: { status: "passed", rejection_code: null, tamper_code: null } } }), /rail rejection|tamper/);
 });
