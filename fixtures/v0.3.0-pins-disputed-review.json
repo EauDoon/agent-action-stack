@@ -1,0 +1,693 @@
+{
+  "manifest": {
+    "schema_version": "agent-action-stack.run/v1",
+    "run_id": "2026-10-30T191457954Z-488ba1a6-85a",
+    "created_at": "2026-10-30T19:14:58.687Z",
+    "exit_code": 0,
+    "stack_version": "0.3.0",
+    "component_provenance": [
+      {
+        "name": "constitutional-agent-testbench",
+        "repository": "https://github.com/EauDoon/constitutional-agent-testbench.git",
+        "commit": "ed46f0cb9af400560aa9a9e73bbb9864ed5678a0",
+        "origin": "https://github.com/EauDoon/constitutional-agent-testbench.git",
+        "detached": true,
+        "clean": true,
+        "entrypoints": [
+          "pyproject.toml",
+          "src/constitutional_agent_testbench/cli.py"
+        ]
+      },
+      {
+        "name": "consequence-rail",
+        "repository": "https://github.com/EauDoon/consequence-rail.git",
+        "commit": "78d6f8a23dbce69bb443b453c8d471645f67daac",
+        "origin": "https://github.com/EauDoon/consequence-rail.git",
+        "detached": true,
+        "clean": true,
+        "entrypoints": [
+          "package.json",
+          "cmd/crctl.js"
+        ]
+      },
+      {
+        "name": "mandatebound",
+        "repository": "https://github.com/EauDoon/mandatebound.git",
+        "commit": "32d525618e23678f86c754e4a536e4d094988a1b",
+        "origin": "https://github.com/EauDoon/mandatebound.git",
+        "detached": true,
+        "clean": true,
+        "entrypoints": [
+          "package.json",
+          "package-lock.json",
+          "src/cli.ts",
+          "dist/cli.js"
+        ]
+      }
+    ],
+    "stages": {
+      "decide": {
+        "status": "passed",
+        "reason": null,
+        "code": null,
+        "stderr": null,
+        "artifact": "stages/decide.json"
+      },
+      "act": {
+        "status": "passed",
+        "reason": null,
+        "code": null,
+        "stderr": null,
+        "artifact": "stages/act.json"
+      },
+      "prove": {
+        "status": "passed",
+        "reason": null,
+        "code": null,
+        "stderr": null,
+        "artifact": "stages/prove.json"
+      }
+    },
+    "report": "report.json"
+  },
+  "report": {
+    "stack": "agent-action-stack",
+    "stack_version": "0.3.0",
+    "response": "pass",
+    "requested_options": {
+      "response": "pass",
+      "domain": "refund",
+      "fault": "stale-evidence",
+      "prove": "rail",
+      "dispute": false
+    },
+    "domain": "refund",
+    "flow": "decide -> act -> prove",
+    "run_id": "2026-10-30T191457954Z-488ba1a6-85a",
+    "component_provenance": [
+      {
+        "name": "constitutional-agent-testbench",
+        "repository": "https://github.com/EauDoon/constitutional-agent-testbench.git",
+        "commit": "ed46f0cb9af400560aa9a9e73bbb9864ed5678a0",
+        "origin": "https://github.com/EauDoon/constitutional-agent-testbench.git",
+        "detached": true,
+        "clean": true,
+        "entrypoints": [
+          "pyproject.toml",
+          "src/constitutional_agent_testbench/cli.py"
+        ]
+      },
+      {
+        "name": "consequence-rail",
+        "repository": "https://github.com/EauDoon/consequence-rail.git",
+        "commit": "78d6f8a23dbce69bb443b453c8d471645f67daac",
+        "origin": "https://github.com/EauDoon/consequence-rail.git",
+        "detached": true,
+        "clean": true,
+        "entrypoints": [
+          "package.json",
+          "cmd/crctl.js"
+        ]
+      },
+      {
+        "name": "mandatebound",
+        "repository": "https://github.com/EauDoon/mandatebound.git",
+        "commit": "32d525618e23678f86c754e4a536e4d094988a1b",
+        "origin": "https://github.com/EauDoon/mandatebound.git",
+        "detached": true,
+        "clean": true,
+        "entrypoints": [
+          "package.json",
+          "package-lock.json",
+          "src/cli.ts",
+          "dist/cli.js"
+        ]
+      }
+    ],
+    "stages": {
+      "decide": {
+        "status": "passed",
+        "passed": true,
+        "policy_id": "aas-refund-gate-v1",
+        "rule_results": [
+          {
+            "kind": "required_field",
+            "passed": true,
+            "path": "summary",
+            "reason_code": "RULE_SATISFIED",
+            "rule_id": "summary-present"
+          },
+          {
+            "kind": "equals",
+            "passed": true,
+            "path": "decision",
+            "reason_code": "RULE_SATISFIED",
+            "rule_id": "decision-accept"
+          },
+          {
+            "kind": "one_of",
+            "passed": true,
+            "path": "action_type",
+            "reason_code": "RULE_SATISFIED",
+            "rule_id": "action-is-refund"
+          },
+          {
+            "kind": "one_of",
+            "passed": true,
+            "path": "risk_level",
+            "reason_code": "RULE_SATISFIED",
+            "rule_id": "risk-allowed"
+          },
+          {
+            "kind": "false",
+            "passed": true,
+            "path": "blocked",
+            "reason_code": "RULE_SATISFIED",
+            "rule_id": "blocked-is-false"
+          },
+          {
+            "kind": "equals",
+            "passed": true,
+            "path": "recourse_required",
+            "reason_code": "RULE_SATISFIED",
+            "rule_id": "recourse-required"
+          }
+        ],
+        "error": null
+      },
+      "act": {
+        "status": "passed",
+        "outcome": "disputed",
+        "state": "CLOSED",
+        "fault": "stale-evidence",
+        "action_id": "act_x4ZgajdJZH1SM33KmKCU",
+        "assurance_mode": "enforced",
+        "bundle_verification": "pass",
+        "rejection_code": null,
+        "tamper_code": null
+      },
+      "prove": {
+        "status": "passed",
+        "mode": "rail-review",
+        "scenario": null,
+        "triggered_by": "act_outcome=disputed",
+        "ok": true,
+        "result_keys": [
+          "format",
+          "reviewId",
+          "source",
+          "actionId",
+          "evidenceDigest",
+          "receipt",
+          "upstream",
+          "verdict",
+          "legalEffect",
+          "reviewDigest"
+        ],
+        "review_verdict": "recorded",
+        "review_id": "review-28a6f0a0c99d7447",
+        "review_action_id": "act_x4ZgajdJZH1SM33KmKCU"
+      }
+    }
+  },
+  "stages": {
+    "decide": {
+      "passed": true,
+      "policy_id": "aas-refund-gate-v1",
+      "rule_results": [
+        {
+          "kind": "required_field",
+          "passed": true,
+          "path": "summary",
+          "reason_code": "RULE_SATISFIED",
+          "rule_id": "summary-present"
+        },
+        {
+          "kind": "equals",
+          "passed": true,
+          "path": "decision",
+          "reason_code": "RULE_SATISFIED",
+          "rule_id": "decision-accept"
+        },
+        {
+          "kind": "one_of",
+          "passed": true,
+          "path": "action_type",
+          "reason_code": "RULE_SATISFIED",
+          "rule_id": "action-is-refund"
+        },
+        {
+          "kind": "one_of",
+          "passed": true,
+          "path": "risk_level",
+          "reason_code": "RULE_SATISFIED",
+          "rule_id": "risk-allowed"
+        },
+        {
+          "kind": "false",
+          "passed": true,
+          "path": "blocked",
+          "reason_code": "RULE_SATISFIED",
+          "rule_id": "blocked-is-false"
+        },
+        {
+          "kind": "equals",
+          "passed": true,
+          "path": "recourse_required",
+          "reason_code": "RULE_SATISFIED",
+          "rule_id": "recourse-required"
+        }
+      ]
+    },
+    "act": {
+      "scenario": "synthetic-refund",
+      "fault": "stale-evidence",
+      "action_id": "act_x4ZgajdJZH1SM33KmKCU",
+      "state": "CLOSED",
+      "outcome": "disputed",
+      "assurance_mode": "enforced",
+      "bypass_possible": false,
+      "execute_calls": 1,
+      "status_calls": 0,
+      "recourse_reservation_calls": 1,
+      "recourse_status_calls": 3,
+      "remedy_calls": 0,
+      "remedy_status_calls": 0,
+      "active_refunds": 1,
+      "bundle_verification": "pass",
+      "expected_rejection": null,
+      "tamper_detection": null,
+      "rail_bundle": {
+        "schema_version": "consequence-rail/settlement-bundle/v0.1",
+        "profile": "audit",
+        "action": {
+          "action_id": "act_x4ZgajdJZH1SM33KmKCU",
+          "action_digest": "x4ZgajdJZH1SM33KmKCUledwyCo3Wz6Hqn6H3AasaYU",
+          "action_type": "demo.refund.issue/v1",
+          "resource_id_digest": "RzuSKqG5Z5n2r39lMo3o_Q3upDg0UuqwGIyACB975X0",
+          "proposal": {
+            "schema_version": "consequence-rail/action-proposal/v0.1",
+            "action_type": "demo.refund.issue/v1",
+            "subject": {
+              "type": "service",
+              "id": "support-agent-demo"
+            },
+            "target": {
+              "connector": "mock-refund-processor",
+              "resource_type": "order",
+              "resource_id": "ord_demo_42"
+            },
+            "parameters": {
+              "amount_minor": 12000,
+              "currency": "USD"
+            },
+            "idempotency_key": "refund:ord_demo_42:1",
+            "requested_at": "2035-01-01T00:00:00.000Z",
+            "expires_at": "2035-01-01T00:02:00.000Z",
+            "assurance_mode": "enforced",
+            "postcondition": {
+              "op": "all",
+              "clauses": [
+                {
+                  "path": "active_refund_count",
+                  "op": "eq",
+                  "value": 1
+                },
+                {
+                  "path": "net_refunded_minor",
+                  "op": "eq",
+                  "value": 12000
+                }
+              ]
+            },
+            "evidence_plan": {
+              "source": "mock-refund-processor",
+              "max_age_seconds": 60
+            }
+          }
+        },
+        "recourse_reservation": {
+          "action_digest": "x4ZgajdJZH1SM33KmKCUledwyCo3Wz6Hqn6H3AasaYU",
+          "kind": "reverse",
+          "connector": "mock-refund-processor",
+          "capability": "void-duplicate-refund",
+          "capability_reference_digest": "hQVGx_B4-JQBq8CvDw33swkg7Sil8DKE31TiKBc6bhM",
+          "expires_at": "2035-01-01T00:07:00.000Z",
+          "remedy_window_seconds": 120,
+          "max_attempts": 1,
+          "max_amount_minor": 12000,
+          "idempotency_key_digest": "8MW_Yc8R2uxM15pDeO2i6fmTmk5lp1kToF4Tqed7Ms0",
+          "connector_commitment": {
+            "schema_version": "consequence-rail/connector-recourse-commitment/v0.1",
+            "reservation_token": "rsv_eOwKgTlUqaC5314TKQk7qiO4",
+            "action_digest": "x4ZgajdJZH1SM33KmKCUledwyCo3Wz6Hqn6H3AasaYU",
+            "connector": "mock-refund-processor",
+            "capability": "void-duplicate-refund",
+            "kind": "reverse",
+            "expires_at": "2035-01-01T00:07:00.000Z",
+            "max_attempts": 1,
+            "max_amount_minor": 12000,
+            "reserved_at": "2035-01-01T00:00:00.000Z",
+            "status": "active",
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-connector-ed25519-VcGmBF_daVE14fDB",
+              "value": "QESUU2rmDRGq9A15VkLaD_WZzJbIpI-LKCDgbESkRM85BJGrtm6xQhljESpygHrUZvOOFue0T25srv4QfgA6Dg"
+            }
+          },
+          "schema_version": "consequence-rail/recourse-reservation/v0.1",
+          "reservation_id": "rr_H6KH_ELHUUE4I5UC_f_C",
+          "reserved_at": "2035-01-01T00:00:00.000Z",
+          "signature": {
+            "algorithm": "Ed25519",
+            "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+            "value": "vPNoUtQAhzt_HuXbP1EL7xf0JUdhKW_ZfT_QJWn_8S7sb25C37ciSMLx4eUtU7Qx1UoZSfdEH2mwcGXv8t22Dw"
+          }
+        },
+        "action_permit": {
+          "schema_version": "consequence-rail/action-permit/v0.1",
+          "permit_id": "permit_x4ZgajdJZH1SM33KmKCU",
+          "action_id": "act_x4ZgajdJZH1SM33KmKCU",
+          "action_digest": "x4ZgajdJZH1SM33KmKCUledwyCo3Wz6Hqn6H3AasaYU",
+          "recourse_reservation_digest": "ojziEUQo4xQCHkY7lbdO9sSeDHcsxqUnqAPJ0rr9VyI",
+          "assurance_mode": "enforced",
+          "bypass_possible": false,
+          "gated": true,
+          "jti": "jti_v28KExIQboomTjPD9KRb",
+          "issued_at": "2035-01-01T00:00:00.000Z",
+          "expires_at": "2035-01-01T00:02:00.000Z",
+          "max_uses": 1,
+          "signature": {
+            "algorithm": "Ed25519",
+            "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+            "value": "_3zuGA-h5xkEw-n9jk12wp3Qj2AXjAUagLwhYUAQWQgQ6xZylb1cuhMxIB899EBSwvH3e-xDe4XJs1yH-fvNDg"
+          }
+        },
+        "evidence_manifest": [],
+        "outcome_evidence": [],
+        "settlement_receipt": {
+          "schema_version": "consequence-rail/settlement-receipt/v0.1",
+          "receipt_id": "receipt_lw3y7TPFvduApIHTtxtb",
+          "action_id": "act_x4ZgajdJZH1SM33KmKCU",
+          "action_digest": "x4ZgajdJZH1SM33KmKCUledwyCo3Wz6Hqn6H3AasaYU",
+          "recourse_reservation_digest": "ojziEUQo4xQCHkY7lbdO9sSeDHcsxqUnqAPJ0rr9VyI",
+          "connector_recourse_commitment_digest": "kjeRqSDyDGgcAWMuCP3Dmmhm8C6XYEZDGs9pvf0QI3s",
+          "recourse_final_status": "active",
+          "action_permit_digest": "c6kUT3coei2_Lg34MYo3KNj4rL0ya-sQZq00Ngmkm_4",
+          "assurance_mode": "enforced",
+          "bypass_possible": false,
+          "gated": true,
+          "outcome": "disputed",
+          "configured_postcondition_result": "unresolved",
+          "evidence_digests": [],
+          "event_chain_head": "vc69o9-iYnZSVeBAlRwUrnlBsORhkCn1BhH-j1ExcUg",
+          "closed_at": "2035-01-01T00:00:00.000Z",
+          "technical_claim": "The configured postcondition was evaluated against declared evidence sources.",
+          "limitations": [
+            "Signatures establish integrity and provenance, not truth or causality.",
+            "Settlement is a technical protocol status, not a legal or financial determination.",
+            "Recovery is not guaranteed."
+          ],
+          "signature": {
+            "algorithm": "Ed25519",
+            "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+            "value": "7pHHNk-yB2-0EPIMUTqOeLql1paA2IKfZLjZG43XXhh-tVBJ2oAELipHhNq1L9vBqBhNfzyll8lXMw4ZYTCpCg"
+          }
+        },
+        "events": [
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_x4ZgajdJZH1SM33KmKCU",
+            "sequence": 0,
+            "previous_hash": null,
+            "event_type": "ACTION_PROPOSED",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "state": "PROPOSED",
+              "action_digest": "x4ZgajdJZH1SM33KmKCUledwyCo3Wz6Hqn6H3AasaYU",
+              "action_type": "demo.refund.issue/v1",
+              "assurance_mode": "enforced"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "7as3K0MZrv4fpWN3R3nyrbTRYF5WnwBz4IDSfjLgsWm_ucD8Mq5NzBikX0wJ0D_95KnmsgZmXFfOixfX8IJ1AA"
+            },
+            "event_hash": "c8kkxL_mxvj8Qxt1waCvuOMi0WkNZ56SRDspHBPPwf0"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_x4ZgajdJZH1SM33KmKCU",
+            "sequence": 1,
+            "previous_hash": "c8kkxL_mxvj8Qxt1waCvuOMi0WkNZ56SRDspHBPPwf0",
+            "event_type": "STATE_TRANSITION",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "from_state": "PROPOSED",
+              "to_state": "AUTHORIZED",
+              "reason_code": "POLICY_ALLOWED",
+              "details_digest": "oNBsBPliWxoVFsLOPSzwE52JkbrL2pgDjD_B1ddy6OY"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "ItPCtOjmdE34FCbCvg01Zd2xBsWgfZNFPgRjIuT25FUnvulzkuQto6Swfbp8AevcFhwR4hK3EZCT-J1hsb8tAg"
+            },
+            "event_hash": "58cA0Qjpp-BLMZI3nKrwm3ME7qkQYqigf9_D89WU3S0"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_x4ZgajdJZH1SM33KmKCU",
+            "sequence": 2,
+            "previous_hash": "58cA0Qjpp-BLMZI3nKrwm3ME7qkQYqigf9_D89WU3S0",
+            "event_type": "STATE_TRANSITION",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "from_state": "AUTHORIZED",
+              "to_state": "RECOURSE_RESERVED",
+              "reason_code": "RECOURSE_VERIFIED",
+              "details_digest": "zw14OlIgSwKaos-G3u6YsQgrYd5axyVAmxkzWkEzCGA"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "bymOiTeQzQvSDs-a5Bf-CYqWzJs9blGUeBud7uw4A_p737ydXu9N9XJZs1jh2oceDF3Ho6Hc0hDX3GoYqEGVCA"
+            },
+            "event_hash": "TKsli9-LQqXZ26n2wkvp26Lwo2OTMcWwcqKtAnNe2Nw"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_x4ZgajdJZH1SM33KmKCU",
+            "sequence": 3,
+            "previous_hash": "TKsli9-LQqXZ26n2wkvp26Lwo2OTMcWwcqKtAnNe2Nw",
+            "event_type": "STATE_TRANSITION",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "from_state": "RECOURSE_RESERVED",
+              "to_state": "PERMITTED",
+              "reason_code": "PERMIT_ISSUED",
+              "details_digest": "e5pi3G7SLacp-6T-ipXb1AH1eKafiETN9Z0Wyl8mj3Y"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "ovjoS3JQ3KQnt0z2OKfwAK7Uff0WlNZSIEjJ_ggOfLUkF61fsY2PZRFAWIzkAV7KKh_7VRtgyqFf65GIvR54DA"
+            },
+            "event_hash": "hFKN-CzblvGyeQdO63gziebZrIMBcTAt-ypBNu5E2XY"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_x4ZgajdJZH1SM33KmKCU",
+            "sequence": 4,
+            "previous_hash": "hFKN-CzblvGyeQdO63gziebZrIMBcTAt-ypBNu5E2XY",
+            "event_type": "STATE_TRANSITION",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "from_state": "PERMITTED",
+              "to_state": "EXECUTING",
+              "reason_code": "PERMIT_CONSUMED",
+              "details_digest": "N2lEqgIZlJ52ptBl6zNzUmITVzbAmKgnBrt4pWXO-vI"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "_WgT-qSWJRYeALjaqK_ewAQg4L_dU3Uq5BNso6Fawa1XfBR7TxnQKPpfjrjvI6nV8Tmrhyl6Wr3wydRu5j30Dg"
+            },
+            "event_hash": "AH9Ve1SCjAn7yj52o_GQZsKRFWBt7yQZMSlbNEI7MvY"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_x4ZgajdJZH1SM33KmKCU",
+            "sequence": 5,
+            "previous_hash": "AH9Ve1SCjAn7yj52o_GQZsKRFWBt7yQZMSlbNEI7MvY",
+            "event_type": "STATE_TRANSITION",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "from_state": "EXECUTING",
+              "to_state": "EXECUTED",
+              "reason_code": "CONNECTOR_EXECUTED",
+              "details_digest": "E2kUr3ci3-HOXtxe25v5te7p0XfdUyR_xVpd-nXHnvc"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "UBm0IE1dKhOviLlPHkubOWUCW5TRTFPV404Nd5JXvReYsx2msipBsVPB2W12qyzErPCROmNUKYfVW7aCAXxvCA"
+            },
+            "event_hash": "SygONfLhvD1uqtC_TrSbOIixu941INoOQlmrSq9rXh4"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_x4ZgajdJZH1SM33KmKCU",
+            "sequence": 6,
+            "previous_hash": "SygONfLhvD1uqtC_TrSbOIixu941INoOQlmrSq9rXh4",
+            "event_type": "STATE_TRANSITION",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "from_state": "EXECUTED",
+              "to_state": "VERIFYING",
+              "reason_code": "OUTCOME_VERIFICATION_STARTED",
+              "details_digest": "RBNvo1WzZ4oRRq0W9-hknpT7T8If536DEMBg9hyq_4o"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "WHufpD9MNksqWaeU0RP7mzGFN0P3BTJoNBx-Or-2Exp6HVDG5rBsCDosb-xqx3nK0g0GRmIXt9rT_qUjzh8TBw"
+            },
+            "event_hash": "zGdpssa-77pHPSlThZisnpg6sINvhUrldnSKHWG_7ng"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_x4ZgajdJZH1SM33KmKCU",
+            "sequence": 7,
+            "previous_hash": "zGdpssa-77pHPSlThZisnpg6sINvhUrldnSKHWG_7ng",
+            "event_type": "EVIDENCE_REJECTED",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "code": "EVIDENCE_STALE"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "muLw-Uw39afjoRduaUkjV-tjqPWXSF300ChVV0XA05xcJxDy8vC3ujOz35x-SAlT2IekdFeONb3KgDw-u2AaCA"
+            },
+            "event_hash": "nlNM0KlCq2HbgcRtttorF80YtU8IpKWPclsN03awwE4"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_x4ZgajdJZH1SM33KmKCU",
+            "sequence": 8,
+            "previous_hash": "nlNM0KlCq2HbgcRtttorF80YtU8IpKWPclsN03awwE4",
+            "event_type": "STATE_TRANSITION",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "from_state": "VERIFYING",
+              "to_state": "INCONCLUSIVE",
+              "reason_code": "EVIDENCE_STALE",
+              "details_digest": "RBNvo1WzZ4oRRq0W9-hknpT7T8If536DEMBg9hyq_4o"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "LgHC1ksoZ4to66JHLtGvhjREliviH0gVqfrrtp3X3zTk6XYWmrpeSL0TOGdWYk6qLii7UUCJRzevS21IPU4yAg"
+            },
+            "event_hash": "-jIPn73Ij_d5mgRmConLbSjlX0msxetFv9i8fi46fdk"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_x4ZgajdJZH1SM33KmKCU",
+            "sequence": 9,
+            "previous_hash": "-jIPn73Ij_d5mgRmConLbSjlX0msxetFv9i8fi46fdk",
+            "event_type": "RECOURSE_STATUS_RECORDED",
+            "actor": "connector",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "connector_commitment_digest": "kjeRqSDyDGgcAWMuCP3Dmmhm8C6XYEZDGs9pvf0QI3s",
+              "status": "active",
+              "reason": "SETTLEMENT_DISPUTED"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "_FI6aVrTTcg9iy8nXcKeqbFAYugJX5VWKOvMn61IrOMPT2aIeF49qnfs-F9vj3QlGiin5xwFDGNlRSuIr76EDw"
+            },
+            "event_hash": "s8-3bUjTDNLajqGhhz4XWr1rLsFBlrTAvF_npQIx4R8"
+          },
+          {
+            "schema_version": "consequence-rail/event/v0.1",
+            "action_id": "act_x4ZgajdJZH1SM33KmKCU",
+            "sequence": 10,
+            "previous_hash": "s8-3bUjTDNLajqGhhz4XWr1rLsFBlrTAvF_npQIx4R8",
+            "event_type": "STATE_TRANSITION",
+            "actor": "rail",
+            "recorded_at": "2035-01-01T00:00:00.000Z",
+            "payload": {
+              "from_state": "INCONCLUSIVE",
+              "to_state": "CLOSED",
+              "reason_code": "SETTLEMENT_DISPUTED",
+              "details_digest": "0h1pM-sVIp1Jyle2xQEhT9xaE4-OyxNc3OBw2vfr7OU"
+            },
+            "signature": {
+              "algorithm": "Ed25519",
+              "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+              "value": "KJ1cnmWknCjm0RAiXgpb12RUrhqJRNfIVjqwa5kZ3SaVILuSzbBhwA6qGVobslbVCSnWYvjoCYAbGe_WPyaLDQ"
+            },
+            "event_hash": "vc69o9-iYnZSVeBAlRwUrnlBsORhkCn1BhH-j1ExcUg"
+          }
+        ],
+        "trust_hint": {
+          "rail": {
+            "key_id": "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+            "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAnRbxWLLLgUyGwA8UdJVAsb12PzYDjv5C3+wE5abhq5Y=\n-----END PUBLIC KEY-----\n"
+          },
+          "connector": {
+            "key_id": "demo-connector-ed25519-VcGmBF_daVE14fDB",
+            "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAaT5lZhTYJhmk7hzLG+me9Zs4cARL14Wa3xx+G3a74+4=\n-----END PUBLIC KEY-----\n"
+          },
+          "warning": "An embedded key is not trusted automatically."
+        }
+      }
+    },
+    "prove": {
+      "ok": true,
+      "result": {
+        "format": "MandateBoundExternalEvidenceReview/v1",
+        "reviewId": "review-28a6f0a0c99d7447",
+        "source": {
+          "sourceId": "consequence-rail",
+          "eventClass": "settlement"
+        },
+        "actionId": "act_x4ZgajdJZH1SM33KmKCU",
+        "evidenceDigest": "sha256:73809fef8a26822702a2ae5ea524f7d678364f04e7449587d84d88718670219d",
+        "receipt": {
+          "receiptId": "receipt_lw3y7TPFvduApIHTtxtb",
+          "outcome": "disputed",
+          "recourseStatus": "active",
+          "eventChainHead": "vc69o9-iYnZSVeBAlRwUrnlBsORhkCn1BhH-j1ExcUg",
+          "actionDigest": "x4ZgajdJZH1SM33KmKCUledwyCo3Wz6Hqn6H3AasaYU"
+        },
+        "upstream": {
+          "verifier": "consequence-rail:bundle-verify",
+          "valid": true,
+          "actionId": "act_x4ZgajdJZH1SM33KmKCU",
+          "outcome": "disputed",
+          "trustedKeyIds": [
+            "demo-rail-ed25519-aQs_UQHBF_Y4YXOx",
+            "demo-connector-ed25519-VcGmBF_daVE14fDB"
+          ]
+        },
+        "verdict": "recorded",
+        "legalEffect": "not-determined",
+        "reviewDigest": "sha256:3ea159718295a6203adf0a74246ff2b6745d3524ac2201589dde12cf18a52e9b"
+      }
+    }
+  }
+}

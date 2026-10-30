@@ -113,3 +113,20 @@ test("the stack's per-domain fault lists match the pinned rail's demo catalog", 
     );
   }
 });
+
+test("disputed refund case saved under the 0.3.0 pins still replays", () => {
+  // Saved with `aas demo --fault stale-evidence --prove rail` and exported by
+  // the 0.4.0 branch with Rail 78d6f8a and MandateBound 32d5256, the pins
+  // 0.3.0 released with. A disputed case in a user's store must still verify
+  // after the next pin refresh.
+  const saved = JSON.parse(readFileSync(new URL("../fixtures/v0.3.0-pins-disputed-review.json", import.meta.url), "utf8"));
+  const recorded = Object.fromEntries(saved.manifest.component_provenance.map((entry) => [entry.name, entry.commit]));
+  assert.equal(recorded["consequence-rail"], "78d6f8a23dbce69bb443b453c8d471645f67daac");
+  assert.equal(recorded.mandatebound, "32d525618e23678f86c754e4a536e4d094988a1b");
+  assert.equal(saved.report.stages.act.outcome, "disputed");
+  assert.equal(saved.report.stages.act.fault, "stale-evidence");
+  assert.equal(saved.report.stages.prove.review_verdict, "recorded");
+  const result = replayBundle(saved);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.ok(result.checks.every((check) => check.passed));
+});

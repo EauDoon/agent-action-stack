@@ -81,7 +81,13 @@ MandateBound `e526c4c`; it pins replay compatibility for an ordinary synthetic
 refund. `fixtures/previous-pins-inventory-review.json` was saved by `main` at
 `8179e59` using Rail `c430383` and MandateBound `708256d`, the pins before the
 0.3.0 refresh; it pins replay compatibility for a compensated inventory case
-already in a case store. Their public demonstration signatures establish no
+already in a case store. `fixtures/v0.3.0-pins-disputed-review.json` was saved
+with `aas demo --fault stale-evidence --prove rail` and exported by the 0.4.0
+branch at `9dc2431` using Rail `78d6f8a` and MandateBound `32d5256`, the pins
+0.3.0 released with; it pins replay compatibility for a disputed refund case
+with a recorded same-case review. The same test also pins the stack's
+per-domain fault lists to the rail's demo catalog, so a pin that renames or
+drops a fault fails the proof. Their public demonstration signatures establish no
 real-world provenance.
 
 The current Rail pin also binds a receipt's close time to its terminal event,
