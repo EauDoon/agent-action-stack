@@ -2260,6 +2260,23 @@ test('human history reports damaged entries and continuation even on empty pages
   assert.match(next.stdout, /case-a outcome=/); assert.match(next.stdout, /next_cursor: none/);
 });
 
+test('a filtered empty history page is not reported as unreadable cases', async () => {
+  const outputRoot = tempRoot(); writeCase(outputRoot, 'case-a'); writeCase(outputRoot, 'case-b');
+  const filtered = await captureMain(['cases','--root',outputRoot,'--search','no-such-case']);
+  assert.equal(filtered.exitCode, 0, filtered.stderr);
+  assert.match(filtered.stdout, /^no cases in this page match the filters$/m);
+  assert.doesNotMatch(filtered.stdout, /no readable cases/);
+  assert.doesNotMatch(filtered.stdout, /unavailable:/);
+  assert.match(filtered.stdout, /scanned: 2/);
+  // Every scanned entry damaged: that, and only that, is "no readable cases".
+  const damaged = tempRoot(); mkdirSync(join(damaged, 'runs', 'case-z'), {recursive:true});
+  const unreadable = await captureMain(['cases','--root',damaged,'--search','case']);
+  assert.match(unreadable.stdout, /^no readable cases in this page$/m);
+  assert.match(unreadable.stdout, /unavailable: case-z/);
+  const empty = await captureMain(['cases','--root',tempRoot()]);
+  assert.match(empty.stdout, /^no cases in this page$/m);
+});
+
 test('comparison handoffs support Markdown and fail machine callers on unavailable cases', async () => {
   const outputRoot = tempRoot(); writeCase(outputRoot, 'compare-a'); writeCase(outputRoot, 'compare-b');
   const good = await captureMain(['compare','compare-a','compare-b','--root',outputRoot,'--markdown']);
