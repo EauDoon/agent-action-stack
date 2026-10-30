@@ -7,11 +7,18 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { assertFullStackNodeVersion, compareVersionTuples, isEntrypoint, loadComponentLock, inspectDependencyDirectory, main as bootstrapMain, MIN_FULL_STACK_NODE, moveIntoPlace, npmInvocation, parseNodeVersion, prepareDependencies } from "../scripts/bootstrap.mjs";
+import { assertFullStackNodeVersion, classifyDependency, compareVersionTuples, isEntrypoint, loadComponentLock, inspectDependencyDirectory, main as bootstrapMain, parseBootstrapArgs, readCheckoutCommit, MIN_FULL_STACK_NODE, moveIntoPlace, npmInvocation, parseNodeVersion, prepareDependencies } from "../scripts/bootstrap.mjs";
 import { checkSyntax, listSyntaxTargets } from "../scripts/check-syntax.mjs";
+import { verifierRevisions, verifyCasePage } from "../bin/case-review.mjs";
 import { checkReleaseConsistency, loadReleaseInputs, parseChangelog, releaseNotes } from "../scripts/check-version.mjs";
 import {
   buildRailReviewRequest,
+  DEMO_FAULTS_BY_DOMAIN,
+  NO_RECEIPT_FAULTS,
+  parseDemoOptions,
+  readResponseFile,
+  runDoctor,
+  RESPONSE_FILE_LIMIT,
   CHILD_JSON_LIMIT,
   exportRunBundle,
   CHILD_TIMEOUT_MAX_MS,
@@ -943,7 +950,7 @@ test("demo arguments reject unknown, duplicate, missing-value, and empty options
     /Duplicate/,
   );
   await assert.rejects(() => runDemo(["--response", "maybe"], stubOptions(tempRoot())), /must be pass or fail/);
-  await assert.rejects(() => runDemo(["--fault", "explode"], stubOptions(tempRoot())), /must be none or duplicate/);
+  await assert.rejects(() => runDemo(["--fault", "explode"], stubOptions(tempRoot())), /--fault must be one of the refund faults: none, duplicate, /);
 });
 
 test("prove rejects an empty or unknown scenario before spawning a child", () => {
@@ -1120,7 +1127,7 @@ test("CLI reports unknown commands, flags, and empty values as usage errors", as
 
   const badFault = await captureMain(["demo", "--fault", "explode"]);
   assert.equal(badFault.exitCode, 2);
-  assert.match(badFault.stderr, /--fault must be none or duplicate/);
+  assert.match(badFault.stderr, /--fault must be one of the refund faults: none, duplicate, /);
   assert.match(badFault.stderr, /Try `aas help` for usage/);
 });
 
@@ -2829,4 +2836,935 @@ test("runDemo preserves the previous case when finalization fails in any stage",
     assert.equal(readFileSync(join(outputRoot, "latest.json"), "utf8"), previous, scenario.name);
     assert.deepEqual(readdirSync(join(outputRoot, "runs")), ["previous"], scenario.name);
   }
+});
+
+function captureHuman(report, bundleDir = null) {
+  const chunks = [];
+  const originalWrite = process.stdout.write;
+  process.stdout.write = (chunk, encoding, callback) => {
+    chunks.push(String(chunk));
+    if (typeof encoding === "function") encoding();
+    else if (typeof callback === "function") callback();
+    return true;
+  };
+  try {
+    printHuman(report, bundleDir);
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+  return chunks.join("").split("\n").filter((line) => line !== "");
+}
+
+test("every rail demo fault parses for its own domain and is refused for the other", () => {
+  assert.equal(DEMO_FAULTS_BY_DOMAIN.refund.length, 13);
+  assert.equal(DEMO_FAULTS_BY_DOMAIN.inventory.length, 10);
+  for (const [domain, faults] of Object.entries(DEMO_FAULTS_BY_DOMAIN)) {
+    for (const fault of faults) {
+      const prove = NO_RECEIPT_FAULTS[domain].includes(fault) ? "simulate" : "rail";
+      assert.deepEqual(
+        parseDemoOptions(["--domain", domain, "--fault", fault, "--prove", prove]),
+        { responseName: "pass", responseFile: null, fault, forceDispute: false, asJson: false, proveMode: prove, domain },
+      );
+    }
+  }
+  for (const fault of ["permit-replay", "action-mutation", "tampered-bundle"]) {
+    assert.throws(
+      () => parseDemoOptions(["--domain", "inventory", "--fault", fault]),
+      (error) => error.name === "UsageError" && /--fault must be one of the inventory faults: none, duplicate, /.test(error.message),
+    );
+  }
+  assert.throws(() => parseDemoOptions(["--fault", "explode"]), /refund faults/);
+  assert.throws(() => parseDemoOptions(["--domain", "inventory", "--fault", "explode"]), /inventory faults/);
+});
+
+test("same-case review of a no-receipt fault is a usage error before any probe or bundle", async () => {
+  for (const [domain, faults] of Object.entries(NO_RECEIPT_FAULTS)) {
+    for (const fault of faults) {
+      const outputRoot = tempRoot();
+      let actCalls = 0;
+      await assert.rejects(
+        () => runDemo(["--domain", domain, "--fault", fault, "--prove", "rail"], stubOptions(outputRoot, {
+          runActFn: async () => { actCalls += 1; return { ok: true, raw: { outcome: null }, status: 0 }; },
+        })),
+        (error) => error.name === "UsageError"
+          && error.message === `fault ${fault} produces no settlement receipt, so --prove rail has no same-case evidence; use --prove simulate`,
+      );
+      assert.equal(actCalls, 0);
+      assert.equal(existsSync(join(outputRoot, "runs")), false, `${domain} ${fault} wrote a case`);
+      assert.equal(existsSync(join(outputRoot, "latest.json")), false);
+    }
+  }
+  // main validates before the Node.js floor and the Python probe: an
+  // unusable runtime still reports the usage error with exit 2.
+  const result = await captureMain(["demo", "--fault", "action-mutation", "--prove", "rail"], { nodeVersion: "20.0.0" });
+  assert.equal(result.exitCode, 2);
+  assert.match(result.stderr, /fault action-mutation produces no settlement receipt/);
+  assert.equal(result.stdout, "");
+});
+
+test("a no-receipt fault with the canned simulation goes to prove with a null outcome", async () => {
+  const outputRoot = tempRoot();
+  const result = await runDemo(["--fault", "lost-response-before-commit"], stubOptions(outputRoot, {
+    runId: "no-receipt-run",
+    runActFn: async () => ({ ok: true, raw: { outcome: null, state: "FAILED", fault: "lost-response-before-commit", action_id: "act-n", expected_rejection: null, tamper_detection: null }, status: 0 }),
+  }));
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.report.stages.act.outcome, null);
+  assert.equal(result.report.stages.prove.status, "passed");
+  assert.equal(result.report.stages.prove.mode, "simulate");
+  assert.equal(result.report.stages.prove.triggered_by, "act_outcome=null");
+  const lines = captureHuman(result.report);
+  assert.ok(lines.includes("act_outcome: none"));
+  assert.ok(lines.includes("act_state: FAILED"));
+});
+
+test("a disputed rail outcome records a same-case review and the case history can filter it", async () => {
+  const outputRoot = tempRoot();
+  let reviewed = null;
+  const disputed = await runDemo(["--fault", "stale-evidence", "--prove", "rail"], stubOptions(outputRoot, {
+    runId: "2035-disputed-run",
+    runActFn: async () => ({ ok: true, raw: { outcome: "disputed", state: "CLOSED", fault: "stale-evidence", action_id: "act-d", expected_rejection: null, tamper_detection: null, rail_bundle: { action: { action_id: "act-d" } } }, status: 0 }),
+    runProveRailFn: async (bundle) => {
+      reviewed = bundle;
+      return { ok: true, raw: { ok: true, result: { verdict: "recorded", reviewId: "review-d", actionId: "act-d" } }, status: 0 };
+    },
+  }));
+  assert.equal(disputed.exitCode, 0);
+  assert.deepEqual(reviewed, { action: { action_id: "act-d" } });
+  assert.equal(disputed.report.stages.act.outcome, "disputed");
+  assert.equal(disputed.report.stages.act.rejection_code, null);
+  assert.equal(disputed.report.stages.act.tamper_code, null);
+  assert.equal(disputed.report.stages.prove.mode, "rail-review");
+  assert.equal(disputed.report.stages.prove.triggered_by, "act_outcome=disputed");
+  assert.equal(disputed.report.stages.prove.review_verdict, "recorded");
+  assert.equal(disputed.report.requested_options.fault, "stale-evidence");
+  await runDemo([], stubOptions(outputRoot, { runId: "2035-settled-run" }));
+  const filtered = await captureMain(["cases", "--root", outputRoot, "--outcome", "disputed", "--json"]);
+  assert.equal(filtered.exitCode, 0);
+  assert.deepEqual(JSON.parse(filtered.stdout).cases.map((entry) => entry.run_id), ["2035-disputed-run"]);
+  const settled = await captureMain(["cases", "--root", outputRoot, "--outcome", "settled", "--json"]);
+  assert.deepEqual(JSON.parse(settled.stdout).cases.map((entry) => entry.run_id), ["2035-settled-run"]);
+  const bogus = await captureMain(["cases", "--root", outputRoot, "--outcome", "unresolved"]);
+  assert.equal(bogus.exitCode, 2);
+  assert.match(bogus.stderr, /Invalid outcome filter/);
+});
+
+test("the rail's rejection and tamper codes reach the report and print only when present", async () => {
+  const outputRoot = tempRoot();
+  const permit = await runDemo(["--fault", "permit-replay"], stubOptions(outputRoot, {
+    runId: "permit-run",
+    runActFn: async () => ({ ok: true, raw: { outcome: "settled", state: "CLOSED", fault: "permit-replay", action_id: "act-p", expected_rejection: { code: "PERMIT_USED", message: "consumed" }, tamper_detection: null }, status: 0 }),
+  }));
+  assert.equal(permit.report.stages.act.rejection_code, "PERMIT_USED");
+  assert.equal(permit.report.stages.act.tamper_code, null);
+  assert.equal(permit.report.stages.prove.status, "skipped");
+  const permitLines = captureHuman(permit.report, permit.bundleDir);
+  assert.equal(permitLines[12], "flow: decide -> act");
+  assert.equal(permitLines[13], "act_rejection: PERMIT_USED");
+  assert.equal(permitLines.some((line) => line.startsWith("act_tamper:")), false);
+  assert.equal(permitLines.at(-1), `bundle: ${permit.bundleDir}`);
+
+  const tampered = await runDemo(["--fault", "tampered-bundle"], stubOptions(outputRoot, {
+    runId: "tamper-run",
+    runActFn: async () => ({ ok: true, raw: { outcome: "settled", state: "CLOSED", fault: "tampered-bundle", action_id: "act-t", expected_rejection: null, tamper_detection: { detected: true, code: "BUNDLE_TAMPERED" } }, status: 0 }),
+  }));
+  assert.equal(tampered.report.stages.act.tamper_code, "BUNDLE_TAMPERED");
+  assert.equal(tampered.report.stages.act.rejection_code, null);
+  const tamperedLines = captureHuman(tampered.report);
+  assert.equal(tamperedLines[13], "act_tamper: BUNDLE_TAMPERED");
+  assert.equal(tamperedLines.some((line) => line.startsWith("act_rejection:")), false);
+
+  const undetected = await runDemo([], stubOptions(outputRoot, {
+    runId: "undetected-run",
+    runActFn: async () => ({ ok: true, raw: { outcome: "settled", state: "CLOSED", fault: "none", action_id: "act-u", tamper_detection: { detected: false, code: null } }, status: 0 }),
+  }));
+  assert.equal(undetected.report.stages.act.tamper_code, null);
+  const plain = captureHuman(undetected.report);
+  assert.equal(plain.length, 13);
+  assert.equal(plain.some((line) => /^act_(rejection|tamper):/.test(line)), false);
+});
+
+test("act rejects malformed rejection and tamper objects from the rail", () => {
+  const act = (extra) => runAct("none", {
+    depsDir: tempRoot(),
+    runner: () => ({ status: 0, stdout: JSON.stringify({ outcome: "settled", state: "CLOSED", ...extra }), stderr: "", error: null }),
+  });
+  for (const [extra, field] of [
+    [{ expected_rejection: "PERMIT_USED" }, "expected_rejection"],
+    [{ expected_rejection: { code: 7 } }, "expected_rejection"],
+    [{ tamper_detection: [] }, "tamper_detection"],
+    [{ tamper_detection: { detected: "yes" } }, "tamper_detection"],
+    [{ tamper_detection: { detected: true } }, "tamper_detection"],
+  ]) {
+    assert.throws(() => act(extra), (error) => {
+      assert.match(error.message, new RegExp(`valid ${field} field`));
+      assert.equal(error.code, DIAGNOSTIC.CHILD_JSON);
+      return true;
+    }, JSON.stringify(extra));
+  }
+  assert.equal(act({ expected_rejection: null, tamper_detection: { detected: false, code: null } }).ok, true);
+  assert.equal(act({ expected_rejection: { code: "DIGEST_MISMATCH", message: "m" } }).ok, true);
+});
+
+test("CLI help lists every fault per domain and the disputed outcome filter", () => {
+  const text = helpText();
+  const faults = text.split("Faults (")[1].split("First-time setup:")[0];
+  const refund = faults.split("refund:")[1].split("inventory:")[0];
+  const inventory = faults.split("inventory:")[1].split("No settlement receipt")[0];
+  for (const fault of DEMO_FAULTS_BY_DOMAIN.refund) assert.match(refund, new RegExp(`(?:^|[\\s,])${fault}(?:,|\\s|$)`), fault);
+  for (const fault of DEMO_FAULTS_BY_DOMAIN.inventory) assert.match(inventory, new RegExp(`(?:^|[\\s,])${fault}(?:,|\\s|$)`), fault);
+  assert.doesNotMatch(inventory, /permit-replay|action-mutation|tampered-bundle/);
+  assert.match(text, /--outcome settled\|compensated\|disputed\|none/);
+  for (const line of faults.split("\n")) assert.ok(line.length <= 80, `fault help line too long: ${line}`);
+});
+
+const OLD_COMMIT = "1111111111111111111111111111111111111111";
+
+/**
+ * A fake git for an existing checkout of `component`. It starts at `commit`;
+ * a `checkout` moves it to the requested commit. `failOn` makes that
+ * subcommand exit 128 with git-like stderr.
+ */
+function existingCheckout(component, { commit = OLD_COMMIT, origin = component.repository, detached = true, clean = true, failOn = null } = {}) {
+  const deps = tempRoot();
+  const target = join(deps, component.name);
+  mkdirSync(join(target, ".git"), { recursive: true });
+  for (const entrypoint of component.expected_entrypoints) {
+    mkdirSync(join(target, entrypoint, ".."), { recursive: true });
+    writeFileSync(join(target, entrypoint), "fixture\n");
+  }
+  const state = { commit };
+  const calls = [];
+  const command = (name, args) => {
+    assert.equal(name, "git");
+    calls.push(args.slice(2).join(" "));
+    const sub = args[2];
+    if (sub === failOn) return { status: 128, stdout: "", stderr: "fatal: remote error: upload-pack: not our ref", error: null };
+    if (sub === "config") return { status: 0, stdout: `${origin}\n`, stderr: "", error: null };
+    if (sub === "rev-parse") return { status: 0, stdout: `${state.commit}\n`, stderr: "", error: null };
+    if (sub === "symbolic-ref") return { status: detached ? 1 : 0, stdout: detached ? "" : "main\n", stderr: "", error: null };
+    if (sub === "status") return { status: 0, stdout: clean ? "" : " M fixture\n", stderr: "", error: null };
+    if (sub === "fetch") return { status: 0, stdout: "", stderr: "", error: null };
+    if (sub === "checkout") {
+      state.commit = args.at(-1);
+      return { status: 0, stdout: "", stderr: "", error: null };
+    }
+    throw new Error(`unexpected git command: ${args.join(" ")}`);
+  };
+  return { deps, target, command, calls, state };
+}
+
+function captureBootstrap(argv, options) {
+  const stdout = [];
+  const stderr = [];
+  const originalStdout = process.stdout.write;
+  const originalStderr = process.stderr.write;
+  const originalExitCode = process.exitCode;
+  process.stdout.write = (chunk) => { stdout.push(String(chunk)); return true; };
+  process.stderr.write = (chunk) => { stderr.push(String(chunk)); return true; };
+  process.exitCode = undefined;
+  try {
+    bootstrapMain(argv, options);
+    return { stdout: stdout.join(""), stderr: stderr.join(""), exitCode: process.exitCode ?? 0 };
+  } finally {
+    process.stdout.write = originalStdout;
+    process.stderr.write = originalStderr;
+    process.exitCode = originalExitCode;
+  }
+}
+
+test("a stale checkout is refused with both commits and the bootstrap:update remedy, and nothing is fetched", () => {
+  const component = loadComponentLock(LOCK).find((entry) => entry.name === "constitutional-agent-testbench");
+  const checkout = existingCheckout(component);
+  const expected = `Pre-existing dependency commit does not match the lock: ${component.name} (checkout 1111111, lock ${component.commit.slice(0, 7)}). Run npm run bootstrap:update to move this clean checkout to the locked commit, or remove deps/${component.name} and run npm run bootstrap.`;
+  assert.throws(() => prepareDependencies({ deps: checkout.deps, components: [component], command: checkout.command }), { message: expected });
+  assert.equal(checkout.calls.some((call) => call.startsWith("fetch") || call.startsWith("checkout")), false);
+  assert.equal(checkout.state.commit, OLD_COMMIT);
+  // `aas demo` and the GUI resolve provenance through the same inspection.
+  assert.throws(() => inspectDependencyDirectory(checkout.target, component, { command: checkout.command }), { message: expected });
+  const classified = classifyDependency(checkout.target, component, { command: checkout.command });
+  assert.equal(classified.state, "stale");
+  assert.equal(classified.commit, OLD_COMMIT);
+  assert.equal(classified.locked_commit, component.commit);
+});
+
+test("bootstrap --update fetches then checks out the locked commit for a clean detached stale checkout", () => {
+  const component = loadComponentLock(LOCK).find((entry) => entry.name === "constitutional-agent-testbench");
+  const checkout = existingCheckout(component);
+  const prepared = prepareDependencies({ deps: checkout.deps, components: [component], command: checkout.command, update: true });
+  const fetchIndex = checkout.calls.indexOf(`fetch --depth 1 origin ${component.commit}`);
+  const checkoutIndex = checkout.calls.indexOf(`checkout --detach --quiet ${component.commit}`);
+  assert.ok(fetchIndex >= 0 && checkoutIndex > fetchIndex, checkout.calls.join("\n"));
+  assert.equal(prepared[0].commit, component.commit);
+  assert.equal(prepared[0].updated_from, OLD_COMMIT);
+
+  const again = existingCheckout(component);
+  const output = captureBootstrap(["--update"], { deps: again.deps, components: [component], command: again.command });
+  assert.equal(output.exitCode, 0, output.stderr);
+  assert.equal(output.stdout, `deps/${component.name}: ${component.commit} detached clean (updated from ${OLD_COMMIT})\nBootstrap complete.\n`);
+  // A checkout already at the lock is left alone even with --update.
+  const current = existingCheckout(component, { commit: component.commit });
+  const unchanged = prepareDependencies({ deps: current.deps, components: [component], command: current.command, update: true });
+  assert.equal(unchanged[0].updated_from, undefined);
+  assert.equal(current.calls.some((call) => call.startsWith("fetch")), false);
+});
+
+test("bootstrap --update still refuses dirty, substituted, and attached checkouts", () => {
+  const component = loadComponentLock(LOCK).find((entry) => entry.name === "constitutional-agent-testbench");
+  for (const [options, pattern, state] of [
+    [{ clean: false }, /has local changes: constitutional-agent-testbench\. Remove deps\/constitutional-agent-testbench and run npm run bootstrap\./, "dirty"],
+    [{ origin: "https://github.com/example/substitute.git" }, /origin does not match the lock: constitutional-agent-testbench\. Remove deps\//, "substituted"],
+    [{ detached: false }, /is not detached at the locked commit: constitutional-agent-testbench\. Remove deps\//, "attached"],
+  ]) {
+    const checkout = existingCheckout(component, options);
+    assert.throws(() => prepareDependencies({ deps: checkout.deps, components: [component], command: checkout.command, update: true }), pattern);
+    assert.equal(checkout.calls.some((call) => call.startsWith("fetch") || call.startsWith("checkout")), false, JSON.stringify(options));
+    assert.equal(classifyDependency(checkout.target, component, { command: checkout.command }).state, state);
+  }
+});
+
+test("a failed update fetch leaves the old commit and reports git's own text", () => {
+  const component = loadComponentLock(LOCK).find((entry) => entry.name === "constitutional-agent-testbench");
+  const checkout = existingCheckout(component, { failOn: "fetch" });
+  assert.throws(
+    () => prepareDependencies({ deps: checkout.deps, components: [component], command: checkout.command, update: true }),
+    (error) => {
+      assert.match(error.message, new RegExp(`^Could not update ${component.name} from ${OLD_COMMIT} to ${component.commit}: Command failed: git .* fetch --depth 1 origin ${component.commit} \\(exit 128\\): fatal: remote error: upload-pack: not our ref\\. deps/${component.name} was left at ${OLD_COMMIT}\\.$`));
+      return true;
+    },
+  );
+  assert.equal(checkout.state.commit, OLD_COMMIT);
+  assert.equal(checkout.calls.some((call) => call.startsWith("checkout")), false);
+});
+
+test("bootstrap honours --help and rejects unknown arguments instead of running a full bootstrap", () => {
+  let calls = 0;
+  const command = () => { calls += 1; throw new Error("must not spawn"); };
+  for (const argv of [["--help"], ["-h"], ["--update", "--help"]]) {
+    const help = captureBootstrap(argv, { deps: tempRoot(), command });
+    assert.equal(help.exitCode, 0);
+    assert.match(help.stdout, /^Usage: npm run bootstrap\n {7}npm run bootstrap:update\n/);
+    assert.match(help.stdout, /--update {4}Move a clean, detached checkout/);
+    assert.equal(help.stderr, "");
+  }
+  for (const [argv, message] of [[["--bogus"], "Unsupported bootstrap argument: --bogus"], [["extra"], "Unsupported bootstrap argument: extra"], [["--update", "--update"], "Duplicate bootstrap option: --update"]]) {
+    const rejected = captureBootstrap(argv, { deps: tempRoot(), command });
+    assert.equal(rejected.exitCode, 2, argv.join(" "));
+    assert.ok(rejected.stderr.startsWith(`${message}\nUsage: npm run bootstrap\n`), rejected.stderr);
+    assert.equal(rejected.stdout, "");
+  }
+  assert.equal(calls, 0);
+  assert.equal(parseBootstrapArgs([]).update, false);
+  assert.equal(parseBootstrapArgs(["--update"]).update, true);
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+  assert.equal(pkg.scripts["bootstrap:update"], "node ./scripts/bootstrap.mjs --update");
+  assert.equal(pkg.scripts.bootstrap, "node ./scripts/bootstrap.mjs");
+});
+
+test("dependency classification names every state without throwing", (t) => {
+  const component = loadComponentLock(LOCK)[0];
+  assert.equal(classifyDependency(join(tempRoot(), "absent"), component).state, "missing");
+  const file = join(tempRoot(), component.name);
+  writeFileSync(file, "not a directory\n");
+  assert.deepEqual([classifyDependency(file, component).state, classifyDependency(file, component).detail], ["unusable", "not-directory"]);
+  const noGit = join(tempRoot(), component.name);
+  mkdirSync(noGit);
+  assert.deepEqual([classifyDependency(noGit, component).state, classifyDependency(noGit, component).detail], ["unusable", "no-git"]);
+  assert.throws(() => inspectDependencyDirectory(noGit, component), /without Git metadata: constitutional-agent-testbench\. Remove deps\//);
+  const ready = existingCheckout(component, { commit: component.commit });
+  assert.equal(classifyDependency(ready.target, component, { command: ready.command }).state, "ready");
+  const unbuilt = { ...component, expected_entrypoints: [...component.expected_entrypoints, "dist/cli.js"] };
+  const missing = classifyDependency(ready.target, unbuilt, { command: ready.command });
+  assert.equal(missing.state, "missing-entrypoints");
+  assert.deepEqual(missing.missing_entrypoints, ["dist/cli.js"]);
+  assert.throws(() => inspectDependencyDirectory(ready.target, unbuilt, { command: ready.command }), /missing expected entrypoints: constitutional-agent-testbench \(dist\/cli\.js\)\. Run npm run bootstrap to rebuild it/);
+  const broken = () => ({ status: 128, stdout: "", stderr: "fatal", error: null });
+  assert.deepEqual([classifyDependency(ready.target, component, { command: broken }).state, classifyDependency(ready.target, component, { command: broken }).detail], ["unusable", "git-failed"]);
+  const link = join(tempRoot(), component.name);
+  if (!linkOrSkip(t, ready.target, link, "junction")) return;
+  assert.equal(classifyDependency(link, component, { command: ready.command }).state, "unusable");
+});
+
+test("checkout revisions are read from .git/HEAD without spawning git", () => {
+  const sha = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
+  const detached = tempRoot();
+  mkdirSync(join(detached, ".git"));
+  writeFileSync(join(detached, ".git", "HEAD"), `${sha}\n`);
+  assert.equal(readCheckoutCommit(detached), sha);
+  const attached = tempRoot();
+  mkdirSync(join(attached, ".git"));
+  writeFileSync(join(attached, ".git", "HEAD"), "ref: refs/heads/main\n");
+  assert.equal(readCheckoutCommit(attached), null);
+  assert.equal(readCheckoutCommit(tempRoot()), null, "no Git metadata");
+  assert.equal(readCheckoutCommit(join(tempRoot(), "absent")), null);
+  const worktree = tempRoot();
+  writeFileSync(join(worktree, ".git"), "gitdir: /elsewhere\n");
+  assert.equal(readCheckoutCommit(worktree), null, ".git file");
+  const short = tempRoot();
+  mkdirSync(join(short, ".git"));
+  writeFileSync(join(short, ".git", "HEAD"), "abc123\n");
+  assert.equal(readCheckoutCommit(short), null);
+});
+
+test("bootstrap --update moves a real checkout to a new commit over a file URL", () => {
+  const git = (cwd, args) => execFileSync("git", ["-c", "user.name=AAS Test", "-c", "user.email=aas@example.invalid", "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main", ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const work = tempRoot();
+  git(work, ["init", "--quiet"]);
+  writeFileSync(join(work, "entry.txt"), "first\n");
+  git(work, ["add", "entry.txt"]);
+  git(work, ["commit", "--quiet", "-m", "first"]);
+  const first = git(work, ["rev-parse", "HEAD"]);
+  writeFileSync(join(work, "entry.txt"), "second\n");
+  writeFileSync(join(work, "added.txt"), "only in the second commit\n");
+  git(work, ["add", "entry.txt", "added.txt"]);
+  git(work, ["commit", "--quiet", "-m", "second"]);
+  const second = git(work, ["rev-parse", "HEAD"]);
+  const bare = join(tempRoot(), "component.git");
+  git(work, ["clone", "--quiet", "--bare", work, bare]);
+  const repository = pathToFileURL(bare).href;
+  const deps = tempRoot();
+  const component = (commit, entrypoints = ["entry.txt"]) => ({ name: "fixture-component", repository, commit, expected_entrypoints: entrypoints });
+  const cloned = prepareDependencies({ deps, components: [component(first)] });
+  assert.equal(cloned[0].commit, first);
+  const target = join(deps, "fixture-component");
+  assert.equal(readCheckoutCommit(target), first);
+  assert.throws(() => prepareDependencies({ deps, components: [component(second, ["entry.txt", "added.txt"])] }), /bootstrap:update/);
+  assert.equal(readCheckoutCommit(target), first);
+  const updated = prepareDependencies({ deps, components: [component(second, ["entry.txt", "added.txt"])], update: true });
+  assert.equal(updated[0].commit, second);
+  assert.equal(updated[0].updated_from, first);
+  assert.equal(readCheckoutCommit(target), second);
+  assert.equal(readFileSync(join(target, "entry.txt"), "utf8").replaceAll("\r\n", "\n"), "second\n");
+  assert.equal(git(target, ["status", "--porcelain"]), "");
+});
+
+const RAIL_PIN = PROVENANCE.find((entry) => entry.name === "consequence-rail").commit;
+const MB_PIN = PROVENANCE.find((entry) => entry.name === "mandatebound").commit;
+
+/** A deps directory holding only the two verifier entrypoints and their HEADs. */
+function verifierDeps({ rail = RAIL_PIN, mandatebound = MB_PIN, omit = null } = {}) {
+  const deps = tempRoot();
+  for (const [name, entrypoint, head] of [["consequence-rail", "cmd/crctl.js", rail], ["mandatebound", "dist/cli.js", mandatebound]]) {
+    if (omit === name) continue;
+    mkdirSync(join(deps, name, entrypoint, ".."), { recursive: true });
+    writeFileSync(join(deps, name, entrypoint), "// fixture\n");
+    if (head !== null) {
+      mkdirSync(join(deps, name, ".git"), { recursive: true });
+      writeFileSync(join(deps, name, ".git", "HEAD"), `${head}\n`);
+    }
+  }
+  return deps;
+}
+
+/**
+ * A store with one case per verify status, newest first:
+ * 2035-05 verified, 2035-04 unavailable (simulate), 2035-03 conflicting
+ * (digest altered), 2035-02 unsupported (rail verifier rejects), 2035-01
+ * unreadable (corrupt manifest).
+ */
+async function verifyStore({ only = null } = {}) {
+  const outputRoot = tempRoot();
+  const { railBundle, digest } = replayBundleFixture();
+  const review = {
+    verdict: "recorded",
+    reviewId: "review-replay-1",
+    actionId: "act_replay_1",
+    evidenceDigest: digest,
+    legalEffect: "not-determined",
+    receipt: { outcome: "compensated" },
+    upstream: { valid: true, verifier: "consequence-rail:bundle-verify", outcome: "compensated", trustedKeyIds: ["k"] },
+    reviewDigest: "sha256:replayed",
+  };
+  const railCase = (runId, recorded) => runDemo(["--fault", "duplicate", "--prove", "rail"], stubOptions(outputRoot, {
+    runId,
+    runActFn: async () => ({ ok: true, raw: { outcome: "compensated", state: "CLOSED", fault: "duplicate", action_id: "act_replay_1", rail_bundle: structuredClone(railBundle) }, status: 0 }),
+    runProveRailFn: async () => ({ ok: true, raw: { ok: true, result: recorded }, status: 0 }),
+  }));
+  const wanted = (name) => only === null || only.includes(name);
+  if (wanted("verified")) await railCase("2035-05-verified", review);
+  if (wanted("unavailable")) await runDemo([], stubOptions(outputRoot, { runId: "2035-04-unavailable" }));
+  if (wanted("conflicting")) await railCase("2035-03-conflicting", { ...review, evidenceDigest: `sha256:${"0".repeat(64)}` });
+  if (wanted("unsupported")) await railCase("2035-02-unsupported", { ...review, upstream: { ...review.upstream, outcome: "settled" } });
+  if (wanted("unreadable")) {
+    mkdirSync(join(outputRoot, "runs", "2035-01-unreadable"), { recursive: true });
+    writeFileSync(join(outputRoot, "runs", "2035-01-unreadable", "manifest.json"), "{not json");
+  }
+  const verification = { valid: true, action_id: "act_replay_1", outcome: "compensated", trusted_key_id: "k", trusted_connector_key_id: "c" };
+  return { outputRoot, runner: replayRunnerFixture(verification, review) };
+}
+
+test("verify --all classifies every case of a page and fails on conflicting, unsupported, or unreadable cases", async () => {
+  const { outputRoot, runner } = await verifyStore();
+  const depsDir = verifierDeps();
+  const page = verifyCasePage({ outputRoot, depsDir, lockPath: LOCK, runner });
+  assert.equal(page.schema_version, "agent-action-stack.verify-batch/v1");
+  assert.deepEqual(page.results.map((entry) => [entry.run_id, entry.status]), [
+    ["2035-05-verified", "verified"],
+    ["2035-04-unavailable", "unavailable"],
+    ["2035-03-conflicting", "conflicting"],
+    ["2035-02-unsupported", "unsupported"],
+    ["2035-01-unreadable", "unreadable"],
+  ]);
+  assert.deepEqual(page.counts, { verified: 1, unavailable: 1, conflicting: 1, unsupported: 1, unreadable: 1, error: 0 });
+  assert.equal(page.scanned, 5);
+  assert.equal(page.next_cursor, null);
+  assert.equal(page.results[0].reason, null);
+  assert.match(page.results[2].reason, /^conflicting: /);
+  assert.equal(page.results[4].reason, "Case file contains invalid JSON.");
+  assert.deepEqual(page.results[0].recorded_pins, [{ name: "consequence-rail", commit: RAIL_PIN }, { name: "mandatebound", commit: MB_PIN }]);
+  assert.deepEqual(page.results[0].pins_differ, []);
+  assert.deepEqual(page.results[4].recorded_pins, []);
+  assert.equal(page.results[4].pins_differ, null);
+  assert.deepEqual(page.verifier, [
+    { name: "consequence-rail", checkout_commit: RAIL_PIN, locked_commit: RAIL_PIN, matches_lock: true },
+    { name: "mandatebound", checkout_commit: MB_PIN, locked_commit: MB_PIN, matches_lock: true },
+  ]);
+
+  const cli = await captureMain(["verify", "--all", "--root", outputRoot], { verifyOptions: { depsDir, lockPath: LOCK, runner } });
+  assert.equal(cli.exitCode, 1);
+  const lines = cli.stdout.trimEnd().split("\n");
+  assert.equal(lines[0], `verifier consequence-rail: ${RAIL_PIN} (lock ${RAIL_PIN})`);
+  assert.equal(lines[2], "2035-05-verified verified");
+  assert.match(lines[3], /^2035-04-unavailable unavailable: this run persisted no rail bundle/);
+  assert.ok(lines.includes("counts: verified=1 unavailable=1 conflicting=1 unsupported=1 unreadable=1 error=0"));
+  assert.ok(lines.includes("scanned: 5"));
+  assert.equal(lines.at(-1), "next_cursor: none");
+  const json = await captureMain(["verify", "--all", "--root", outputRoot, "--json"], { verifyOptions: { depsDir, lockPath: LOCK, runner } });
+  assert.equal(json.exitCode, 1);
+  assert.equal(JSON.parse(json.stdout).ok, false);
+  assert.deepEqual(JSON.parse(json.stdout).counts, page.counts);
+});
+
+test("verify --all exits 0 when every case verified or is only unavailable", async () => {
+  const depsDir = verifierDeps();
+  for (const only of [["verified"], ["unavailable"], ["verified", "unavailable"]]) {
+    const { outputRoot, runner } = await verifyStore({ only });
+    const result = await captureMain(["verify", "--all", "--root", outputRoot, "--json"], { verifyOptions: { depsDir, lockPath: LOCK, runner } });
+    assert.equal(result.exitCode, 0, only.join(","));
+    assert.equal(JSON.parse(result.stdout).ok, true);
+  }
+  const empty = await captureMain(["verify", "--all", "--root", tempRoot()], { verifyOptions: { depsDir, lockPath: LOCK } });
+  assert.equal(empty.exitCode, 0);
+  assert.match(empty.stdout, /no cases in this page\n/);
+});
+
+test("verify --all pages a store with the cases cursor", async () => {
+  const { outputRoot, runner } = await verifyStore();
+  const depsDir = verifierDeps();
+  const seen = [];
+  let before = null;
+  const cursors = [];
+  for (let page = 0; page < 3; page += 1) {
+    const result = verifyCasePage({ outputRoot, depsDir, lockPath: LOCK, runner, limit: 2, before });
+    seen.push(...result.results.map((entry) => entry.run_id));
+    cursors.push(result.next_cursor);
+    before = result.next_cursor;
+  }
+  assert.deepEqual(seen, ["2035-05-verified", "2035-04-unavailable", "2035-03-conflicting", "2035-02-unsupported", "2035-01-unreadable"]);
+  assert.deepEqual(cursors, ["2035-04-unavailable", "2035-02-unsupported", null]);
+  const cli = await captureMain(["verify", "--all", "--root", outputRoot, "--limit", "2"], { verifyOptions: { depsDir, lockPath: LOCK, runner } });
+  assert.match(cli.stdout, /next_cursor: 2035-04-unavailable\nContinue with --before 2035-04-unavailable and the same root and page options\.\n$/);
+  const second = await captureMain(["verify", "--all", "--root", outputRoot, "--limit", "2", "--before", "2035-04-unavailable", "--json"], { verifyOptions: { depsDir, lockPath: LOCK, runner } });
+  assert.deepEqual(JSON.parse(second.stdout).results.map((entry) => entry.run_id), ["2035-03-conflicting", "2035-02-unsupported"]);
+});
+
+test("verify --all usage errors exit 2 before any verification", async () => {
+  let calls = 0;
+  const runner = () => { calls += 1; throw new Error("must not run"); };
+  for (const argv of [
+    ["verify", "--all", "some-run"],
+    ["verify", "--all", "--all"],
+    ["verify", "--all", "--limit", "0"],
+    ["verify", "--all", "--limit", "51"],
+    ["verify", "--all", "--limit"],
+    ["verify", "--all", "--before", "../escape"],
+    ["verify", "--all", "--bogus"],
+    ["verify", "--before", "2035-01-a"],
+    ["verify", "some-run", "--limit", "5"],
+  ]) {
+    const result = await captureMain(argv, { nodeVersion: "20.0.0", verifyOptions: { runner } });
+    assert.equal(result.exitCode, 2, argv.join(" "));
+    assert.match(result.stderr, /aas verify --all \[--root output-dir\]/, argv.join(" "));
+  }
+  assert.equal(calls, 0);
+});
+
+test("verify --all aborts once with the bootstrap hint when a verifier is missing", async () => {
+  const { outputRoot, runner } = await verifyStore({ only: ["verified", "unavailable"] });
+  for (const omit of ["consequence-rail", "mandatebound"]) {
+    const depsDir = verifierDeps({ omit });
+    assert.throws(() => verifyCasePage({ outputRoot, depsDir, lockPath: LOCK, runner }), /^Error: Missing verifier deps\/(consequence-rail\/cmd\/crctl|mandatebound\/dist\/cli)\.js\. Run: npm run bootstrap$/);
+    const cli = await captureMain(["verify", "--all", "--root", outputRoot], { verifyOptions: { depsDir, lockPath: LOCK, runner } });
+    assert.equal(cli.exitCode, 1);
+    assert.equal(cli.stdout, "");
+    assert.equal(cli.stderr.match(/npm run bootstrap/g).length, 1);
+  }
+});
+
+test("verify --all reports the verifier's own checkout commits, never the lock's, and recorded pins that differ", async () => {
+  const { outputRoot, runner } = await verifyStore({ only: ["verified"] });
+  const other = "2".repeat(40);
+  const stale = verifierRevisions({ depsDir: verifierDeps({ mandatebound: other }), lockPath: LOCK });
+  assert.deepEqual(stale[1], { name: "mandatebound", checkout_commit: other, locked_commit: MB_PIN, matches_lock: false });
+  const page = verifyCasePage({ outputRoot, depsDir: verifierDeps({ mandatebound: other }), lockPath: LOCK, runner });
+  assert.deepEqual(page.results[0].pins_differ, ["mandatebound"]);
+  const cli = await captureMain(["verify", "--all", "--root", outputRoot], { verifyOptions: { depsDir: verifierDeps({ mandatebound: other }), lockPath: LOCK, runner } });
+  assert.match(cli.stdout, new RegExp(`^verifier mandatebound: ${other} \\(lock ${MB_PIN}\\) differs from lock$`, "m"));
+  assert.match(cli.stdout, /^2035-05-verified verified \(recorded under other pins: mandatebound\)$/m);
+  // No Git metadata (an offline verifier copy) or an attached HEAD: unknown,
+  // never inferred from the lock.
+  const unknown = verifyCasePage({ outputRoot, depsDir: verifierDeps({ rail: null, mandatebound: null }), lockPath: LOCK, runner });
+  assert.deepEqual(unknown.verifier.map((entry) => [entry.checkout_commit, entry.matches_lock]), [[null, null], [null, null]]);
+  assert.equal(unknown.results[0].pins_differ, null);
+  const attachedDeps = verifierDeps();
+  writeFileSync(join(attachedDeps, "consequence-rail", ".git", "HEAD"), "ref: refs/heads/main\n");
+  assert.equal(verifierRevisions({ depsDir: attachedDeps, lockPath: LOCK })[0].checkout_commit, null);
+  const noLock = verifierRevisions({ depsDir: verifierDeps(), lockPath: join(tempRoot(), "missing-lock.json") });
+  assert.deepEqual(noLock.map((entry) => [entry.locked_commit, entry.matches_lock]), [[null, null], [null, null]]);
+});
+
+test("verify --all records a verifier that cannot run as an error without stopping the page", async () => {
+  const { outputRoot } = await verifyStore({ only: ["verified", "unavailable"] });
+  const runner = () => ({ status: null, stdout: "", stderr: "", error: Object.assign(new Error("spawn failed"), { code: "ENOENT" }) });
+  const page = verifyCasePage({ outputRoot, depsDir: verifierDeps(), lockPath: LOCK, runner });
+  assert.deepEqual(page.results.map((entry) => entry.status), ["error", "unavailable"]);
+  assert.match(page.results[0].reason, /replay child process error \(ENOENT\)/);
+  assert.equal(page.counts.error, 1);
+});
+
+function responseFileAt(contents, name = "agent-response.json") {
+  const path = join(tempRoot(), name);
+  writeFileSync(path, contents);
+  return path;
+}
+
+test("--response-file and --response are mutually exclusive", async () => {
+  const path = responseFileAt('{"summary":"ok"}');
+  assert.throws(() => parseDemoOptions(["--response", "pass", "--response-file", path]), /Choose either --response or --response-file, not both/);
+  assert.throws(() => parseDemoOptions(["--response-file", path, "--response", "fail"]), /not both/);
+  assert.equal(parseDemoOptions(["--response-file", path]).responseName, "file");
+  assert.equal(parseDemoOptions(["--response-file", path]).responseFile, path);
+  const cli = await captureMain(["demo", "--response", "pass", "--response-file", path], { nodeVersion: "20.0.0" });
+  assert.equal(cli.exitCode, 2);
+  assert.match(cli.stderr, /not both/);
+  const missing = await captureMain(["demo", "--response-file"]);
+  assert.equal(missing.exitCode, 2);
+  assert.match(missing.stderr, /Missing value for demo option: --response-file/);
+});
+
+test("response files the decide stage would refuse are usage errors that run nothing and write nothing", async () => {
+  const exact = Buffer.alloc(RESPONSE_FILE_LIMIT + 1, 0x20);
+  exact[0] = 0x7b;
+  exact[1] = 0x7d;
+  const cases = [
+    [join(tempRoot(), "absent.json"), /--response-file cannot be read \(ENOENT\)/],
+    [tempRoot(), /--response-file (must name a regular file|cannot be read \(E[A-Z]+\))/],
+    [responseFileAt(exact), /exceeds the decide stage's 1000000-byte input limit/],
+    [responseFileAt(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('{"summary":"ok"}')])), /byte order mark/],
+    [responseFileAt(Buffer.from([0xff, 0xfe, 0x7b, 0x00, 0x7d, 0x00])), /byte order mark/],
+    [responseFileAt(Buffer.from([0x7b, 0x22, 0xc3, 0x28, 0x22, 0x3a, 0x31, 0x7d])), /not valid UTF-8/],
+    [responseFileAt('{"summary": '), /does not contain valid JSON/],
+    [responseFileAt(""), /does not contain valid JSON/],
+    [responseFileAt('[{"summary":"ok"}]'), /must contain one JSON object/],
+    [responseFileAt("null"), /must contain one JSON object/],
+  ];
+  for (const [path, pattern] of cases) {
+    const outputRoot = tempRoot();
+    let decideCalls = 0;
+    let resolverCalls = 0;
+    await assert.rejects(
+      () => runDemo(["--response-file", path], stubOptions(outputRoot, {
+        componentResolver: () => { resolverCalls += 1; return PROVENANCE; },
+        runDecideFn: async () => { decideCalls += 1; return { ok: true, raw: { passed: true }, status: 0 }; },
+      })),
+      (error) => error.name === "UsageError" && pattern.test(error.message),
+      String(pattern),
+    );
+    assert.equal(decideCalls, 0);
+    assert.equal(resolverCalls, 0);
+    assert.equal(existsSync(join(outputRoot, "runs")), false);
+  }
+  // Exactly at the limit is accepted.
+  const atLimit = Buffer.alloc(RESPONSE_FILE_LIMIT, 0x20);
+  atLimit[0] = 0x7b;
+  atLimit[1] = 0x7d;
+  assert.equal(readResponseFile(responseFileAt(atLimit)).bytes.length, RESPONSE_FILE_LIMIT);
+  // Content never reaches the message.
+  try {
+    readResponseFile(responseFileAt('{"secret-token-value": '));
+    assert.fail("invalid JSON was accepted");
+  } catch (error) {
+    assert.doesNotMatch(error.message, /secret-token-value/);
+  }
+  const cli = await captureMain(["demo", "--response-file", responseFileAt("[1]")], { nodeVersion: "20.0.0" });
+  assert.equal(cli.exitCode, 2);
+  assert.match(cli.stderr, /must contain one JSON object/);
+});
+
+test("a named pipe cannot hold the response-file reader open", { skip: process.platform === "win32" }, () => {
+  const dir = tempRoot();
+  const fifo = join(dir, "response.json");
+  execFileSync("mkfifo", [fifo]);
+  const url = new URL("../bin/aas.mjs", import.meta.url).href;
+  const script = `import {readResponseFile} from ${JSON.stringify(url)};try{readResponseFile(${JSON.stringify(fifo)});process.exitCode=1;}catch(error){if(!/regular file/.test(error.message))throw error;process.stdout.write("rejected");}`;
+  const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", timeout: 2000 });
+  assert.equal(child.error, undefined);
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(child.stdout, "rejected");
+});
+
+test("decide evaluates a private copy of the exact response bytes and the case records name, digest, and size", async () => {
+  const contents = '{\n  "summary": "Refund approved",\n  "decision": "accept"\n}\n';
+  const path = responseFileAt(contents, "my agent output.json");
+  const outputRoot = tempRoot();
+  let evaluated = null;
+  let evaluatedPath = null;
+  const result = await runDemo(["--response-file", path, "--domain", "inventory"], stubOptions(outputRoot, {
+    runId: "response-file-run",
+    runDecideFn: async (responsePath, { domain }) => {
+      evaluatedPath = responsePath;
+      evaluated = readFileSync(responsePath);
+      assert.equal(domain, "inventory");
+      return { ok: true, raw: { passed: true, policy_id: "aas-inventory-gate-v1", rule_results: [] }, status: 0 };
+    },
+  }));
+  assert.equal(evaluated.toString("utf8"), contents);
+  assert.notEqual(evaluatedPath, path);
+  assert.equal(existsSync(evaluatedPath), false, "the scratch copy must be removed");
+  const digest = `sha256:${createHash("sha256").update(contents).digest("hex")}`;
+  assert.equal(result.report.response, "file");
+  assert.deepEqual(result.report.requested_options, {
+    response: "file",
+    response_file: { name: "my agent output.json", digest, bytes: Buffer.byteLength(contents) },
+    domain: "inventory",
+    fault: "none",
+    prove: "simulate",
+    dispute: false,
+  });
+  assert.equal(result.report.stages.decide.policy_id, "aas-inventory-gate-v1");
+  const lines = captureHuman(result.report);
+  assert.equal(lines[1], "response: file");
+  assert.equal(lines[13], `response_file: my agent output.json ${digest}`);
+  // The scratch copy is removed even when decide throws.
+  let thrownPath = null;
+  const failed = await runDemo(["--response-file", path], stubOptions(tempRoot(), {
+    runDecideFn: async (responsePath) => { thrownPath = responsePath; throw new Error("decide crashed"); },
+  }));
+  assert.equal(failed.exitCode, 1);
+  assert.equal(existsSync(thrownPath), false);
+  // Fixture runs keep their exact requested_options shape.
+  const fixture = await runDemo([], stubOptions(tempRoot()));
+  assert.deepEqual(Object.keys(fixture.report.requested_options), ["response", "domain", "fault", "prove", "dispute"]);
+  // A long basename is clipped to 200 characters.
+  const long = responseFileAt('{"summary":"x"}', `${"n".repeat(230)}.json`);
+  assert.equal(readResponseFile(long).name.length, 200);
+});
+
+test("a policy refusal names its failed rules after flow:, capped at 50", async () => {
+  const outputRoot = tempRoot();
+  const rules = (count) => Array.from({ length: count }, (_, index) => ({ rule_id: `rule-${index}`, passed: false, path: "p", kind: "equals", reason_code: "VALUE_NOT_EQUAL" }));
+  const refused = await runDemo(["--response", "fail"], stubOptions(outputRoot, {
+    runId: "refused-rules",
+    runDecideFn: async () => ({ ok: false, raw: { passed: false, policy_id: "aas-refund-gate-v1", rule_results: [{ rule_id: "summary-present", passed: true }, ...rules(4)] }, status: 0 }),
+  }));
+  const lines = captureHuman(refused.report, refused.bundleDir);
+  assert.equal(lines[12], "flow: decide -> stop (policy failed)");
+  assert.equal(lines[13], "decide_failed_rules: rule-0, rule-1, rule-2, rule-3");
+  assert.equal(lines.at(-1), `bundle: ${refused.bundleDir}`);
+  const many = await runDemo(["--response", "fail"], stubOptions(outputRoot, {
+    runId: "refused-many",
+    runDecideFn: async () => ({ ok: false, raw: { passed: false, rule_results: rules(53) }, status: 0 }),
+  }));
+  const manyLine = captureHuman(many.report)[13];
+  assert.match(manyLine, /^decide_failed_rules: rule-0, rule-1, .*rule-49 \+3 more$/);
+  assert.equal(manyLine.split(", ").length, 50);
+  // A pass and a decide error print no rule line.
+  const passed = await runDemo([], stubOptions(outputRoot, { runId: "passed-rules" }));
+  assert.equal(captureHuman(passed.report).some((line) => line.startsWith("decide_failed_rules:")), false);
+  const errored = await runDemo([], stubOptions(outputRoot, { runId: "errored-rules", runDecideFn: async () => { throw new Error("boom"); } }));
+  assert.equal(captureHuman(errored.report).some((line) => line.startsWith("decide_failed_rules:")), false);
+});
+
+test("inspect lists the response file under requested settings in Markdown and JSON", async () => {
+  const { inspectCase, renderCaseMarkdown } = await import("../bin/case-review.mjs");
+  const outputRoot = tempRoot();
+  const path = responseFileAt('{"summary":"ok"}', "agent_[1].json");
+  await runDemo(["--response-file", path], stubOptions(outputRoot, { runId: "inspect-file" }));
+  const review = inspectCase("inspect-file", { outputRoot });
+  assert.equal(review.requested_options.response, "file");
+  assert.equal(review.requested_options.response_file.name, "agent_[1].json");
+  const markdown = renderCaseMarkdown(review);
+  assert.match(markdown, /- response: file\n/);
+  assert.match(markdown, /- response_file: agent\\_\\\[1\\\]\\\.json; sha256:[0-9a-f]{64}; 16 bytes\n/);
+  await runDemo([], stubOptions(outputRoot, { runId: "inspect-fixture" }));
+  assert.doesNotMatch(renderCaseMarkdown(inspectCase("inspect-fixture", { outputRoot })), /response_file/);
+});
+
+/**
+ * A deps directory with all three locked checkouts, each with its expected and
+ * post-build entrypoints and a detached .git/HEAD, plus a fake git that
+ * answers for each checkout. `overrides[name]` changes one checkout.
+ */
+function doctorDeps(overrides = {}) {
+  const components = loadComponentLock(LOCK);
+  const deps = tempRoot();
+  const states = {};
+  for (const component of components) {
+    const state = { commit: component.commit, origin: component.repository, clean: true, detached: true, omit: [], absent: false, ...(overrides[component.name] ?? {}) };
+    states[component.name] = state;
+    if (state.absent) continue;
+    const target = join(deps, component.name);
+    mkdirSync(join(target, ".git"), { recursive: true });
+    writeFileSync(join(target, ".git", "HEAD"), `${state.commit}\n`);
+    for (const entrypoint of [...component.expected_entrypoints, ...(component.post_build_entrypoints ?? [])]) {
+      if (state.omit.includes(entrypoint)) continue;
+      mkdirSync(join(target, entrypoint, ".."), { recursive: true });
+      writeFileSync(join(target, entrypoint), "fixture\n");
+    }
+  }
+  const calls = { git: 0, python: 0 };
+  const command = (name, args) => {
+    calls.git += 1;
+    assert.equal(name, "git");
+    const state = states[args[1].split(/[\\/]/).pop()];
+    const sub = args[2];
+    if (sub === "config") return { status: 0, stdout: `${state.origin}\n`, stderr: "", error: null };
+    if (sub === "rev-parse") return { status: 0, stdout: `${state.commit}\n`, stderr: "", error: null };
+    if (sub === "symbolic-ref") return { status: state.detached ? 1 : 0, stdout: state.detached ? "" : "main\n", stderr: "", error: null };
+    if (sub === "status") return { status: 0, stdout: state.clean ? "" : " M file\n", stderr: "", error: null };
+    throw new Error(`unexpected git command: ${args.join(" ")}`);
+  };
+  const pythonRunner = (bin, args) => {
+    calls.python += 1;
+    return { status: 0, stdout: "3.12\n", stderr: "", error: null };
+  };
+  return { deps, command, pythonRunner, calls };
+}
+
+const NO_PYTHON = () => ({ status: null, stdout: "", stderr: "", error: Object.assign(new Error("spawn"), { code: "ENOENT" }) });
+
+function doctorCheck(result, name) {
+  return result.checks.find((check) => check.name === name);
+}
+
+test("doctor reports a ready checkout for demo and replay and exits 0", async () => {
+  const fixture = doctorDeps();
+  const demo = runDoctor({ depsDir: fixture.deps, lockPath: LOCK, command: fixture.command, pythonRunner: fixture.pythonRunner, nodeVersion: "22.12.0", env: {} });
+  assert.equal(demo.schema_version, "agent-action-stack.doctor/v1");
+  assert.equal(demo.ok, true);
+  assert.equal(demo.for, "demo");
+  assert.deepEqual(demo.checks.map((check) => [check.name, check.status]), [
+    ["node", "ok"],
+    ["python", "ok"],
+    ["component-lock", "ok"],
+    ["dependency:constitutional-agent-testbench", "ok"],
+    ["dependency:consequence-rail", "ok"],
+    ["dependency:mandatebound", "ok"],
+  ]);
+  for (const check of demo.checks) assert.deepEqual(Object.keys(check), ["name", "status", "detail", "remedy"]);
+  assert.equal(doctorCheck(demo, "node").detail, "Node.js 22.12.0 (needs 22.12.0+)");
+  const cli = await captureMain(["doctor", "--json"], { nodeVersion: "24.0.0", doctorOptions: { depsDir: fixture.deps, lockPath: LOCK, command: fixture.command, pythonRunner: fixture.pythonRunner, env: {} } });
+  assert.equal(cli.exitCode, 0);
+  assert.equal(JSON.parse(cli.stdout).ok, true);
+  const human = await captureMain(["doctor"], { nodeVersion: "24.0.0", doctorOptions: { depsDir: fixture.deps, lockPath: LOCK, command: fixture.command, pythonRunner: fixture.pythonRunner, env: {} } });
+  assert.match(human.stdout, /^doctor: ready for demo\nok {9}node: Node\.js 24\.0\.0 \(needs 22\.12\.0\+\)\n/);
+  const replay = runDoctor({ mode: "replay", depsDir: fixture.deps, lockPath: LOCK, command: fixture.command, pythonRunner: fixture.pythonRunner, nodeVersion: "22.12.0" });
+  assert.equal(replay.ok, true);
+  assert.deepEqual(replay.checks.map((check) => [check.name, check.status]), [
+    ["node", "ok"],
+    ["python", "not-needed"],
+    ["component-lock", "ok"],
+    ["verifier:consequence-rail", "ok"],
+    ["verifier-revision:consequence-rail", "ok"],
+    ["verifier:mandatebound", "ok"],
+    ["verifier-revision:mandatebound", "ok"],
+  ]);
+});
+
+test("doctor names a remedy for every blocker", () => {
+  const run = (overrides, options = {}) => {
+    const fixture = doctorDeps(overrides);
+    return runDoctor({ depsDir: fixture.deps, lockPath: LOCK, command: fixture.command, pythonRunner: fixture.pythonRunner, nodeVersion: "22.12.0", env: {}, ...options });
+  };
+  const missing = run({ "consequence-rail": { absent: true } });
+  assert.equal(missing.ok, false);
+  assert.deepEqual(doctorCheck(missing, "dependency:consequence-rail"), { name: "dependency:consequence-rail", status: "blocked", detail: "deps/consequence-rail is missing", remedy: "npm run bootstrap" });
+  const stale = run({ mandatebound: { commit: "1".repeat(40) } });
+  assert.equal(doctorCheck(stale, "dependency:mandatebound").remedy, "npm run bootstrap:update");
+  assert.match(doctorCheck(stale, "dependency:mandatebound").detail, /is at 1111111 but the lock pins 32d5256/);
+  for (const [override, detail] of [[{ clean: false }, /local changes/], [{ origin: "https://github.com/example/fork.git" }, /not the locked repository/], [{ detached: false }, /on a branch/]]) {
+    const result = run({ "consequence-rail": override });
+    assert.equal(doctorCheck(result, "dependency:consequence-rail").status, "blocked");
+    assert.match(doctorCheck(result, "dependency:consequence-rail").detail, detail);
+    assert.equal(doctorCheck(result, "dependency:consequence-rail").remedy, "remove deps/consequence-rail and run npm run bootstrap");
+  }
+  const unbuilt = run({ mandatebound: { omit: ["dist/cli.js"] } });
+  assert.deepEqual(doctorCheck(unbuilt, "dependency:mandatebound"), { name: "dependency:mandatebound", status: "blocked", detail: "deps/mandatebound is missing dist/cli.js", remedy: "npm run bootstrap" });
+  const oldNode = run({}, { nodeVersion: "20.11.0" });
+  assert.equal(doctorCheck(oldNode, "node").status, "blocked");
+  assert.equal(doctorCheck(oldNode, "node").remedy, "Install Node.js 22.12.0 or newer");
+  const noLock = run({}, { lockPath: join(tempRoot(), "absent-lock.json") });
+  assert.equal(doctorCheck(noLock, "component-lock").status, "blocked");
+  assert.equal(noLock.checks.some((check) => check.name.startsWith("dependency:")), false);
+});
+
+test("without Python, demo is not ready but replay is, and replay spawns neither git nor Python", () => {
+  const fixture = doctorDeps();
+  const demo = runDoctor({ depsDir: fixture.deps, lockPath: LOCK, command: fixture.command, pythonRunner: NO_PYTHON, nodeVersion: "22.12.0", env: {} });
+  assert.equal(demo.ok, false);
+  assert.deepEqual(doctorCheck(demo, "python"), { name: "python", status: "blocked", detail: "No Python interpreter was found for the decide stage", remedy: "Install Python 3.11+ or set AAS_PYTHON to its interpreter" });
+  const badOverride = runDoctor({ depsDir: fixture.deps, lockPath: LOCK, command: fixture.command, pythonRunner: NO_PYTHON, nodeVersion: "22.12.0", env: { AAS_PYTHON: "missing-python" } });
+  assert.match(doctorCheck(badOverride, "python").detail, /AAS_PYTHON \(missing-python\) did not report a usable Python version/);
+  const before = { ...fixture.calls };
+  let pythonCalls = 0;
+  const replay = runDoctor({ mode: "replay", depsDir: fixture.deps, lockPath: LOCK, command: fixture.command, pythonRunner: () => { pythonCalls += 1; return NO_PYTHON(); }, nodeVersion: "22.12.0" });
+  assert.equal(replay.ok, true);
+  assert.deepEqual(fixture.calls, before, "replay mode spawned git");
+  assert.equal(pythonCalls, 0, "replay mode probed Python");
+});
+
+test("replay readiness needs the verifier entrypoints, and a revision that differs or is unknown is only a warning", () => {
+  const unbuilt = doctorDeps({ mandatebound: { omit: ["dist/cli.js"] } });
+  const notReady = runDoctor({ mode: "replay", depsDir: unbuilt.deps, lockPath: LOCK, command: unbuilt.command, nodeVersion: "22.12.0" });
+  assert.equal(notReady.ok, false);
+  assert.deepEqual(doctorCheck(notReady, "verifier:mandatebound"), { name: "verifier:mandatebound", status: "blocked", detail: "deps/mandatebound/dist/cli.js is missing", remedy: "npm run bootstrap" });
+
+  const other = "3".repeat(40);
+  const moved = doctorDeps({ "consequence-rail": { commit: other } });
+  const warned = runDoctor({ mode: "replay", depsDir: moved.deps, lockPath: LOCK, command: moved.command, nodeVersion: "22.12.0" });
+  assert.equal(warned.ok, true);
+  assert.equal(doctorCheck(warned, "verifier-revision:consequence-rail").status, "warning");
+  assert.match(doctorCheck(warned, "verifier-revision:consequence-rail").detail, /differs from the lock's 78d6f8a23dbce69bb443b453c8d471645f67daac; cases recorded under other pins still replay/);
+  assert.equal(doctorCheck(warned, "verifier-revision:consequence-rail").remedy, "npm run bootstrap:update");
+
+  // An offline copy: entrypoints only, no Git metadata, no lock.
+  const offline = tempRoot();
+  for (const [name, entrypoint] of [["consequence-rail", "cmd/crctl.js"], ["mandatebound", "dist/cli.js"]]) {
+    mkdirSync(join(offline, name, entrypoint, ".."), { recursive: true });
+    writeFileSync(join(offline, name, entrypoint), "fixture\n");
+  }
+  const copy = runDoctor({ mode: "replay", depsDir: offline, lockPath: join(tempRoot(), "absent-lock.json"), nodeVersion: "22.12.0" });
+  assert.equal(copy.ok, true);
+  assert.equal(doctorCheck(copy, "component-lock").status, "warning");
+  assert.match(doctorCheck(copy, "verifier-revision:mandatebound").detail, /^revision unknown/);
+  assert.equal(doctorCheck(copy, "verifier-revision:mandatebound").status, "warning");
+});
+
+test("doctor usage errors exit 2, and doctor writes nothing", async () => {
+  for (const argv of [["doctor", "--for"], ["doctor", "--for", "bogus"], ["doctor", "extra"], ["doctor", "--for", "demo", "--for", "replay"], ["doctor", "--json", "--json"]]) {
+    const result = await captureMain(argv);
+    assert.equal(result.exitCode, 2, argv.join(" "));
+    assert.match(result.stderr, /Usage: aas doctor \[--for demo\|replay\] \[--json\]/);
+  }
+  assert.throws(() => runDoctor({ mode: "everything" }), /--for must be demo or replay/);
+  const fixture = doctorDeps({ mandatebound: { commit: "1".repeat(40) } });
+  const snapshot = () => JSON.stringify(readdirSync(fixture.deps, { recursive: true }).sort());
+  const before = snapshot();
+  const cli = await captureMain(["doctor", "--json"], { nodeVersion: "22.12.0", doctorOptions: { depsDir: fixture.deps, lockPath: LOCK, command: fixture.command, pythonRunner: fixture.pythonRunner, env: {} } });
+  assert.equal(cli.exitCode, 1);
+  await captureMain(["doctor", "--for", "replay"], { nodeVersion: "22.12.0", doctorOptions: { depsDir: fixture.deps, lockPath: LOCK } });
+  assert.equal(snapshot(), before);
+  assert.equal(existsSync(join(fixture.deps, ".out")), false);
+  assert.match(helpText(), /^ {2}aas doctor \[--for demo\|replay\] \[--json\]$/m);
+  assert.match(helpText(), /^ {2}--for demo\|replay {8}doctor: /m);
 });

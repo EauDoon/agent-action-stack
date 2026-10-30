@@ -26,6 +26,13 @@ Changing a pinned component is a coordinated change:
 4. Run `npm run integration` to prove the new pin still composes from a clean
    checkout.
 
+After a lock bump, an existing `deps/` checkout at the old commit is refused
+with both commits named. `npm run bootstrap:update` moves a clean, detached
+checkout of the locked repository to the new commit in place; checkouts with
+local changes, another origin, or a branch are still refused. Use the npm
+script rather than `node scripts/bootstrap.mjs --update` on Windows, where
+bootstrap needs npm to locate its own CLI for MandateBound.
+
 Do not bypass the lockfile. Editing `deps/` directly, swapping a remote URL,
 or relaxing the dirty-checkout rejection are all out of scope for normal
 contributions.

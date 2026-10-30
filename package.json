@@ -9,6 +9,7 @@
   },
   "scripts": {
     "bootstrap": "node ./scripts/bootstrap.mjs",
+    "bootstrap:update": "node ./scripts/bootstrap.mjs --update",
     "demo": "node ./bin/aas.mjs demo",
     "demo:fail": "node ./bin/aas.mjs demo --response fail",
     "demo:dispute": "node ./bin/aas.mjs demo --fault duplicate",

@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { replayBundle, runProveRail } from "../bin/aas.mjs";
+import { DEMO_FAULTS_BY_DOMAIN, NO_RECEIPT_FAULTS, replayBundle, runProveRail } from "../bin/aas.mjs";
 import { canonicalJson, digest } from "../deps/consequence-rail/src/canonical.js";
-import { createDemoRuntime, buildRefundProposal, prepareRefund, runRefundDemo } from "../deps/consequence-rail/src/demo.js";
+import { createDemoRuntime, buildRefundProposal, DEMO_FAULTS, prepareRefund, runRefundDemo } from "../deps/consequence-rail/src/demo.js";
+import { INVENTORY_DEMO_FAULTS } from "../deps/consequence-rail/src/inventory-demo.js";
+import { scenarioCatalog } from "../deps/consequence-rail/src/scenarios.js";
 import { validateSettlementBundle } from "../deps/consequence-rail/src/bundle-validation.js";
 import { MemoryEventStore } from "../deps/consequence-rail/src/event-store.js";
 import { createDemoSigner, signArtifact } from "../deps/consequence-rail/src/signing.js";
@@ -94,4 +96,37 @@ test("moving-clock rail evidence survives the same-case handoff and replay", asy
     stages: { act: { action_id: actionId, rail_bundle: bundle }, prove: proved.raw },
   });
   assert.equal(replayed.ok, true, JSON.stringify(replayed));
+});
+
+test("the stack's per-domain fault lists match the pinned rail's demo catalog", () => {
+  assert.deepEqual([...DEMO_FAULTS_BY_DOMAIN.refund], [...DEMO_FAULTS]);
+  assert.deepEqual([...DEMO_FAULTS_BY_DOMAIN.inventory], [...INVENTORY_DEMO_FAULTS]);
+  const catalog = Object.fromEntries(scenarioCatalog().scenarios.map((scenario) => [scenario.name, scenario.faults]));
+  for (const domain of ["refund", "inventory"]) {
+    assert.deepEqual(catalog[domain].map((fault) => fault.name), [...DEMO_FAULTS_BY_DOMAIN[domain]], domain);
+    // A fault whose expected outcome is null ends without a settlement
+    // receipt; the stack refuses same-case review for exactly these.
+    assert.deepEqual(
+      catalog[domain].filter((fault) => fault.expected.outcome === null).map((fault) => fault.name),
+      [...NO_RECEIPT_FAULTS[domain]],
+      domain,
+    );
+  }
+});
+
+test("disputed refund case saved under the 0.3.0 pins still replays", () => {
+  // Saved with `aas demo --fault stale-evidence --prove rail` and exported by
+  // the 0.4.0 branch with Rail 78d6f8a and MandateBound 32d5256, the pins
+  // 0.3.0 released with. A disputed case in a user's store must still verify
+  // after the next pin refresh.
+  const saved = JSON.parse(readFileSync(new URL("../fixtures/v0.3.0-pins-disputed-review.json", import.meta.url), "utf8"));
+  const recorded = Object.fromEntries(saved.manifest.component_provenance.map((entry) => [entry.name, entry.commit]));
+  assert.equal(recorded["consequence-rail"], "78d6f8a23dbce69bb443b453c8d471645f67daac");
+  assert.equal(recorded.mandatebound, "32d525618e23678f86c754e4a536e4d094988a1b");
+  assert.equal(saved.report.stages.act.outcome, "disputed");
+  assert.equal(saved.report.stages.act.fault, "stale-evidence");
+  assert.equal(saved.report.stages.prove.review_verdict, "recorded");
+  const result = replayBundle(saved);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.ok(result.checks.every((check) => check.passed));
 });

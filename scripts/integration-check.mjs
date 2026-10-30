@@ -96,6 +96,26 @@ function checkIndependentReplay(sourcePath) {
       cwd: isolated,
       env: { ...process.env, PATH: "", Path: "", AAS_PYTHON: "unavailable-offline-python" },
     });
+    const offlineEnv = { ...process.env, PATH: "", Path: "", AAS_PYTHON: "unavailable-offline-python" };
+    const doctor = (args) => run(process.execPath, [join(isolated, "bin/aas.mjs"), "doctor", ...args, "--json"], { cwd: isolated, env: offlineEnv });
+    const replayReady = doctor(["--for", "replay"]);
+    check(replayReady.status === 0, `offline doctor --for replay exited ${replayReady.status}: ${replayReady.stdout.slice(-500)}${replayReady.stderr.slice(-300)}`);
+    if (replayReady.stdout.trim() !== "") {
+      const report = JSON.parse(replayReady.stdout);
+      check(report.ok === true && report.for === "replay", "offline doctor did not report replay readiness");
+      check(report.checks.filter((entry) => entry.name.startsWith("verifier-revision:")).every((entry) => entry.status === "warning" && /revision unknown/.test(entry.detail)),
+        "offline doctor inferred a verifier revision without Git metadata");
+    }
+    const demoReady = doctor([]);
+    check(demoReady.status === 1 && demoReady.stderr === "", `offline doctor for demo exited ${demoReady.status}: ${demoReady.stderr.slice(-300)}`);
+    if (demoReady.stdout.trim() !== "") {
+      const report = JSON.parse(demoReady.stdout);
+      const blocked = report.checks.filter((entry) => entry.status === "blocked").map((entry) => entry.name);
+      check(blocked.includes("python") && blocked.includes("dependency:constitutional-agent-testbench"),
+        `offline doctor for demo did not name the missing testbench and Python: ${blocked.join(", ")}`);
+    }
+    check(!existsSync(join(isolated, ".out")), "offline doctor created a case store");
+
     const intact = invoke();
     check(intact.status === 0, `independent replay failed: ${intact.stdout.slice(-600)}${intact.stderr.slice(-300)}`);
     if (intact.status === 0) check(JSON.parse(intact.stdout).ok === true, "independent replay was not verified");
@@ -130,6 +150,162 @@ function checkIndependentReplay(sourcePath) {
   }
 }
 
+/**
+ * The rail faults beyond none and duplicate: a disputed outcome reviewed and
+ * replayed, an inventory remedy failure, an action that never got a receipt,
+ * the rail's own rejection code, and the up-front refusal of same-case review
+ * for a fault with no receipt.
+ */
+function checkFaultMatrix() {
+  runDemo(["--fault", "stale-evidence", "--prove", "rail"]);
+  {
+    const { bundleDir, manifest } = latestBundle();
+    const report = readJson(join(bundleDir, "report.json"));
+    check(report.stages.act?.outcome === "disputed", `disputed path: act outcome ${report.stages.act?.outcome}`);
+    check(manifest.stages.prove?.status === "passed", "disputed path: prove did not pass");
+    check(report.stages.prove?.mode === "rail-review" && report.stages.prove?.review_verdict === "recorded",
+      "disputed path: same-case review not recorded");
+    check(report.stages.prove?.triggered_by === "act_outcome=disputed", "disputed path: wrong trigger");
+    const casePath = join(root, ".out", `disputed-${manifest.run_id}.json`);
+    const exported = run(process.execPath, ["./bin/aas.mjs", "export", manifest.run_id, "--out", casePath]);
+    check(exported.status === 0, `disputed path: export failed: ${exported.stderr.slice(-300)}`);
+    const replayed = run(process.execPath, ["./bin/aas.mjs", "replay", casePath, "--json"]);
+    check(replayed.status === 0 && JSON.parse(replayed.stdout).ok === true,
+      `disputed path: replay failed: ${replayed.stdout.slice(-400)}${replayed.stderr.slice(-300)}`);
+  }
+
+  runDemo(["--domain", "inventory", "--fault", "remedy-failure", "--prove", "rail"]);
+  {
+    const { bundleDir, manifest } = latestBundle();
+    const report = readJson(join(bundleDir, "report.json"));
+    check(report.stages.act?.outcome === "disputed", `inventory remedy-failure: act outcome ${report.stages.act?.outcome}`);
+    check(manifest.stages.prove?.status === "passed" && report.stages.prove?.review_verdict === "recorded",
+      "inventory remedy-failure: same-case review not recorded");
+  }
+
+  runDemo(["--fault", "lost-response-before-commit"]);
+  {
+    const { bundleDir } = latestBundle();
+    const report = readJson(join(bundleDir, "report.json"));
+    check(report.stages.act?.outcome === null && report.stages.act?.state === "FAILED",
+      `no-receipt path: act outcome ${report.stages.act?.outcome} state ${report.stages.act?.state}`);
+    check(report.stages.prove?.mode === "simulate" && report.stages.prove?.triggered_by === "act_outcome=null",
+      "no-receipt path: prove did not run the canned simulation for a null outcome");
+  }
+
+  const permit = runDemo(["--fault", "permit-replay"]);
+  if (permit.status === 0) {
+    const report = JSON.parse(permit.stdout);
+    check(report.stages.act?.rejection_code === "PERMIT_USED", `permit-replay: rejection_code ${report.stages.act?.rejection_code}`);
+    check(report.stages.act?.tamper_code === null, "permit-replay: unexpected tamper_code");
+  }
+
+  const before = readFileSync(join(root, ".out", "latest.json"));
+  const refused = run(process.execPath, ["./bin/aas.mjs", "demo", "--fault", "action-mutation", "--prove", "rail"]);
+  check(refused.status === 2 && /produces no settlement receipt/.test(refused.stderr),
+    `no-receipt rail review: expected a usage refusal, got ${refused.status}: ${refused.stderr.slice(-300)}`);
+  check(readFileSync(join(root, ".out", "latest.json")).equals(before), "no-receipt rail review moved the latest pointer");
+}
+
+/**
+ * Bring-your-own response JSON at decide: a refusal names the testbench's
+ * failed rules and the file digest, a passing file drives the full
+ * decide -> act -> prove flow to a verifiable case, and a file the testbench
+ * refuses (duplicate members) is a recorded decide error.
+ */
+function checkResponseFile() {
+  const failFixture = join(root, "fixtures", "response.fail.json");
+  const refused = runDemo(["--response-file", failFixture]);
+  if (refused.status === 0) {
+    const report = JSON.parse(refused.stdout);
+    const failed = (report.stages.decide?.rule_results ?? []).filter((rule) => rule.passed === false).map((rule) => rule.rule_id);
+    check(report.response === "file" && report.stages.decide?.status === "failed", "response file: refusal not recorded");
+    check(JSON.stringify(failed) === JSON.stringify(["decision-accept", "risk-allowed", "blocked-is-false", "recourse-required"]),
+      `response file: unexpected failed rules ${failed.join(", ")}`);
+    const digest = `sha256:${createHash("sha256").update(readFileSync(failFixture)).digest("hex")}`;
+    check(report.requested_options?.response_file?.digest === digest && report.requested_options.response_file.name === "response.fail.json",
+      "response file: digest or name not recorded");
+  }
+  const human = run(process.execPath, ["./bin/aas.mjs", "demo", "--response-file", failFixture]);
+  check(/^decide_failed_rules: decision-accept, risk-allowed, blocked-is-false, recourse-required$/m.test(human.stdout),
+    `response file: human refusal does not name the failed rules: ${human.stdout.slice(-400)}`);
+
+  const scratch = mkdtempSync(join(tmpdir(), "aas-response-file-"));
+  try {
+    const copy = join(scratch, "agent output.json");
+    writeFileSync(copy, readFileSync(join(root, "fixtures", "inventory.response.pass.json")));
+    const passed = runDemo(["--response-file", copy, "--domain", "inventory", "--fault", "duplicate", "--prove", "rail"]);
+    if (passed.status === 0) {
+      const report = JSON.parse(passed.stdout);
+      check(report.flow === "decide -> act -> prove" && report.stages.prove?.review_verdict === "recorded",
+        `response file: pass did not reach a recorded review (${report.flow})`);
+      check(report.stages.decide?.policy_id === "aas-inventory-gate-v1", "response file: inventory policy not used");
+      const verified = run(process.execPath, ["./bin/aas.mjs", "verify", report.run_id, "--json"]);
+      check(verified.status === 0, `response file: saved case did not verify: ${verified.stdout.slice(-300)}`);
+    }
+    const duplicate = join(scratch, "duplicate.json");
+    writeFileSync(duplicate, '{"summary":"a","summary":"b"}');
+    const errored = run(process.execPath, ["./bin/aas.mjs", "demo", "--response-file", duplicate, "--json"]);
+    check(errored.status === 1, `response file: duplicate members exited ${errored.status}, expected a decide error`);
+    if (errored.stdout.trim() !== "") {
+      const report = JSON.parse(errored.stdout);
+      check(report.stages.decide?.status === "error" && /INVALID_JSON_INPUT/.test(report.stages.decide?.reason ?? ""),
+        "response file: duplicate members not recorded as the testbench's decide error");
+    }
+    const bom = join(scratch, "bom.json");
+    writeFileSync(bom, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), readFileSync(failFixture)]));
+    const before = readFileSync(join(root, ".out", "latest.json"));
+    const usage = run(process.execPath, ["./bin/aas.mjs", "demo", "--response-file", bom]);
+    check(usage.status === 2 && /byte order mark/.test(usage.stderr), `response file: BOM exited ${usage.status}`);
+    check(readFileSync(join(root, ".out", "latest.json")).equals(before), "response file: a refused input moved the latest pointer");
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+function existingRunIds() {
+  try {
+    return readdirSync(join(root, ".out", "runs"), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Re-verify every case this proof saved, in a store of their own so cases left
+ * by earlier local runs cannot change the result: rail-review cases verify,
+ * simulate and refused cases are unavailable, and the verifier is the pin.
+ */
+function checkVerifyAll(components, priorRuns) {
+  const store = mkdtempSync(join(tmpdir(), "aas-verify-all-"));
+  try {
+    const saved = existingRunIds().filter((runId) => !priorRuns.has(runId));
+    for (const runId of saved) {
+      cpSync(join(root, ".out", "runs", runId), join(store, "runs", runId), { recursive: true });
+    }
+    const result = run(process.execPath, ["./bin/aas.mjs", "verify", "--all", "--root", store, "--limit", "50", "--json"]);
+    check(result.status === 0, `verify --all exited ${result.status}: ${result.stdout.slice(-600)}${result.stderr.slice(-300)}`);
+    if (result.status !== 0 && result.stdout.trim() === "") return;
+    const page = JSON.parse(result.stdout);
+    check(page.ok === true && page.scanned === saved.length, `verify --all scanned ${page.scanned} of ${saved.length} saved cases`);
+    for (const entry of page.results) {
+      const report = readJson(join(store, "runs", entry.run_id, "report.json"));
+      const expected = report.stages.prove?.review_verdict === "recorded" ? "verified" : "unavailable";
+      check(entry.status === expected, `verify --all: ${entry.run_id} is ${entry.status}, expected ${expected}`);
+    }
+    check(page.counts.verified >= 5, `verify --all verified only ${page.counts.verified} rail-review cases`);
+    for (const verifier of page.verifier) {
+      const pin = components.find((component) => component.name === verifier.name)?.commit;
+      check(verifier.checkout_commit === pin && verifier.matches_lock === true,
+        `verify --all: ${verifier.name} verifier ${verifier.checkout_commit} is not the pin ${pin}`);
+    }
+  } finally {
+    rmSync(store, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   assertFullStackNodeVersion();
 
@@ -140,6 +316,7 @@ async function main() {
   check(bootstrap.status === 0, `bootstrap failed: ${bootstrap.stderr.slice(-400)}`);
 
   const components = loadComponentLock(join(root, "stack-lock.json"));
+  const priorRuns = new Set(existingRunIds());
   for (const component of components) {
     const target = join(root, "deps", component.name);
     const head = git(target, ["rev-parse", "HEAD"]);
@@ -158,6 +335,10 @@ async function main() {
       check(existsSync(join(target, entrypoint)), `deps/${component.name} is missing ${entrypoint}`);
     }
   }
+
+  const doctor = run(process.execPath, ["./bin/aas.mjs", "doctor", "--json"]);
+  check(doctor.status === 0, `doctor after bootstrap exited ${doctor.status}: ${doctor.stdout.slice(-600)}${doctor.stderr.slice(-300)}`);
+  if (doctor.status === 0) check(JSON.parse(doctor.stdout).ok === true, "doctor after bootstrap is not ready");
 
   const compatibility = run(process.execPath, ["--test", "test/component-compatibility.test.mjs"]);
   check(compatibility.status === 0,
@@ -353,6 +534,10 @@ async function main() {
     );
   }
 
+  checkFaultMatrix();
+  checkResponseFile();
+  checkVerifyAll(components, priorRuns);
+
   const cases = run(process.execPath, ["./bin/aas.mjs", "cases", "--json"]);
   check(cases.status === 0, `cases failed: ${cases.stderr.slice(-300)}`);
   if (cases.status === 0) {
@@ -381,7 +566,7 @@ async function main() {
     process.exit(1);
   }
   process.stdout.write(
-    `integration check: ${components.length} pinned dependencies verified across pass, refusal, dispute, settled-review, and rail-review paths\n`,
+    `integration check: ${components.length} pinned dependencies verified across pass, refusal, dispute, settled-review, rail-review, disputed, and no-receipt paths\n`,
   );
 }
 

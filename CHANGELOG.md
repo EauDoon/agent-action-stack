@@ -6,7 +6,83 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- `aas demo --fault` accepts every synthetic fault the pinned rail demo
+  offers: 13 for `refund` and 10 for `inventory`, validated against the
+  selected `--domain` (before, only `none` and `duplicate`). Disputed
+  outcomes (`stale-evidence`, `remedy-failure`, and three post-remedy
+  faults) now reach same-case review, export, and replay, and an action
+  that ends without a receipt (`lost-response-before-commit`,
+  `action-mutation`) reaches the canned simulation with `act_outcome=null`.
+  `--prove rail` with a fault that has no receipt is refused with exit 2
+  before anything runs or is written. The report gains optional
+  `stages.act.rejection_code` and `stages.act.tamper_code` (the rail's
+  `PERMIT_USED`, `DIGEST_MISMATCH`, and `BUNDLE_TAMPERED`, null otherwise),
+  and the human output prints them as `act_rejection:` and `act_tamper:`
+  after `flow:` only when present, so `permit-replay` and `tampered-bundle`
+  no longer look identical to `none`. `aas cases --outcome disputed` filters
+  disputed cases. The GUI's Fault selector follows the selected domain,
+  `/api/run` validates the fault per domain, the history Outcome filter
+  gains `disputed` and `none`, and a fifth preset, **Disputed outcome
+  review**, runs `stale-evidence` with same-case review. Cases saved by
+  0.3.0 load unchanged.
+- `npm run bootstrap:update` (`node scripts/bootstrap.mjs --update`) moves
+  a clean, detached checkout of the locked repository to a new lock pin in
+  place: `git fetch --depth 1 origin <commit>`, a detached checkout, then
+  MandateBound's install and build. Checkouts with local changes, another
+  origin, or a branch are still refused, and a failed fetch leaves the old
+  commit. The refusal of a stale checkout, which `npm run bootstrap`,
+  `aas demo`, and the GUI all report, now names both short commits and the
+  remedy instead of only the component, and every other refusal names its
+  remedy too. Use the npm script on Windows, where bootstrap needs npm to
+  locate its own CLI.
+- `aas verify --all [--root dir] [--before run-id] [--limit 1..50] [--json]`
+  re-verifies a newest-first page of a saved-case store, paged like
+  `aas cases`, and classifies each case `verified`, `unavailable`,
+  `conflicting`, `unsupported`, `unreadable`, or `error`. It exits 1 on any
+  conflicting, unsupported, unreadable, or error case; unavailable
+  (simulate-only or refused) cases are reported but, unlike single-case
+  `aas verify`, do not fail the page. The output names the commit each
+  verifier checkout is actually at, read from `deps/<name>/.git/HEAD` without
+  spawning git, beside the lock's commit (`differs from lock` when they
+  disagree, unknown without Git metadata), and each case's recorded rail and
+  MandateBound commits with `pins_differ`. A missing verifier aborts once
+  with the bootstrap hint. `aas verify <run-id>`, `aas replay`, and the GUI
+  are unchanged.
+- `aas demo --response-file <path>` gates your own response JSON at decide
+  against the selected domain's policy, instead of only the two bundled
+  fixtures. The file is checked first under the testbench's own input rules
+  (a regular file of at most 1,000,000 bytes, UTF-8 without a byte order
+  mark, one JSON object), so a file it would refuse exits 2 before any stage
+  runs or any case is written; other testbench refusals are recorded as a
+  decide error. Decide evaluates a private copy of the checked bytes. The
+  report records `response: file` and an optional
+  `requested_options.response_file` with the basename, `sha256:` digest, and
+  size, shown by `aas inspect` and the Markdown review and printed as
+  `response_file:` after `flow:`. The response gates orchestration only; act
+  still runs the rail's fixed synthetic proposal.
+- `aas doctor [--for demo|replay] [--json]` reports, read-only, whether a
+  checkout can run a workflow, with a remedy for every blocker. `demo` (the
+  default) checks the Node.js floor, a Python 3.11+ interpreter, the lock,
+  and each pinned checkout (missing: `npm run bootstrap`; at an older pin:
+  `npm run bootstrap:update`; local changes, another origin, or a branch:
+  remove it and bootstrap; unbuilt MandateBound: `npm run bootstrap`).
+  `replay` checks only the Node.js floor and the two verifier entrypoints and
+  spawns neither git nor Python, so it confirms an offline replay machine or
+  a copied verifier runtime; a verifier commit that differs from the lock is
+  a warning, because cases recorded under other pins still replay. It never
+  clones, installs, builds, runs a stage, or writes a file, and exits 0
+  ready, 1 not ready, 2 usage. `--json` prints
+  `agent-action-stack.doctor/v1`.
+- Every policy refusal now names its failed rule ids in the human output, as
+  `decide_failed_rules:` after `flow:` (at most 50, then `+N more`). Before,
+  a refusal printed no reason, although the report carried the rules.
+
 ### Fixed
+- `node scripts/bootstrap.mjs` ignored its arguments, so `--help` ran a full
+  bootstrap including MandateBound's `npm ci` and build. It now prints its
+  usage for `--help` or `-h` without running anything, and rejects any
+  other argument with exit 2.
 - Case persistence now checks the exact formatted UTF-8 replay budget before writing files. Oversized combined evidence is rejected without publishing an unreadable case or replacing the previous latest pointer.
 - GUI import replay now decodes an uploaded case the way `aas replay` does. The page uploads the file's bytes unchanged and the server refuses invalid UTF-8 with HTTP 400; before, both sides replaced invalid bytes with U+FFFD, so a case file the CLI refuses could show "replay verified" in the GUI. A leading byte order mark is accepted, as the CLI accepts it.
 - `aas cases` no longer prints "no readable cases in this page" when `--domain`, `--outcome`, or `--search` excluded every readable case. It now prints "no cases in this page match the filters", and keeps the unreadable message for a page whose every scanned entry is unavailable.

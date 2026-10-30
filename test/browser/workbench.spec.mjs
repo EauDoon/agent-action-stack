@@ -296,3 +296,25 @@ test('saved case review supports keyboard lookup verification handoff and local 
   await page.selectOption('#right-case',runId);await expect(page.locator('#comparison-download')).toBeHidden();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
 });
+
+test("the disputed preset runs a same-case review and the domain switch keeps only offered faults", async ({ page }) => {
+  await page.goto("/");
+  await page.selectOption("#scenario", "disputed");
+  await page.click("#apply-scenario");
+  await expect(page.locator("#fault")).toHaveValue("stale-evidence");
+  await expect(page.locator("#prove")).toHaveValue("rail");
+  await page.click("#run");
+  await expect(page.locator("#run")).toBeEnabled({ timeout: 120_000 });
+  await expect(page.locator("#summary")).toContainText("outcome disputed");
+  await expect(page.locator("#summary")).toContainText("mode rail-review");
+  await expect(page.locator("#summary")).toContainText("review recorded");
+  await page.click("#load-history");
+  await page.selectOption("#history-outcome", "disputed");
+  await expect(page.locator("#history-list li").first()).toContainText("outcome disputed");
+
+  await page.selectOption("#fault", "permit-replay");
+  await page.selectOption("#domain", "inventory");
+  await expect(page.locator("#fault")).toHaveValue("none");
+  await expect(page.locator("#fault option[value=permit-replay]")).toHaveCount(0);
+  await expect(page.locator("#fault option[value=remedy-failure]")).toHaveCount(1);
+});

@@ -42,8 +42,18 @@ Private repositories are never cloned or modified.
 
 ```bash
 npm run bootstrap
+node ./bin/aas.mjs doctor
 node ./bin/aas.mjs demo --fault duplicate --prove rail
 ```
+
+`aas doctor` checks, without running anything or writing a file, whether this
+checkout can run the demo: the Node.js floor, a Python 3.11+ interpreter, the
+lock, and each pinned checkout in `deps/` (present, at the locked commit,
+detached, clean, and built). Every blocker names its remedy, such as
+`npm run bootstrap`, `npm run bootstrap:update` for a checkout left at an
+older pin, or setting `AAS_PYTHON`. It exits 0 when ready, 1 when not, and 2
+for a usage error; `--json` prints the `agent-action-stack.doctor/v1` report
+(`ok`, `for`, and `checks` with `name`, `status`, `detail`, and `remedy`).
 
 `node ./bin/aas.mjs --version` prints the orchestrator version. Every run
 records it as `stack_version` in its report and manifest, and
@@ -150,7 +160,19 @@ On a separate machine, bootstrap the same pinned stack while online before
 disconnecting and copying in `case.json`. Replay needs the prepared rail and
 MandateBound verifier components, but does not need Python, action fixtures,
 or the originating `.out` case store. The export is evidence, not a bundled
-verifier installation.
+verifier installation. Before disconnecting, confirm the machine is ready:
+
+```bash
+node ./bin/aas.mjs doctor --for replay
+```
+
+Replay readiness needs only the Node.js floor and the two verifier
+entrypoints (`deps/consequence-rail/cmd/crctl.js` and
+`deps/mandatebound/dist/cli.js`); it spawns neither git nor Python, so it also
+runs on a copied verifier runtime. It reports each verifier's commit from its
+`.git/HEAD` beside the lock's as a warning only, because a case recorded under
+other pins still replays, and reports the revision as unknown when there is no
+Git metadata.
 
 ## Reproducibility and run bundles
 
@@ -158,6 +180,20 @@ verifier installation.
 expected entrypoints. Bootstrap uses detached checkouts, rejects substituted or
 dirty pre-existing directories, runs `npm ci --ignore-scripts` for MandateBound,
 then runs its explicit build command.
+
+When a release moves the pins, an existing checkout is refused with both
+commits named, for example `Pre-existing dependency commit does not match the
+lock: consequence-rail (checkout 78d6f8a, lock 1a2b3c4)`. Update in place:
+
+```bash
+npm run bootstrap:update
+```
+
+It fetches each locked commit into its clean, detached `deps/<name>` checkout,
+checks it out, and reruns MandateBound's install and build. A checkout with
+local changes, another origin, or a branch is still refused; remove it and run
+`npm run bootstrap`. `node scripts/bootstrap.mjs --help` prints the options
+without running anything; on Windows, run bootstrap through npm.
 
 Each decide, act, and prove child is bounded by `AAS_CHILD_TIMEOUT_MS`
 (default 30000). A hung child fails the stage instead of blocking the run.
@@ -272,6 +308,42 @@ Inventory domain:
   `moderate` risk level
 - `fixtures/inventory.response.fail.json`: fails the same four rules
 
+### Bring your own response
+
+To gate your own agent's output instead of a fixture, pass its JSON with
+`--response-file` (not together with `--response`):
+
+```bash
+node ./bin/aas.mjs demo --response-file ./my-agent-response.json
+node ./bin/aas.mjs demo --domain inventory --response-file ./allocation.json --fault duplicate --prove rail
+```
+
+The selected domain's policy fixture evaluates the file. The stack checks it
+first under the testbench's own input rules: a regular file of at most
+1,000,000 bytes, UTF-8 without a byte order mark, holding one JSON object. A
+file that breaks one of these exits 2 before any stage runs and writes no case.
+Inputs the testbench refuses for other reasons (duplicate members, nesting
+deeper than 32, more than 100,000 values, non-finite numbers) are recorded as a
+decide error with the testbench's message and exit 1. The exact bytes that
+were checked are evaluated from a private temporary copy, so the recorded
+digest always matches what decide saw. The case records `response: file` and
+`requested_options.response_file` (the basename, its `sha256:` digest, and its
+size), never the content; the basename and digest travel with exports and
+appear in `aas inspect` and the Markdown review. The human output adds
+`response_file: <name> <digest>` after `flow:`.
+
+The file gates orchestration only. A pass lets the act stage run, but act
+still runs the rail's fixed synthetic proposal: nothing in your response
+parameterizes the action, and a file-gated pass does not authorize that
+proposal. The GUI does not take response files, and **Use saved settings**
+reports such a case as one that cannot be restored.
+
+On every policy refusal, from a file or a fixture, the human output names the
+failed rule ids after `flow:`, for example
+`decide_failed_rules: decision-accept, risk-allowed, blocked-is-false, recourse-required`
+(at most 50, then `+N more`); the JSON report carries the full
+`stages.decide.rule_results`.
+
 ## Design bounds
 
 - Orchestration only. Behavior lives in the three libraries.
@@ -308,16 +380,51 @@ selector. Everything remains synthetic: no warehouse,
 merchant, payment, or external provider integration is involved, and a
 recorded review proves the handoff rather than any real-world reversibility.
 
+### Rail faults
+
+`--fault` accepts every synthetic fault the pinned rail demo offers for the
+selected domain: 13 for `refund` and 10 for `inventory`. `aas help` lists
+them, and a fault the other domain does not offer is a usage error (exit 2).
+Any outcome other than `settled` goes to prove:
+
+| Rail outcome | Refund faults | Inventory faults |
+| --- | --- | --- |
+| `settled` | `none`, `lost-response-after-commit`, `permit-replay`, `tampered-bundle` | `none`, `lost-response-after-commit` |
+| `compensated` | `duplicate`, `remedy-lost-response-after-commit` | the same two |
+| `disputed` | `stale-evidence`, `remedy-failure`, `remedy-lost-response-before-commit`, `post-remedy-stale-evidence`, `post-remedy-false-evidence` | the same five |
+| none (no receipt) | `lost-response-before-commit`, `action-mutation` | `lost-response-before-commit` |
+
+```bash
+node ./bin/aas.mjs demo --fault stale-evidence --prove rail
+node ./bin/aas.mjs cases --outcome disputed
+```
+
+A disputed outcome is reviewed, exported, and replayed exactly like a
+compensated one. A fault with no receipt has no rail bundle to review, so
+`--prove rail` is refused with exit 2 before anything runs; the canned
+simulation (`--prove simulate`, the default) still runs, triggered by
+`act_outcome=null`. Three refund faults exist to show the rail refusing
+something: `permit-replay` (a consumed permit, `PERMIT_USED`),
+`action-mutation` (changed parameters, `DIGEST_MISMATCH`), and
+`tampered-bundle` (a tampered copy of the bundle, `BUNDLE_TAMPERED`). Their
+outcome alone would look like an ordinary run, so the report carries the
+rail's code as `stages.act.rejection_code` or `stages.act.tamper_code`
+(null otherwise), and the human output adds `act_rejection:` or
+`act_tamper:` after `flow:` only when there is a code.
+
 ## Guided case workbench
 
-The local GUI includes four explicit synthetic scenario presets: clean settlement,
-policy refusal, duplicate compensation with same-case review, and settled-action
-review. Apply a preset, select refund or inventory, then press **Run stack**.
-Applying a preset never starts work. Domain identity is persisted in new reports;
+The local GUI includes five explicit synthetic scenario presets: clean settlement,
+policy refusal, duplicate compensation with same-case review, settled-action
+review, and disputed outcome review (`stale-evidence` with same-case review).
+Apply a preset, select refund or inventory, then press **Run stack**.
+Applying a preset never starts work. The Fault selector lists the selected
+domain's rail faults; switching domain keeps the chosen fault when the new
+domain offers it and otherwise resets it to `none`. Domain identity is persisted in new reports;
 older bundles display an unknown domain instead of guessing.
 
 Load recent case history to search run identity, policy, domain, or review metadata
-and filter settled or compensated outcomes. Filters affect the displayed list;
+and filter settled, compensated, or disputed outcomes, or cases with no outcome. Filters affect the displayed list;
 comparison selectors retain all loaded cases. History is bounded and may omit older
 or unreadable cases. **Inspect left case** loads a saved report and its bindings in
 a separate panel and enables an identity-checked download. Inspection does not
@@ -372,10 +479,36 @@ Use aas compare left-id right-id --root output-directory --markdown to print the
 
 Use aas verify run-id --root output-directory --json to verify a saved case directly. It performs the same receipt and review checks as imported replay, with the same pinned component requirements, and never executes an action or modifies the case store. Refused or simulation-only cases without same-case evidence return unavailable and exit 1.
 
+After a pin refresh, re-verify a whole store a page at a time:
+
+```bash
+node ./bin/aas.mjs verify --all --root .out --limit 50
+node ./bin/aas.mjs verify --all --root .out --limit 50 --before <next_cursor>
+```
+
+Each case on the newest-first page is exported and replayed exactly as
+`aas verify <run-id>` does, and classified `verified`, `unavailable`,
+`conflicting`, `unsupported`, `unreadable` (the saved files cannot be read), or
+`error` (a verifier could not run). The command exits 1 when any case is
+conflicting, unsupported, unreadable, or an error. Unlike single-case
+`aas verify`, an unavailable case (simulate-only or refused) is reported but
+does not fail the page, because a store normally holds such cases. The output
+starts with the verifier block: the commit each verifier checkout in `deps/`
+is actually at, read from its `.git/HEAD`, beside the commit `stack-lock.json`
+names, marked `differs from lock` when they disagree (the revision is unknown
+when the checkout has no Git metadata, and is never inferred from the lock).
+Each case also lists the rail and MandateBound commits it was recorded under
+and `pins_differ`, the verifiers whose checkout differs from them, so a
+cross-pin replay is visible. Replay runs two component processes per case and
+a page holds at most 50 cases, so a large store takes longer than `aas cases`.
+The command never executes an action or writes to the store. `--json` prints
+the `agent-action-stack.verify-batch/v1` page with `ok`, `verifier`,
+`results`, `counts`, `scanned`, and `next_cursor`.
+
 Use aas latest --root output-directory to print the ID named by the latest complete-bundle pointer, or add --json for machine output. It validates the referenced saved bundle and fails closed for missing, inconsistent, or unreadable pointers/cases. It never guesses by sorting directory names.
 
 Case-review Markdown now carries all five requested settings and a policy-failure summary with rule identity, path, kind, and reason code. It includes at most 50 failed rules with bounded text fields and an explicit omitted count; raw response values remain in the original artifact only. Missing rule records never imply a policy pass.
 
 Case reviews classify verification readiness as unavailable, conflicting, or ready and explain the next read-only step. Ready means that recorded action identity and recomputed digest agree; it does not mean receipts are verified. Missing rail evidence, missing reviews, and conflicting bindings receive separate recovery guidance.
 
-Terminal case history supports --domain refund|inventory|unknown, --outcome settled|compensated|none, and --search text (case-insensitive, 1 to 200 characters). Filters combine and inspect summary metadata only. They apply within each bounded page: an empty filtered page can still have next_cursor, and callers must keep the same filters when continuing.
+Terminal case history supports --domain refund|inventory|unknown, --outcome settled|compensated|disputed|none, and --search text (case-insensitive, 1 to 200 characters). Filters combine and inspect summary metadata only. They apply within each bounded page: an empty filtered page can still have next_cursor, and callers must keep the same filters when continuing.

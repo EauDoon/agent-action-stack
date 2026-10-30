@@ -30,7 +30,13 @@ and prepares each dependency under `deps/`:
 1. If `deps/<component>` is present, `inspectDependencyDirectory` verifies it
    is a regular directory, detached (`HEAD` matches the pinned commit
    exactly), clean, and contains every expected entrypoint. Substituted or
-   dirty pre-existing directories are rejected.
+   dirty pre-existing directories are rejected. A clean, detached checkout of
+   the locked repository at another commit (stale after a lock bump) is
+   refused with both short commits and the remedy: `npm run bootstrap:update`
+   fetches the locked commit (`git fetch --depth 1 origin <commit>`) and checks
+   it out detached in place, then continues with the install and build hooks.
+   `--update` never applies to a dirty, substituted, or attached checkout, and
+   a failed fetch leaves the checkout at its old commit.
 2. If absent, bootstrap clones the public URL at the pinned commit into a
    hidden staging directory beside it (`deps/.tmp-` plus six characters,
    shorter than any component name so Windows path limits are no tighter than
@@ -67,6 +73,10 @@ the lock on its own.
 5. Update the pin list in `docs/release-readiness.md` in the same pull
    request. `npm run check:version` fails while that list is missing a
    locked commit.
+Consumers pick up a lock bump with `npm run bootstrap:update`, which moves
+each clean checkout to its new pin in place; plain `npm run bootstrap` keeps
+refusing a mismatched checkout, as the lock requires. Use the npm script on
+Windows, where bootstrap needs `npm_execpath` to run MandateBound's install.
 Security fixes follow the same path. The schema version (`schema_version`)
 is bumped only when the shape changes in a way that requires loader
 changes; existing tools keep reading older versions until the bump lands
@@ -81,7 +91,13 @@ MandateBound `e526c4c`; it pins replay compatibility for an ordinary synthetic
 refund. `fixtures/previous-pins-inventory-review.json` was saved by `main` at
 `8179e59` using Rail `c430383` and MandateBound `708256d`, the pins before the
 0.3.0 refresh; it pins replay compatibility for a compensated inventory case
-already in a case store. Their public demonstration signatures establish no
+already in a case store. `fixtures/v0.3.0-pins-disputed-review.json` was saved
+with `aas demo --fault stale-evidence --prove rail` and exported by the 0.4.0
+branch at `9dc2431` using Rail `78d6f8a` and MandateBound `32d5256`, the pins
+0.3.0 released with; it pins replay compatibility for a disputed refund case
+with a recorded same-case review. The same test also pins the stack's
+per-domain fault lists to the rail's demo catalog, so a pin that renames or
+drops a fault fails the proof. Their public demonstration signatures establish no
 real-world provenance.
 
 The current Rail pin also binds a receipt's close time to its terminal event,

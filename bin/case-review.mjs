@@ -1,21 +1,36 @@
 import { createHash } from "node:crypto";
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { assertRunsDirectory, clipChildStderr, DEFAULT_PATHS, UsageError, exportRunBundle, isValidRunId, summarizeRun } from "./aas.mjs";
+import { loadComponentLock, readCheckoutCommit } from "../scripts/bootstrap.mjs";
+import { assertRunsDirectory, clipChildStderr, DEFAULT_PATHS, UsageError, exportRunBundle, isValidRunId, replayBundle, summarizeRun, VERIFIER_ENTRYPOINTS } from "./aas.mjs";
 
-export function listCasePage({ outputRoot = DEFAULT_PATHS.outputRoot, before = null, limit = 25, domain = null, outcome = null, search = null } = {}) {
+function assertPageOptions(before, limit) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error("History limit must be an integer from 1 to 50.");
   if (before !== null && (!isValidRunId(before) || before.length > 200)) throw new Error("Invalid history cursor.");
-  if (domain !== null && !['refund','inventory','unknown'].includes(domain)) throw new Error('Domain filter must be refund, inventory, or unknown.');
-  if (outcome !== null && !['settled','compensated','none'].includes(outcome)) throw new Error('Outcome filter must be settled, compensated, or none.');
-  if (search !== null && (typeof search !== 'string' || !search.trim() || search.length > 200)) throw new Error('Search must contain 1 to 200 characters.');
+}
+
+/**
+ * One newest-first page of saved run ids: at most `limit` candidates older
+ * than `before`, and the cursor for the next page. Shared by `aas cases` and
+ * `aas verify --all` so both page a store identically.
+ */
+function listRunIdPage(outputRoot, before, limit) {
   assertRunsDirectory(outputRoot);
   let entries;
   try { entries = readdirSync(join(outputRoot, "runs"), { withFileTypes: true }); }
-  catch (error) { if (error.code === "ENOENT") return { cases: [], next_cursor: null, scanned: 0, unavailable: [] }; throw error; }
+  catch (error) { if (error.code === "ENOENT") return { candidates: [], next_cursor: null }; throw error; }
   const ids = entries.filter((entry) => entry.isDirectory() && isValidRunId(entry.name) && (!before || entry.name < before))
     .map((entry) => entry.name).sort().reverse();
   const candidates = ids.slice(0, limit);
+  return { candidates, next_cursor: ids.length > limit ? candidates.at(-1) : null };
+}
+
+export function listCasePage({ outputRoot = DEFAULT_PATHS.outputRoot, before = null, limit = 25, domain = null, outcome = null, search = null } = {}) {
+  assertPageOptions(before, limit);
+  if (domain !== null && !['refund','inventory','unknown'].includes(domain)) throw new Error('Domain filter must be refund, inventory, or unknown.');
+  if (outcome !== null && !['settled','compensated','disputed','none'].includes(outcome)) throw new Error('Outcome filter must be settled, compensated, disputed, or none.');
+  if (search !== null && (typeof search !== 'string' || !search.trim() || search.length > 200)) throw new Error('Search must contain 1 to 200 characters.');
+  const { candidates, next_cursor } = listRunIdPage(outputRoot, before, limit);
   const cases = [], unavailable = [];
   for (const runId of candidates) {
     try {
@@ -27,7 +42,101 @@ export function listCasePage({ outputRoot = DEFAULT_PATHS.outputRoot, before = n
     }
     catch { unavailable.push(runId); }
   }
-  return { cases, next_cursor: ids.length > limit ? candidates.at(-1) : null, scanned: candidates.length, unavailable };
+  return { cases, next_cursor, scanned: candidates.length, unavailable };
+}
+
+export const VERIFY_STATUSES = Object.freeze(["verified", "unavailable", "conflicting", "unsupported", "unreadable", "error"]);
+/** Statuses that make `aas verify --all` exit 1. Unavailable is reported only. */
+export const VERIFY_FAILING_STATUSES = Object.freeze(["conflicting", "unsupported", "unreadable", "error"]);
+
+/**
+ * Which revisions will verify: each verifier checkout's actual detached commit,
+ * read from its .git/HEAD, beside the commit stack-lock.json names. Replay runs
+ * whatever checkout is in deps/ (that is what makes cross-pin replay work), so
+ * the lock commit is never reported as the revision that ran.
+ */
+export function verifierRevisions({ depsDir = DEFAULT_PATHS.deps, lockPath = DEFAULT_PATHS.lock } = {}) {
+  let locked = {};
+  try {
+    locked = Object.fromEntries(loadComponentLock(lockPath).map((component) => [component.name, component.commit]));
+  } catch {
+    locked = {};
+  }
+  return VERIFIER_ENTRYPOINTS.map(([name]) => {
+    const checkout = readCheckoutCommit(join(depsDir, name));
+    const lockedCommit = typeof locked[name] === "string" ? locked[name] : null;
+    return {
+      name,
+      checkout_commit: checkout,
+      locked_commit: lockedCommit,
+      matches_lock: checkout !== null && lockedCommit !== null ? checkout === lockedCommit : null,
+    };
+  });
+}
+
+function replayStatus(result) {
+  if (result.ok) return "verified";
+  const prefix = /^(unavailable|conflicting|unsupported):/.exec(String(result.reason ?? ""));
+  return prefix ? prefix[1] : "unsupported";
+}
+
+/**
+ * Re-verify one newest-first page of a saved-case store: export each case and
+ * replay it exactly as `aas verify <run-id>` does. Never runs an action and
+ * never writes to the store. Throws once, before any case, when a verifier
+ * entrypoint is missing.
+ */
+export function verifyCasePage({ outputRoot = DEFAULT_PATHS.outputRoot, before = null, limit = 25, depsDir = DEFAULT_PATHS.deps, lockPath = DEFAULT_PATHS.lock, runner } = {}) {
+  assertPageOptions(before, limit);
+  for (const [name, entrypoint] of VERIFIER_ENTRYPOINTS) {
+    if (!existsSync(join(depsDir, name, entrypoint))) {
+      throw new Error(`Missing verifier deps/${name}/${entrypoint}. Run: npm run bootstrap`);
+    }
+  }
+  const verifier = verifierRevisions({ depsDir, lockPath });
+  const { candidates, next_cursor } = listRunIdPage(outputRoot, before, limit);
+  const counts = Object.fromEntries(VERIFY_STATUSES.map((status) => [status, 0]));
+  const results = [];
+  for (const runId of candidates) {
+    let bundle;
+    let entry;
+    try {
+      bundle = exportRunBundle(runId, { outputRoot });
+    } catch (error) {
+      entry = { run_id: runId, status: "unreadable", reason: error.message, recorded_pins: [], pins_differ: null };
+    }
+    if (entry === undefined) {
+      const provenance = Array.isArray(bundle.manifest?.component_provenance) ? bundle.manifest.component_provenance : [];
+      const recorded = VERIFIER_ENTRYPOINTS.map(([name]) => {
+        const commit = provenance.find((item) => item?.name === name)?.commit;
+        return { name, commit: typeof commit === "string" ? commit : null };
+      });
+      const compared = recorded.filter((pin) => {
+        const checkout = verifier.find((item) => item.name === pin.name)?.checkout_commit ?? null;
+        return pin.commit !== null && checkout !== null;
+      });
+      const pinsDiffer = compared.length === 0
+        ? null
+        : compared.filter((pin) => pin.commit !== verifier.find((item) => item.name === pin.name).checkout_commit).map((pin) => pin.name);
+      try {
+        const result = replayBundle(bundle, { depsDir, ...(runner ? { runner } : {}) });
+        const status = replayStatus(result);
+        entry = { run_id: runId, status, reason: result.ok ? null : result.reason ?? null, recorded_pins: recorded, pins_differ: pinsDiffer };
+      } catch (error) {
+        entry = { run_id: runId, status: "error", reason: error.message, recorded_pins: recorded, pins_differ: pinsDiffer };
+      }
+    }
+    counts[entry.status] += 1;
+    results.push(entry);
+  }
+  return {
+    schema_version: "agent-action-stack.verify-batch/v1",
+    verifier,
+    results,
+    counts,
+    scanned: candidates.length,
+    next_cursor,
+  };
 }
 
 export function parseCasePageArgs(args) {
@@ -35,11 +144,11 @@ export function parseCasePageArgs(args) {
   for (let i = 0; i < args.length; i++) {
     const key = args[i];
     if (key === "--json") continue;
-    if (!["--before", "--limit", "--domain", "--outcome", "--search"].includes(key) || i + 1 >= args.length || Object.hasOwn(result, key.slice(2))) throw new Error("Usage: aas cases [--before run-id] [--limit 1..50] [--domain refund|inventory|unknown] [--outcome settled|compensated|none] [--search text] [--json]");
+    if (!["--before", "--limit", "--domain", "--outcome", "--search"].includes(key) || i + 1 >= args.length || Object.hasOwn(result, key.slice(2))) throw new Error("Usage: aas cases [--before run-id] [--limit 1..50] [--domain refund|inventory|unknown] [--outcome settled|compensated|disputed|none] [--search text] [--json]");
     const value = args[++i];
     if (key === "--search" && value.startsWith("-")) throw new Error("Missing value for cases option: --search");
     if (key === '--domain' && !['refund','inventory','unknown'].includes(value)) throw new Error('Invalid domain filter.');
-    if (key === '--outcome' && !['settled','compensated','none'].includes(value)) throw new Error('Invalid outcome filter.');
+    if (key === '--outcome' && !['settled','compensated','disputed','none'].includes(value)) throw new Error('Invalid outcome filter.');
     if (key === '--search' && (!value.trim() || value.length > 200)) throw new Error('Search must contain 1 to 200 characters.');
     if (key === "--limit" && !/^[1-9][0-9]?$/.test(value)) throw new Error("Invalid history limit.");
     result[key.slice(2)] = key === "--limit" ? Number(value) : value;
@@ -101,6 +210,11 @@ export function renderCaseMarkdown(review) {
   for (const key of ['response','domain','fault','prove','dispute']) {
     const value = review.requested_options?.[key];
     lines.push('- '+key+': '+markdownText(typeof value === 'string' || typeof value === 'boolean' ? value : null));
+  }
+  // Present only for --response-file runs; the response content stays out of the review.
+  const responseFile = review.requested_options?.response_file;
+  if (responseFile && typeof responseFile === 'object') {
+    lines.push('- response_file: '+markdownText(typeof responseFile.name === 'string' ? responseFile.name : null)+'; '+markdownText(typeof responseFile.digest === 'string' ? responseFile.digest : null)+'; '+markdownText(Number.isInteger(responseFile.bytes) ? responseFile.bytes : null)+' bytes');
   }
   lines.push('', '## Policy failures', '');
   if (!review.policy_failures?.total) lines.push('No failed rule records are available; this alone does not prove a policy pass.');

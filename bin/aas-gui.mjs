@@ -8,6 +8,7 @@ import {
   CHILD_JSON_LIMIT,
   DEFAULT_GUI_PORT,
   DEFAULT_PATHS,
+  NO_RECEIPT_FAULTS,
   compareRuns,
   exportRunBundle,
   isValidRunId,
@@ -118,6 +119,8 @@ export function summaryModel(report) {
     if (name === "act" && stage?.state) facts.push(`state ${stage.state}`);
     if (name === "act" && stage?.fault) facts.push(`fault ${stage.fault}`);
     if (name === "act" && stage?.action_id) facts.push(`action ${stage.action_id}`);
+    if (name === "act" && stage?.rejection_code) facts.push(`rail rejection ${stage.rejection_code}`);
+    if (name === "act" && stage?.tamper_code) facts.push(`rail tamper detection ${stage.tamper_code}`);
     if (name === "prove" && stage?.mode) facts.push(`mode ${stage.mode}`);
     if (name === "prove" && stage?.scenario) facts.push(`scenario ${stage.scenario}`);
     if (name === "prove" && stage?.triggered_by) facts.push(`triggered by ${stage.triggered_by}`);
@@ -265,7 +268,9 @@ function renderCaseOptions(cases) {
 export function filterHistory(cases, query = "", outcome = "") {
   const needle = String(query).trim().toLowerCase();
   const searchable = ["run_id", "domain", "policy_id", "action_id", "outcome", "review_verdict", "evidence_digest"];
-  return (Array.isArray(cases) ? cases : []).filter((entry) => (!outcome || entry.outcome === outcome)
+  // A case without an act outcome (refused, errored, or no receipt) is "none",
+  // as `aas cases --outcome none` treats it.
+  return (Array.isArray(cases) ? cases : []).filter((entry) => (!outcome || (entry.outcome ?? "none") === outcome)
     && searchable.some((key) => typeof entry[key] === "string" && entry[key].toLowerCase().includes(needle)));
 }
 
@@ -297,10 +302,29 @@ export function stageDetailsModel(bundle) {
   }).join('') + '<p>Persisted content is evidence to inspect, not proof of source truth. Use Verify saved case for receipt checks.</p>';
 }
 
+/**
+ * The rail demo faults the workbench offers for one domain. The lists are
+ * written out rather than imported because this function is embedded in the
+ * page script, where module scope does not exist; a test pins them to
+ * DEMO_FAULTS_BY_DOMAIN in bin/aas.mjs.
+ */
+export function demoFaults(domain) {
+  const faults = {
+    refund: ["none", "duplicate", "lost-response-after-commit", "lost-response-before-commit", "stale-evidence", "remedy-failure", "remedy-lost-response-after-commit", "remedy-lost-response-before-commit", "post-remedy-stale-evidence", "post-remedy-false-evidence", "permit-replay", "action-mutation", "tampered-bundle"],
+    inventory: ["none", "duplicate", "remedy-failure", "remedy-lost-response-before-commit", "remedy-lost-response-after-commit", "post-remedy-stale-evidence", "post-remedy-false-evidence", "lost-response-before-commit", "lost-response-after-commit", "stale-evidence"],
+  };
+  return Object.hasOwn(faults, domain) ? faults[domain] : [];
+}
+
+/** Option elements for the Fault selector of one domain. */
+export function faultOptions(domain) {
+  return demoFaults(domain).map((fault) => `<option value="${escapeHtml(fault)}">${escapeHtml(fault)}</option>`).join("");
+}
+
 export function validatedRunSettings(report) {
   const value = report?.requested_options;
   if (!value || !["refund", "inventory"].includes(value.domain)
-    || !["pass", "fail"].includes(value.response) || !["none", "duplicate"].includes(value.fault)
+    || !["pass", "fail"].includes(value.response) || !demoFaults(value.domain).includes(value.fault)
     || !["simulate", "rail"].includes(value.prove) || typeof value.dispute !== "boolean") return null;
   return { domain: value.domain, response: value.response, fault: value.fault, prove: value.prove, dispute: value.dispute };
 }
@@ -311,6 +335,7 @@ export function scenarioPreset(name) {
     refusal: { response: "fail", fault: "none", prove: "rail", dispute: false, note: "Expected: policy refusal stops before act and prove." },
     compensated: { response: "pass", fault: "duplicate", prove: "rail", dispute: false, note: "Expected: duplicate synthetic action is compensated and same-case review records the handoff." },
     review: { response: "pass", fault: "none", prove: "rail", dispute: true, note: "Expected: settled synthetic action receives a requested same-case review." },
+    disputed: { response: "pass", fault: "stale-evidence", prove: "rail", dispute: false, note: "Expected: stale evidence leaves the synthetic action disputed, and same-case review records the handoff." },
   };
   return Object.hasOwn(presets, name) ? presets[name] : null;
 }
@@ -319,7 +344,7 @@ export function scenarioPreset(name) {
  * Helpers the page script runs in the browser. Listed once so the rendered
  * page and the smoke test cannot disagree about what is embedded.
  */
-const PAGE_HELPERS = [stageDetailsModel, isReviewRunId, validatedRunSettings, scenarioPreset, filterHistory, validateRunBundle, escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, compareModel, historyModel, renderCaseOptions, sha256HexText];
+const PAGE_HELPERS = [demoFaults, faultOptions, stageDetailsModel, isReviewRunId, validatedRunSettings, scenarioPreset, filterHistory, validateRunBundle, escapeHtml, stageHeadline, summaryModel, bindingsModel, replayResultModel, compareModel, historyModel, renderCaseOptions, sha256HexText];
 
 function normalizeNewlines(text) {
   return text.replace(/\r\n?/g, "\n");
@@ -336,6 +361,14 @@ const PAGE_CONTROLLER = `document.getElementById('apply-scenario').addEventListe
   document.getElementById('scenario-note').textContent=preset.note+' Domain stays selected. Press Run stack to start the synthetic demo.';
 });
 for(const name of ['response','fault','prove','dispute']) document.getElementById(name).addEventListener('change',()=>{ document.getElementById('scenario-note').textContent='Custom options selected. Review the controls before running.'; });
+// Each domain has its own rail fault list. Keep the selected fault when the new
+// domain offers it; otherwise fall back to none.
+function setFaultChoices(domain, preferred){
+  const select=document.getElementById('fault');
+  select.innerHTML=faultOptions(domain);
+  select.value=demoFaults(domain).includes(preferred)?preferred:'none';
+}
+document.getElementById('domain').addEventListener('change',()=>setFaultChoices(document.getElementById('domain').value,document.getElementById('fault').value));
 const output=document.getElementById('output');
 const runStatus=document.getElementById('run-status');
 const summary=document.getElementById('summary');
@@ -381,7 +414,9 @@ const restoreButton=document.getElementById("restore-settings");
 restoreButton.addEventListener("click",()=>{
   const settings=validatedRunSettings(savedBundle?.report);
   if(!settings) return;
-  for(const key of ["domain","response","fault","prove"]) document.getElementById(key).value=settings[key];
+  document.getElementById("domain").value=settings.domain;
+  setFaultChoices(settings.domain,settings.fault);
+  for(const key of ["response","prove"]) document.getElementById(key).value=settings[key];
   document.getElementById("dispute").checked=settings.dispute;
   document.getElementById("scenario-note").textContent="Saved settings loaded. Review them and press Run stack to start a new synthetic run.";
 });
@@ -578,10 +613,10 @@ export function renderPage() {
 <style>${PAGE_STYLE}</style></head>
 <body><main><h1>Agent Action Stack</h1><p>Run the local decide, act, and prove flow using the reviewed component lock.</p>
 <p class="boundary">Synthetic local demo only. No real account operations. The testbench response check gates the run; it is not a signed authorization over the rail proposal. Rail receipt verification and MandateBound recording remain separate authorities. Source truth is unknown; legal effect is not determined.</p>
-<div class="state"><label>Scenario <select id="scenario"><option value="settled">Clean settlement</option><option value="refusal">Policy refusal</option><option value="compensated">Duplicate compensation and review</option><option value="review">Settled action review</option></select></label> <button id="apply-scenario">Apply scenario</button>
+<div class="state"><label>Scenario <select id="scenario"><option value="settled">Clean settlement</option><option value="refusal">Policy refusal</option><option value="compensated">Duplicate compensation and review</option><option value="review">Settled action review</option><option value="disputed">Disputed outcome review</option></select></label> <button id="apply-scenario">Apply scenario</button>
 <p id="scenario-note">Choose a scenario or configure the options below. Applying a scenario only changes controls.</p>
 <label>Response <select id="response"><option value="pass">pass</option><option value="fail">fail</option></select></label>
-<label>Fault <select id="fault"><option value="none">none</option><option value="duplicate">duplicate</option></select></label>
+<label>Fault <select id="fault">${faultOptions("refund")}</select></label>
 <label>Domain <select id="domain"><option value="refund">refund</option><option value="inventory">inventory allocation</option></select></label>
 <label><input id="dispute" type="checkbox"> force dispute proof</label>
 <label>Prove <select id="prove"><option value="simulate">separate canned simulation</option><option value="rail">same-case rail review</option></select></label>
@@ -602,7 +637,7 @@ export function renderPage() {
 <button id="load-history">Load history</button>
 <button id="older-history" disabled>Load older cases</button><p id="history-page-status" role="status"></p>
 <label>Search loaded cases <input id="history-search" type="search" placeholder="Run, policy, domain, review"></label>
-<label>Outcome <select id="history-outcome"><option value="">all</option><option value="settled">settled</option><option value="compensated">compensated</option></select></label>
+<label>Outcome <select id="history-outcome"><option value="">all</option><option value="settled">settled</option><option value="compensated">compensated</option><option value="disputed">disputed</option><option value="none">none (no outcome)</option></select></label>
 <p id="history-count" role="status" aria-live="polite">Load recent cases to search. The bounded history may omit older or unreadable cases.</p>
 <label>Left <select id="left-case"><option value="">(select a case)</option></select></label>
 <label>Right <select id="right-case"><option value="">(select a case)</option></select></label>
@@ -735,11 +770,15 @@ export function createGuiServer({
         const selectedProve = url.searchParams.get("prove") ?? "simulate";
         const selectedDomain = url.searchParams.get("domain") ?? "refund";
         if (!new Set(["pass", "fail"]).has(selectedResponse)
-          || !new Set(["none", "duplicate"]).has(selectedFault)
           || !new Set([null, "1"]).has(url.searchParams.get("dispute"))
           || !new Set(["simulate", "rail"]).has(selectedProve)
-          || !new Set(["refund", "inventory"]).has(selectedDomain)) {
+          || !new Set(["refund", "inventory"]).has(selectedDomain)
+          || !demoFaults(selectedDomain).includes(selectedFault)) {
           sendJson(response, 400, { error: "Invalid options" });
+          return;
+        }
+        if (selectedProve === "rail" && NO_RECEIPT_FAULTS[selectedDomain].includes(selectedFault)) {
+          sendJson(response, 400, { error: `Fault ${selectedFault} produces no settlement receipt, so same-case rail review has no evidence. Choose the separate canned simulation.` });
           return;
         }
         const args = ["--response", selectedResponse, "--fault", selectedFault, "--json"];

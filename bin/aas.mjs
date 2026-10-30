@@ -24,15 +24,18 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import {
   assertDependencyDirectory,
   assertFullStackNodeVersion,
+  classifyDependency,
   inspectDependencyDirectory,
   isEntrypoint,
   loadComponentLock,
+  MIN_FULL_STACK_NODE,
+  readCheckoutCommit,
 } from "../scripts/bootstrap.mjs";
 
 /**
@@ -137,7 +140,7 @@ export function stackVersion() {
 
 const STAGE_NAMES = ["decide", "act", "prove"];
 const DEMO_FLAG_OPTIONS = new Set(["--dispute", "--json"]);
-const DEMO_VALUE_OPTIONS = new Set(["--response", "--fault", "--prove", "--domain"]);
+const DEMO_VALUE_OPTIONS = new Set(["--response", "--response-file", "--fault", "--prove", "--domain"]);
 const DEMO_DOMAINS = new Set(["refund", "inventory"]);
 const PROVE_MODES = new Set(["simulate", "rail"]);
 const STDERR_LIMIT = 800;
@@ -148,7 +151,56 @@ export const DEFAULT_CHILD_TIMEOUT_MS = 30_000;
 export const CHILD_TIMEOUT_MAX_MS = 600_000;
 /** Loopback port for `aas-gui`. Override with AAS_GUI_PORT. */
 export const DEFAULT_GUI_PORT = 8787;
-const DEMO_FAULTS = new Set(["none", "duplicate"]);
+/**
+ * The testbench's own input ceiling (MAX_JSON_INPUT_BYTES), not
+ * CHILD_JSON_LIMIT: a larger response file would pass a stack check and then
+ * fail inside decide.
+ */
+export const RESPONSE_FILE_LIMIT = 1_000_000;
+const BYTE_ORDER_MARKS = [[0xef, 0xbb, 0xbf], [0xff, 0xfe], [0xfe, 0xff]];
+/**
+ * Every synthetic fault the pinned Consequence Rail demo accepts, per domain,
+ * in the rail's own order (`crctl demo list --json`). The integration
+ * compatibility test pins these lists to the rail catalog, and a unit test pins
+ * the GUI's embedded copy to this one.
+ */
+export const DEMO_FAULTS_BY_DOMAIN = Object.freeze({
+  refund: Object.freeze([
+    "none",
+    "duplicate",
+    "lost-response-after-commit",
+    "lost-response-before-commit",
+    "stale-evidence",
+    "remedy-failure",
+    "remedy-lost-response-after-commit",
+    "remedy-lost-response-before-commit",
+    "post-remedy-stale-evidence",
+    "post-remedy-false-evidence",
+    "permit-replay",
+    "action-mutation",
+    "tampered-bundle",
+  ]),
+  inventory: Object.freeze([
+    "none",
+    "duplicate",
+    "remedy-failure",
+    "remedy-lost-response-before-commit",
+    "remedy-lost-response-after-commit",
+    "post-remedy-stale-evidence",
+    "post-remedy-false-evidence",
+    "lost-response-before-commit",
+    "lost-response-after-commit",
+    "stale-evidence",
+  ]),
+});
+/**
+ * Faults whose rail run ends without a settlement receipt (outcome null). The
+ * rail cannot export a bundle for them, so same-case review has no evidence.
+ */
+export const NO_RECEIPT_FAULTS = Object.freeze({
+  refund: Object.freeze(["lost-response-before-commit", "action-mutation"]),
+  inventory: Object.freeze(["lost-response-before-commit"]),
+});
 const PROVE_SCENARIOS = new Set([
   "principal",
   "operator",
@@ -159,6 +211,11 @@ const PROVE_SCENARIOS = new Set([
   "tamper",
   "conflict",
   "appeal",
+]);
+/** The two components replay runs, and the entrypoint each needs. */
+export const VERIFIER_ENTRYPOINTS = Object.freeze([
+  Object.freeze(["consequence-rail", "cmd/crctl.js"]),
+  Object.freeze(["mandatebound", "dist/cli.js"]),
 ]);
 /** Minimum Python required by the locked Constitutional Agent Testbench. */
 export const MIN_PYTHON = Object.freeze([3, 11]);
@@ -263,20 +320,38 @@ function validateDemoArgs(args) {
   }
 }
 
+function helpFaultList(domain) {
+  const faults = DEMO_FAULTS_BY_DOMAIN[domain];
+  const lines = [];
+  let line = `  ${domain}:`;
+  faults.forEach((fault, index) => {
+    const token = index < faults.length - 1 ? `${fault},` : fault;
+    if (line.trim() !== "" && line.length + 1 + token.length > 78) {
+      lines.push(line);
+      line = "   ";
+    }
+    line += ` ${token}`;
+  });
+  lines.push(line);
+  return lines.join("\n");
+}
+
 export function helpText() {
   return `Agent Action Stack
 
 Usage:
-  aas demo [--response pass|fail] [--fault none|duplicate] [--dispute] [--prove simulate|rail] [--domain refund|inventory] [--json]
+  aas demo [--response pass|fail] [--response-file <path>] [--fault <name>] [--dispute] [--prove simulate|rail] [--domain refund|inventory] [--json]
   aas export <run-id> [--root output-dir] [--out <path>] [--overwrite] [--json]
   aas replay <bundle-file|-> [--json]
   aas latest [--root output-dir] [--json]
   aas verify <run-id> [--root output-dir] [--json]
+  aas verify --all [--root output-dir] [--before run-id] [--limit 1..50] [--json]
   aas inspect <run-id> [--root output-dir] [--json|--markdown]
   aas runs [--root output-dir] [--json]
-  aas cases [--root output-dir] [--before run-id] [--limit 1..50] [--domain refund|inventory|unknown] [--outcome settled|compensated|none] [--search text] [--json]
+  aas cases [--root output-dir] [--before run-id] [--limit 1..50] [--domain refund|inventory|unknown] [--outcome settled|compensated|disputed|none] [--search text] [--json]
   aas compare <run-id> <run-id> [--root output-dir] [--json|--markdown]
   aas prune --keep <n> [--root output-dir] [--dry-run] [--json]
+  aas doctor [--for demo|replay] [--json]
   aas --version [--json]
   aas help
 
@@ -284,18 +359,28 @@ Commands:
   demo    Run decide, act, and prove and persist one run bundle
   export  Print one run bundle as portable JSON (or write it with --out)
   replay  Re-verify an exported bundle offline without rerunning the action
-  verify  Re-verify one saved case without exporting or rerunning actions
+  verify  Re-verify one saved case, or a page of them with --all, without
+          exporting or rerunning actions
   latest  Print the latest complete saved run identity
   runs    List persisted runs newest-first
   cases   List bounded case summaries (outcome, policy, review, digest)
   compare Compare two cases and classify identical, different, or not comparable
   prune   Remove oldest runs beyond --keep (latest stays; --dry-run previews)
+  doctor  Report, read-only, whether this checkout can run demo or replay,
+          with a remedy for each blocker
   version Print the orchestrator version (also --version)
   help    Show this help (also -h or --help)
 
 Options:
   --response pass|fail     Policy fixture to evaluate (default: pass)
-  --fault none|duplicate   Rail demo fault (default: none)
+  --response-file <path>   Gate your own response JSON at decide instead of a
+                           fixture (not with --response): one JSON object, UTF-8
+                           without a byte order mark, at most 1,000,000 bytes.
+                           Gates orchestration only; act still runs the rail's
+                           fixed synthetic proposal. The case records its
+                           basename, sha256 digest, and size, not its content
+  --fault <name>           Rail demo fault for the selected domain (default: none;
+                           see Faults below)
   --dispute                Force MandateBound prove after a settled act
   --prove simulate|rail    Prove path: canned operator simulation (default)
                            or review of the same-case rail bundle
@@ -304,13 +389,18 @@ Options:
                            compare, export, and prune (default: .out)
   --out <path>             Write an export to this file (refuses to replace; see --overwrite)
   --overwrite              Allow --out to replace an existing file
-  --before run-id          Start a cases page older than this run id
-  --limit 1..50            Cases page size (default: 25)
-  --outcome settled|compensated|none
+  --all                    verify: re-verify a newest-first page of saved cases and
+                           name the verifier revisions (exit 1 on a conflicting,
+                           unsupported, unreadable, or failed case; unavailable
+                           cases are reported only)
+  --before run-id          Start a cases or verify --all page older than this run id
+  --limit 1..50            Page size for cases and verify --all (default: 25)
+  --outcome settled|compensated|disputed|none
                            Filter a cases page by saved act outcome
   --search text            Filter a cases page by case metadata (1 to 200 characters)
   --keep <n>               prune: keep the n newest runs, plus the latest pointer's run
   --dry-run                prune: report what would be removed without deleting
+  --for demo|replay        doctor: the workflow to check (default: demo)
   --markdown               Print the readable Markdown form (compare, inspect)
   --json                   Print machine-readable JSON
   --version                Print the orchestrator version
@@ -322,8 +412,18 @@ Flow:
   on dispute -> mandatebound simulate --scenario operator
   on dispute --prove rail -> rail bundle verify + mandatebound review
 
+Faults (--fault, per --domain; any outcome other than settled goes to prove):
+${helpFaultList("refund")}
+${helpFaultList("inventory")}
+  No settlement receipt, so --prove rail is refused (use --prove simulate):
+    refund: ${NO_RECEIPT_FAULTS.refund.join(", ")}
+    inventory: ${NO_RECEIPT_FAULTS.inventory.join(", ")}
+  permit-replay, action-mutation, and tampered-bundle also print the rail's own
+  rejection or tamper code as act_rejection or act_tamper.
+
 First-time setup:
   npm run bootstrap
+  aas doctor               (aas doctor --for replay on an offline replay machine)
 
 Requires Node.js 22.12+ and Python 3.11+.
 
@@ -751,6 +851,17 @@ export function runAct(
       optionalField(payload, "action_id", ["string", "null"], "act");
       optionalField(payload, "assurance_mode", ["string", "null"], "act");
       optionalField(payload, "bundle_verification", ["string", "null"], "act");
+      // The rail reports its own rejections (a consumed permit, a mutated
+      // action) and tamper detection in these objects, not in the outcome.
+      optionalField(payload, "expected_rejection", ["object", "null"], "act");
+      optionalField(payload, "tamper_detection", ["object", "null"], "act");
+      if (payload.expected_rejection && typeof payload.expected_rejection.code !== "string") {
+        throw new Error("act did not return a valid expected_rejection field");
+      }
+      const tamper = payload.tamper_detection;
+      if (tamper && (typeof tamper.detected !== "boolean" || (tamper.detected && typeof tamper.code !== "string"))) {
+        throw new Error("act did not return a valid tamper_detection field");
+      }
     } catch (error) {
       throw attachChildDiagnostics(error, {
         stage: "act",
@@ -1598,6 +1709,23 @@ function stageRecord(status, fields = {}) {
   return { status, ...fields };
 }
 
+function printable(value) {
+  return String(value ?? "unknown").replace(/[\u0000-\u001F\u007F]/g, " ");
+}
+
+const FAILED_RULE_LIMIT = 50;
+
+/** The failed rule ids of a policy refusal, capped, or null for any other decide result. */
+function failedRuleIds(decide) {
+  if (!decide || decide.status !== "failed" || !Array.isArray(decide.rule_results)) return null;
+  const ids = decide.rule_results
+    .filter((rule) => rule && rule.passed === false && typeof rule.rule_id === "string")
+    .map((rule) => printable(rule.rule_id).slice(0, 200));
+  if (ids.length === 0) return null;
+  const shown = ids.slice(0, FAILED_RULE_LIMIT).join(", ");
+  return ids.length > FAILED_RULE_LIMIT ? `${shown} +${ids.length - FAILED_RULE_LIMIT} more` : shown;
+}
+
 /**
  * Print the CLI human report. Field order is part of the public surface and
  * must match the pass-path sample in README.md.
@@ -1621,6 +1749,16 @@ export function printHuman(report, bundleDir = null) {
     `prove_mode: ${report.stages.prove.mode ?? "none"}`,
     `flow: ${report.flow}`,
   ];
+  // Conditional lines follow flow: so the fixed block above keeps its positions.
+  const responseFile = report.requested_options?.response_file;
+  if (responseFile && typeof responseFile === "object") {
+    lines.push(`response_file: ${printable(responseFile.name)} ${printable(responseFile.digest)}`);
+  }
+  const failedRules = failedRuleIds(report.stages.decide);
+  if (failedRules !== null) lines.push(`decide_failed_rules: ${failedRules}`);
+  const act = report.stages.act ?? {};
+  if (typeof act.rejection_code === "string") lines.push(`act_rejection: ${clipChildStderr(act.rejection_code, 200)}`);
+  if (typeof act.tamper_code === "string") lines.push(`act_tamper: ${clipChildStderr(act.tamper_code, 200)}`);
   for (const name of STAGE_NAMES) {
     const stage = report.stages[name];
     if (!stage || (stage.status !== "error" && stage.status !== "failed")) continue;
@@ -1642,13 +1780,21 @@ export function printHuman(report, bundleDir = null) {
  */
 export function parseDemoOptions(args) {
   validateDemoArgs(args);
-  const responseName = option(args, "--response", "pass");
-  if (responseName !== "pass" && responseName !== "fail") {
+  const responseFile = option(args, "--response-file", null);
+  if (responseFile !== null && has(args, "--response")) {
+    throw new UsageError("Choose either --response or --response-file, not both");
+  }
+  const responseName = responseFile !== null ? "file" : option(args, "--response", "pass");
+  if (responseName !== "pass" && responseName !== "fail" && responseName !== "file") {
     throw new UsageError("--response must be pass or fail");
   }
+  const domain = option(args, "--domain", "refund");
+  if (!DEMO_DOMAINS.has(domain)) {
+    throw new UsageError("--domain must be refund or inventory");
+  }
   const fault = option(args, "--fault", "none");
-  if (!DEMO_FAULTS.has(fault)) {
-    throw new UsageError("--fault must be none or duplicate");
+  if (!DEMO_FAULTS_BY_DOMAIN[domain].includes(fault)) {
+    throw new UsageError(`--fault must be one of the ${domain} faults: ${DEMO_FAULTS_BY_DOMAIN[domain].join(", ")}`);
   }
   const forceDispute = has(args, "--dispute");
   const asJson = has(args, "--json");
@@ -1656,11 +1802,74 @@ export function parseDemoOptions(args) {
   if (!PROVE_MODES.has(proveMode)) {
     throw new UsageError("--prove must be simulate or rail");
   }
-  const domain = option(args, "--domain", "refund");
-  if (!DEMO_DOMAINS.has(domain)) {
-    throw new UsageError("--domain must be refund or inventory");
+  if (proveMode === "rail" && NO_RECEIPT_FAULTS[domain].includes(fault)) {
+    throw new UsageError(`fault ${fault} produces no settlement receipt, so --prove rail has no same-case evidence; use --prove simulate`);
   }
-  return { responseName, fault, forceDispute, asJson, proveMode, domain };
+  return { responseName, responseFile, fault, forceDispute, asJson, proveMode, domain };
+}
+
+/**
+ * Read a caller's response file under the testbench's own input contract, so
+ * an input it would refuse is a usage error (exit 2) before any stage runs or
+ * any case is written: a regular file read through a nonblocking descriptor
+ * (a named pipe cannot hold the reader open), at most RESPONSE_FILE_LIMIT
+ * bytes, no byte order mark, strict UTF-8, and one JSON object. Errors never
+ * echo file content. Returns the exact bytes decide will evaluate.
+ *
+ * @param {string} path
+ * @returns {{bytes: Buffer, name: string, digest: string}}
+ */
+export function readResponseFile(path) {
+  let fd;
+  try {
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+  } catch (error) {
+    throw new UsageError(`--response-file cannot be read (${error.code ?? "read error"}): ${path}`);
+  }
+  let bytes;
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) throw new UsageError(`--response-file must name a regular file: ${path}`);
+    const tooLarge = () => new UsageError(`--response-file exceeds the decide stage's ${RESPONSE_FILE_LIMIT}-byte input limit`);
+    if (stat.size > RESPONSE_FILE_LIMIT) throw tooLarge();
+    const buffer = Buffer.alloc(RESPONSE_FILE_LIMIT + 1);
+    let size = 0;
+    while (size < buffer.length) {
+      const read = readSync(fd, buffer, size, buffer.length - size, null);
+      if (read === 0) break;
+      size += read;
+    }
+    if (size > RESPONSE_FILE_LIMIT) throw tooLarge();
+    bytes = Buffer.from(buffer.subarray(0, size));
+  } catch (error) {
+    if (error instanceof UsageError) throw error;
+    throw new UsageError(`--response-file cannot be read (${error.code ?? "read error"}): ${path}`);
+  } finally {
+    closeSync(fd);
+  }
+  if (BYTE_ORDER_MARKS.some((mark) => mark.every((byte, index) => bytes[index] === byte))) {
+    throw new UsageError("--response-file starts with a byte order mark; the decide stage requires UTF-8 JSON without one");
+  }
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new UsageError("--response-file is not valid UTF-8");
+  }
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new UsageError("--response-file does not contain valid JSON");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new UsageError("--response-file must contain one JSON object");
+  }
+  return {
+    bytes,
+    name: basename(path).slice(0, 200),
+    digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+  };
 }
 
 /**
@@ -1671,7 +1880,10 @@ export function parseDemoOptions(args) {
  * @returns {Promise<DemoResult>}
  */
 export async function runDemo(args = [], options = {}) {
-  const { responseName, fault, forceDispute, asJson, proveMode, domain } = parseDemoOptions(args);
+  const { responseName, responseFile, fault, forceDispute, asJson, proveMode, domain } = parseDemoOptions(args);
+  // Read before any stage or provenance probe: an input the decide stage would
+  // refuse is a usage error that writes nothing.
+  const responseInput = responseFile === null ? null : readResponseFile(responseFile);
   const childTimeoutMs = options.childTimeoutMs ?? resolveChildTimeoutMs();
   const runner = options.runner ?? ((command, args, opts = {}) =>
     runCapture(command, args, { timeout: childTimeoutMs, ...opts }));
@@ -1679,12 +1891,12 @@ export async function runDemo(args = [], options = {}) {
     ...DEFAULT_PATHS,
     ...(options.paths ?? {}),
   };
-  const responseFile =
+  const fixtureFile =
     domain === "inventory"
       ? `inventory.response.${responseName}.json`
       : `response.${responseName}.json`;
-  const responsePath = join(paths.fixtures, responseFile);
-  if (!existsSync(responsePath) && !options.runDecideFn) throw new Error(`Missing fixture: ${responsePath}`);
+  let responsePath = responseInput === null ? join(paths.fixtures, fixtureFile) : null;
+  if (responsePath !== null && !existsSync(responsePath) && !options.runDecideFn) throw new Error(`Missing fixture: ${responsePath}`);
   const runId = options.runId ?? createRunId(options.now ? new Date(options.now) : new Date());
   const componentProvenance = options.componentResolver
     ? await options.componentResolver(paths)
@@ -1699,7 +1911,16 @@ export async function runDemo(args = [], options = {}) {
     stack: "agent-action-stack",
     stack_version: stackVersion(),
     response: responseName,
-    requested_options: { response: responseName, domain, fault, prove: proveMode, dispute: forceDispute },
+    requested_options: {
+      response: responseName,
+      ...(responseInput === null
+        ? {}
+        : { response_file: { name: responseInput.name, digest: responseInput.digest, bytes: responseInput.bytes.length } }),
+      domain,
+      fault,
+      prove: proveMode,
+      dispute: forceDispute,
+    },
     domain,
     flow: "decide",
     run_id: runId,
@@ -1729,14 +1950,28 @@ export async function runDemo(args = [], options = {}) {
     });
     return { report, manifest: persisted.manifest, bundleDir: persisted.bundleDir, exitCode, asJson };
   };
+  // A response file is evaluated from a private copy of the exact bytes that
+  // were checked and digested, so a later edit of the original cannot change
+  // what decide sees.
+  let responseScratch = null;
   try {
-    const decide = await (options.runDecideFn ?? runDecide)(responsePath, {
-      depsDir: paths.deps,
-      fixturesDir: paths.fixtures,
-      runner,
-      domain,
-      ...(options.python ? { python: options.python } : {}),
-    });
+    let decide;
+    try {
+      if (responseInput !== null) {
+        responseScratch = mkdtempSync(join(tmpdir(), "aas-response-"));
+        responsePath = join(responseScratch, "response.json");
+        writeFileSync(responsePath, responseInput.bytes);
+      }
+      decide = await (options.runDecideFn ?? runDecide)(responsePath, {
+        depsDir: paths.deps,
+        fixturesDir: paths.fixtures,
+        runner,
+        domain,
+        ...(options.python ? { python: options.python } : {}),
+      });
+    } finally {
+      if (responseScratch !== null) rmSync(responseScratch, { recursive: true, force: true });
+    }
     const decideStderr = clipChildStderr(decide.stderr);
     stages.decide = stageRecord(decide.ok ? "passed" : "failed", {
       raw: decide.raw,
@@ -1795,6 +2030,10 @@ export async function runDemo(args = [], options = {}) {
       action_id: act.raw?.action_id ?? null,
       assurance_mode: act.raw?.assurance_mode ?? null,
       bundle_verification: act.raw?.bundle_verification ?? null,
+      rejection_code: typeof act.raw?.expected_rejection?.code === "string" ? act.raw.expected_rejection.code : null,
+      tamper_code: act.raw?.tamper_detection?.detected === true && typeof act.raw.tamper_detection.code === "string"
+        ? act.raw.tamper_detection.code
+        : null,
       ...(actStderr ? { stderr: actStderr } : {}),
     };
     if (!act.ok) {
@@ -2162,6 +2401,214 @@ async function runReplayCommand(args, { asJson, nodeVersion, stdin } = {}) {
   process.exitCode = result.ok ? 0 : 1;
 }
 
+const DOCTOR_USAGE = "Usage: aas doctor [--for demo|replay] [--json]";
+const DOCTOR_MODES = new Set(["demo", "replay"]);
+const PYTHON_REMEDY = `Install Python ${MIN_PYTHON.join(".")}+ or set AAS_PYTHON to its interpreter`;
+
+function shortSha(commit) {
+  return typeof commit === "string" && commit !== "" ? commit.slice(0, 7) : "unknown";
+}
+
+function doctorDependencyCheck(classified) {
+  const { name } = classified;
+  const remove = `remove deps/${name} and run npm run bootstrap`;
+  switch (classified.state) {
+    case "ready":
+      return ["ok", `${classified.commit} detached clean, at the locked commit`, null];
+    case "missing":
+      return ["blocked", `deps/${name} is missing`, "npm run bootstrap"];
+    case "stale":
+      return ["blocked", `deps/${name} is at ${shortSha(classified.commit)} but the lock pins ${shortSha(classified.locked_commit)}`, "npm run bootstrap:update"];
+    case "missing-entrypoints":
+      return ["blocked", `deps/${name} is missing ${classified.missing_entrypoints.join(", ")}`, "npm run bootstrap"];
+    case "dirty":
+      return ["blocked", `deps/${name} has local changes`, remove];
+    case "substituted":
+      return ["blocked", `deps/${name} has origin ${classified.origin}, not the locked repository`, remove];
+    case "attached":
+      return ["blocked", `deps/${name} is on a branch, not detached at the locked commit`, remove];
+    default:
+      return ["blocked", `deps/${name} cannot be used (${classified.detail ?? classified.state})`, remove];
+  }
+}
+
+/**
+ * Read-only readiness for one workflow. `demo` checks the Node.js floor, a
+ * Python 3.11+ interpreter, the lock, and every pinned checkout (spawning git
+ * and Python version probes); `replay` checks the Node.js floor and the two
+ * verifier entrypoints, and compares each verifier's .git/HEAD with the lock
+ * as a warning only, spawning nothing, so it also works on an offline copy.
+ * Never clones, installs, builds, runs a stage, or writes a file.
+ */
+export function runDoctor({
+  mode = "demo",
+  nodeVersion,
+  env = process.env,
+  pythonRunner = runCapture,
+  command,
+  depsDir = DEFAULT_PATHS.deps,
+  lockPath = DEFAULT_PATHS.lock,
+} = {}) {
+  if (!DOCTOR_MODES.has(mode)) throw new UsageError(`--for must be demo or replay. ${DOCTOR_USAGE}`);
+  const checks = [];
+  const add = (name, status, detail, remedy = null) => checks.push({ name, status, detail, remedy });
+  const floor = MIN_FULL_STACK_NODE.join(".");
+  try {
+    const parsed = assertFullStackNodeVersion(nodeVersion === undefined ? {} : { version: nodeVersion });
+    add("node", "ok", `Node.js ${parsed.join(".")} (needs ${floor}+)`);
+  } catch (error) {
+    add("node", "blocked", error.message, `Install Node.js ${floor} or newer`);
+  }
+  if (mode === "demo") {
+    try {
+      const python = selectPython({ runner: pythonRunner, env });
+      if (python === null) add("python", "blocked", "No Python interpreter was found for the decide stage", PYTHON_REMEDY);
+      else add("python", "ok", `${[python.bin, ...python.prefix].join(" ")} is Python ${python.version.join(".")} (needs ${MIN_PYTHON.join(".")}+)`);
+    } catch (error) {
+      add("python", "blocked", error.message, PYTHON_REMEDY);
+    }
+  } else {
+    add("python", "not-needed", "replay does not run the decide stage");
+  }
+  let components = null;
+  try {
+    components = loadComponentLock(lockPath);
+    add("component-lock", "ok", `stack-lock.json pins ${components.map((component) => `${component.name} ${shortSha(component.commit)}`).join(", ")}`);
+  } catch (error) {
+    // Replay never reads the lock; it only informs the revision comparison.
+    add("component-lock", mode === "demo" ? "blocked" : "warning", error.message, "Restore stack-lock.json from the repository");
+  }
+  if (mode === "demo") {
+    let depsUsable = true;
+    try {
+      assertDependencyDirectory(depsDir);
+    } catch (error) {
+      depsUsable = false;
+      add("deps-directory", "blocked", error.message, "remove deps and run npm run bootstrap");
+    }
+    if (depsUsable && components !== null) {
+      for (const component of components) {
+        const classified = classifyDependency(join(depsDir, component.name), {
+          ...component,
+          expected_entrypoints: [...component.expected_entrypoints, ...(component.post_build_entrypoints ?? [])],
+        }, command === undefined ? {} : { command });
+        const [status, detail, remedy] = doctorDependencyCheck(classified);
+        add(`dependency:${component.name}`, status, detail, remedy);
+      }
+    }
+  } else {
+    for (const [name, entrypoint] of VERIFIER_ENTRYPOINTS) {
+      const present = existsSync(join(depsDir, name, entrypoint));
+      add(`verifier:${name}`, present ? "ok" : "blocked", `deps/${name}/${entrypoint} ${present ? "is present" : "is missing"}`, present ? null : "npm run bootstrap");
+      const checkout = readCheckoutCommit(join(depsDir, name));
+      const locked = components?.find((component) => component.name === name)?.commit ?? null;
+      if (checkout === null) {
+        add(`verifier-revision:${name}`, "warning", "revision unknown: no readable detached .git/HEAD (an offline copy, for example); replay does not need it");
+      } else if (locked === null) {
+        add(`verifier-revision:${name}`, "warning", `${checkout}; the lock is unreadable, so it cannot be compared`);
+      } else if (checkout === locked) {
+        add(`verifier-revision:${name}`, "ok", `${checkout}, at the locked commit`);
+      } else {
+        add(`verifier-revision:${name}`, "warning", `${checkout} differs from the lock's ${locked}; cases recorded under other pins still replay`, "npm run bootstrap:update");
+      }
+    }
+  }
+  return {
+    schema_version: "agent-action-stack.doctor/v1",
+    ok: checks.every((check) => check.status !== "blocked"),
+    for: mode,
+    checks,
+  };
+}
+
+function parseDoctorArgs(args) {
+  let mode = "demo";
+  let seenFor = false;
+  let seenJson = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === "--json" && !seenJson) {
+      seenJson = true;
+    } else if (token === "--for" && !seenFor) {
+      seenFor = true;
+      const value = args[index + 1];
+      if (value === undefined || !DOCTOR_MODES.has(value)) throw new UsageError(`--for must be demo or replay. ${DOCTOR_USAGE}`);
+      mode = value;
+      index += 1;
+    } else {
+      throw new UsageError(`Unsupported doctor argument: ${token}. ${DOCTOR_USAGE}`);
+    }
+  }
+  return mode;
+}
+
+function printDoctor(result) {
+  const lines = [`doctor: ${result.ok ? "ready" : "not ready"} for ${result.for}`];
+  for (const check of result.checks) {
+    lines.push(`${check.status.padEnd(10)} ${check.name}: ${check.detail}`);
+    if (check.remedy) lines.push(`${" ".repeat(11)}remedy: ${check.remedy}`);
+  }
+  process.stdout.write(`${lines.join("\n")}\n`);
+}
+
+const VERIFY_ALL_USAGE = "Usage: aas verify --all [--root output-dir] [--before run-id] [--limit 1..50] [--json]";
+
+/**
+ * `aas verify --all`: re-verify one page of saved cases. Exits 1 when any case
+ * is conflicting, unsupported, unreadable, or could not be verified; an
+ * unavailable case (simulate-only or refused) is reported but does not fail.
+ */
+async function runVerifyAllCommand(args, { asJson, outputRoot, nodeVersion, verifyOptions = {} } = {}) {
+  let before = null;
+  let limit;
+  const seen = new Set();
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (seen.has(token)) throw new UsageError(`Duplicate verify option: ${token}. ${VERIFY_ALL_USAGE}`);
+    if (token === "--all" || token === "--json") {
+      seen.add(token);
+    } else if (token === "--before" || token === "--limit") {
+      seen.add(token);
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith("-")) throw new UsageError(`Missing value for verify option: ${token}. ${VERIFY_ALL_USAGE}`);
+      index += 1;
+      if (token === "--limit") {
+        if (!/^[1-9][0-9]?$/.test(value) || Number(value) > 50) throw new UsageError(`--limit must be an integer from 1 to 50. ${VERIFY_ALL_USAGE}`);
+        limit = Number(value);
+      } else {
+        if (!isValidRunId(value) || value.length > 200) throw new UsageError(`Invalid --before run id. ${VERIFY_ALL_USAGE}`);
+        before = value;
+      }
+    } else {
+      throw new UsageError(`verify --all takes no run id or other option: ${token}. ${VERIFY_ALL_USAGE}`);
+    }
+  }
+  assertFullStackNodeVersion(nodeVersion === undefined ? {} : { version: nodeVersion });
+  const { verifyCasePage, VERIFY_FAILING_STATUSES } = await import("./case-review.mjs");
+  const page = verifyCasePage({ outputRoot, before, ...(limit === undefined ? {} : { limit }), ...verifyOptions });
+  const ok = VERIFY_FAILING_STATUSES.every((status) => page.counts[status] === 0);
+  if (asJson) {
+    process.stdout.write(`${JSON.stringify({ ok, ...page }, null, 2)}\n`);
+  } else {
+    const lines = page.verifier.map((entry) => `verifier ${entry.name}: ${entry.checkout_commit ?? "revision unknown"} (lock ${entry.locked_commit ?? "unreadable"})`
+      + (entry.matches_lock === false ? " differs from lock" : ""));
+    if (page.results.length === 0) lines.push("no cases in this page");
+    for (const entry of page.results) {
+      const differ = Array.isArray(entry.pins_differ) && entry.pins_differ.length > 0 ? ` (recorded under other pins: ${entry.pins_differ.join(", ")})` : "";
+      // Replay reasons already start with their class ("unavailable: ...").
+      const text = entry.reason ? clipChildStderr(entry.reason, 300).replace(/\s+/g, " ") : "";
+      const reason = text.startsWith(`${entry.status}: `) ? text.slice(entry.status.length + 2) : text;
+      lines.push(`${entry.run_id} ${entry.status}${reason ? `: ${reason}` : ""}${differ}`);
+    }
+    lines.push(`counts: ${Object.entries(page.counts).map(([status, count]) => `${status}=${count}`).join(" ")}`);
+    lines.push(`scanned: ${page.scanned}`);
+    lines.push(`next_cursor: ${page.next_cursor ?? "none"}`);
+    if (page.next_cursor) lines.push(`Continue with --before ${page.next_cursor} and the same root and page options.`);
+    process.stdout.write(`${lines.join("\n")}\n`);
+  }
+  process.exitCode = ok ? 0 : 1;
+}
+
 function parseRootArgs(args) {
   const remaining = [];
   let outputRoot = DEFAULT_PATHS.outputRoot, seen = false;
@@ -2217,6 +2664,11 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   if (command === "verify") {
     try {
       const { args, outputRoot } = parseRootArgs(argv.slice(1));
+      if (args.includes("--all")) {
+        await runVerifyAllCommand(args, { asJson, outputRoot, nodeVersion: options.nodeVersion, verifyOptions: options.verifyOptions });
+        return;
+      }
+      if (args.includes("--before") || args.includes("--limit")) throw new UsageError(`--before and --limit page a whole store and need --all. ${VERIFY_ALL_USAGE}`);
       const ids = args.filter(token => token !== "--json");
       if (ids.length !== 1 || !isValidRunId(ids[0]) || args.filter(token => token === "--json").length > 1) throw new UsageError("Usage: aas verify <run-id> [--root output-dir] [--json]");
       assertFullStackNodeVersion(options.nodeVersion === undefined ? {} : {version:options.nodeVersion});
@@ -2226,6 +2678,20 @@ export async function main(argv = process.argv.slice(2), options = {}) {
     } catch (error) {
       const usage = error instanceof UsageError;
       writeCliError(error, {asJson, usage}); process.exitCode = usage ? 2 : 1;
+    }
+    return;
+  }
+  if (command === "doctor") {
+    try {
+      const mode = parseDoctorArgs(argv.slice(1));
+      const result = runDoctor({ mode, nodeVersion: options.nodeVersion, ...(options.doctorOptions ?? {}) });
+      if (asJson) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      else printDoctor(result);
+      process.exitCode = result.ok ? 0 : 1;
+    } catch (error) {
+      const usage = error instanceof UsageError;
+      writeCliError(error, { asJson, usage });
+      process.exitCode = usage ? 2 : 1;
     }
     return;
   }
@@ -2283,7 +2749,10 @@ export async function main(argv = process.argv.slice(2), options = {}) {
     return;
   }
   try {
-    parseDemoOptions(argv.slice(1));
+    const demoOptions = parseDemoOptions(argv.slice(1));
+    // A refused response file is a usage error even on a broken runtime, and
+    // costs no interpreter probe. runDemo reads and digests it again for use.
+    if (demoOptions.responseFile !== null) readResponseFile(demoOptions.responseFile);
     assertFullStackNodeVersion(
       options.nodeVersion === undefined ? {} : { version: options.nodeVersion },
     );
