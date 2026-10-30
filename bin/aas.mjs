@@ -1954,7 +1954,14 @@ async function runCasesCommand(args, { asJson, outputRoot = DEFAULT_PATHS.output
   if (asJson) {
     process.stdout.write(`${JSON.stringify({ ok: true, ...page }, null, 2)}\n`);
   } else if (cases.length === 0) {
-    process.stdout.write(page.scanned ? "no readable cases in this page\n" : "no cases in this page\n");
+    // Filters can exclude every readable case; only a page whose every
+    // scanned entry is unavailable has no readable cases.
+    const message = page.scanned === 0
+      ? "no cases in this page"
+      : page.unavailable.length === page.scanned
+        ? "no readable cases in this page"
+        : "no cases in this page match the filters";
+    process.stdout.write(`${message}\n`);
   } else {
     for (const entry of cases) {
       process.stdout.write(

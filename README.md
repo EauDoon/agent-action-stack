@@ -213,13 +213,15 @@ starts the synthetic action.
 ```bash
 npm test
 npm run check
+npm run gui:smoke
 ```
 
-`npm run check` mirrors the CI test job: the unit suite, the syntax gate, and
-the version consistency check (`npm run check:version`).
+`npm run check` runs the unit suite, the syntax gate, and the version
+consistency check (`npm run check:version`). Together with
+`npm run gui:smoke`, that is the CI test job.
 
-`npm test` is the unit suite (orchestrator and GUI models). `npm run check`
-runs the unit suite and then the syntax gate, which parses every tracked
+`npm test` is the unit suite (orchestrator and GUI models). The syntax gate
+(`npm run check:syntax`) parses every tracked
 JavaScript module with `node --check`; the module list comes from
 `git ls-files`, so a new script is covered without editing CI. `npm run
 integration` proves the pinned components from a clean checkout, and
@@ -358,7 +360,7 @@ Saved-file reads use nonblocking descriptors and validate regular-file type and 
 
 History summaries and run listings use the same bounded saved-file reader, including when a malformed entry is skipped as unavailable.
 
-Replay checks actual UTF-8 bytes for both files and pipes, stops oversized streams as soon as the budget is crossed, and rejects nonregular files, invalid encoding, and malformed JSON without echoing document contents.
+Replay checks actual UTF-8 bytes for both files and pipes, stops oversized streams as soon as the budget is crossed, and rejects nonregular files, invalid encoding, and malformed JSON without echoing document contents. GUI import replay uploads the file's bytes unchanged and applies the same UTF-8 check.
 
 Exporting with --out creates a new handoff atomically and refuses to replace an existing file. Pass --overwrite with --out to explicitly replace it. --json supports machine-readable export success and error output.
 

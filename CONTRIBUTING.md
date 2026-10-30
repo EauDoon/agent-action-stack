@@ -76,12 +76,15 @@ the next patch version. Nothing is published to npm.
 
 ```bash
 npm run check
+npm run gui:smoke
 npm run integration
 npm run example:review-handoff
 ```
 
-`npm run check` is the unit suite (`npm test`) followed by the syntax gate
-(`npm run check:syntax`), which parses every tracked JavaScript module.
+`npm run check` is the unit suite (`npm test`), the syntax gate
+(`npm run check:syntax`), which parses every tracked JavaScript module, and
+the version consistency check (`npm run check:version`). CI's test job also
+runs `npm run gui:smoke`.
 `.gitattributes` keeps every text file LF, including on Windows checkouts.
 
 `npm run test:browser` requires Playwright Chromium:

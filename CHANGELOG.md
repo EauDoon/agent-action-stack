@@ -8,6 +8,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 - Case persistence now checks the exact formatted UTF-8 replay budget before writing files. Oversized combined evidence is rejected without publishing an unreadable case or replacing the previous latest pointer.
+- GUI import replay now decodes an uploaded case the way `aas replay` does. The page uploads the file's bytes unchanged and the server refuses invalid UTF-8 with HTTP 400; before, both sides replaced invalid bytes with U+FFFD, so a case file the CLI refuses could show "replay verified" in the GUI. A leading byte order mark is accepted, as the CLI accepts it.
+- `aas cases` no longer prints "no readable cases in this page" when `--domain`, `--outcome`, or `--search` excluded every readable case. It now prints "no cases in this page match the filters", and keeps the unreadable message for a page whose every scanned entry is unavailable.
 
 ## [0.3.0] - 2026-10-09
 
