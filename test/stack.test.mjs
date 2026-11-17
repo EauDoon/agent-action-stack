@@ -9,7 +9,7 @@ import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertFullStackNodeVersion, classifyDependency, compareVersionTuples, isEntrypoint, loadComponentLock, inspectDependencyDirectory, main as bootstrapMain, parseBootstrapArgs, readCheckoutCommit, MIN_FULL_STACK_NODE, moveIntoPlace, npmInvocation, parseNodeVersion, prepareDependencies } from "../scripts/bootstrap.mjs";
 import { checkSyntax, listSyntaxTargets } from "../scripts/check-syntax.mjs";
-import { verifierRevisions, verifyCasePage } from "../bin/case-review.mjs";
+import { markdownText, renderCaseMarkdown, verifierRevisions, verifyCasePage } from "../bin/case-review.mjs";
 import { checkReleaseConsistency, loadReleaseInputs, parseChangelog, releaseNotes } from "../scripts/check-version.mjs";
 import {
   buildRailReviewRequest,
@@ -3767,4 +3767,14 @@ test("doctor usage errors exit 2, and doctor writes nothing", async () => {
   assert.equal(existsSync(join(fixture.deps, ".out")), false);
   assert.match(helpText(), /^ {2}aas doctor \[--for demo\|replay\] \[--json\]$/m);
   assert.match(helpText(), /^ {2}--for demo\|replay {8}doctor: /m);
+});
+
+
+test("Markdown case reviews render terminal and bidi controls visibly", () => {
+  assert.equal(markdownText("safe\x1b[2J\u202eevil\u2069\x00\tend"), "safeU+001B\\[2JU+202EevilU+2069U+0000U+0009end");
+  assert.equal(markdownText("café 中文 😀\r\nnext"), "café 中文 😀  next");
+  const report = renderCaseMarkdown({ run_id: "case\x1b]52;c;payload\x07", limits: ["unknown\u202everified"] });
+  assert.doesNotMatch(report, /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u);
+  assert.match(report, /U\+001B/);
+  assert.match(report, /U\+202E/);
 });
