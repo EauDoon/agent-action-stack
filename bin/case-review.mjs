@@ -195,6 +195,10 @@ export function markdownText(value) {
     if (character === '<') return '&lt;';
     if (character === '>') return '&gt;';
     if (character === '\r' || character === '\n') return ' ';
+    // Persisted case labels are untrusted, including terminal and bidi controls.
+    if (/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(character)) {
+      return 'U+' + character.codePointAt(0).toString(16).toUpperCase().padStart(4, '0');
+    }
     return punctuation.has(character) ? '\\' + character : character;
   }).join('');
 }

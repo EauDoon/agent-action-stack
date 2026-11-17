@@ -6,6 +6,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- Saved-case Markdown reviews now render terminal control and bidirectional override characters as visible Unicode code points, preventing imported labels from hiding or rewriting review output.
+
 ### Added
 - `aas demo --fault` accepts every synthetic fault the pinned rail demo
   offers: 13 for `refund` and 10 for `inventory`, validated against the
