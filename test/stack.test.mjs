@@ -1999,6 +1999,30 @@ test("compare classifies identical, different, and not-comparable pairs", () => 
   assert.doesNotMatch(absent.errors.join(" "), /\/runs\//);
 });
 
+test("comparison includes declared settings without exposing arbitrary requested data", () => {
+  const outputRoot = tempRoot();
+  const shared = { flow: "decide", stages: {}, component_provenance: [] };
+  const prove = {};
+  writeCase(outputRoot, "settings-a", { report: { ...shared, run_id: "settings-a", requested_options: { response: "pass", dispute: false, private_notes: "not-for-summary" } }, prove });
+  writeCase(outputRoot, "settings-b", { report: { ...shared, run_id: "settings-b", requested_options: { response: "fail", dispute: false } }, prove });
+  const result = compareRuns("settings-a", "settings-b", { outputRoot });
+  assert.equal(result.classification, "different");
+  assert.deepEqual(result.differences.map(entry => entry.field), ["requested_settings"]);
+  assert.equal(result.left.requested_settings.dispute, false);
+  assert.equal(result.left.requested_settings.prove, null);
+  assert.doesNotMatch(JSON.stringify(result), /not-for-summary|private_notes/);
+});
+
+test("legacy cases keep unknown settings and ignore property ordering", () => {
+  const outputRoot = tempRoot();
+  for (const [id, options] of [["legacy-a", undefined], ["legacy-b", {}], ["order-a", {response: "pass", prove: "rail"}], ["order-b", {prove: "rail", response: "pass"}]]) {
+    writeCase(outputRoot, id, { report: { run_id: id, stages: {}, requested_options: options }, prove: {} });
+  }
+  assert.equal(compareRuns("legacy-a", "legacy-b", { outputRoot }).classification, "identical");
+  assert.equal(compareRuns("order-a", "order-b", { outputRoot }).classification, "identical");
+  assert.deepEqual(Object.values(summarizeRun("legacy-a", { outputRoot }).requested_settings), [null, null, null, null, null]);
+});
+
 test("unreadable stage artifacts fail closed instead of reading as absent", () => {
   const outputRoot = tempRoot();
   writeCase(outputRoot, "case-ok");

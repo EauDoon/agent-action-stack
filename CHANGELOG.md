@@ -11,6 +11,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Saved-case Markdown reviews now render terminal control and bidirectional override characters as visible Unicode code points, preventing imported labels from hiding or rewriting review output.
 
 ### Added
+- Saved-case summaries and comparisons include the five declared run settings;
+  legacy omissions remain unknown and arbitrary option data stays out.
 - `aas demo --fault` accepts every synthetic fault the pinned rail demo
   offers: 13 for `refund` and 10 for `inventory`, validated against the
   selected `--domain` (before, only `none` and `duplicate`). Disputed

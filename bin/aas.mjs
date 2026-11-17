@@ -1459,6 +1459,10 @@ export function summarizeRun(runId, { outputRoot = DEFAULT_PATHS.outputRoot } = 
     domain: typeof report.domain === "string" ? report.domain : null,
     exit_code: manifest.exit_code ?? null,
     flow: typeof report.flow === "string" ? report.flow : null,
+    requested_settings: Object.fromEntries(["response", "domain", "fault", "prove", "dispute"].map((key) => {
+      const value = report.requested_options?.[key];
+      return [key, typeof value === "string" || typeof value === "boolean" ? value : null];
+    })),
     stages,
     policy_id: report.stages?.decide?.policy_id ?? null,
     action_id: report.stages?.act?.action_id ?? null,
@@ -1501,6 +1505,7 @@ const COMPARISON_NOTES = [
 ];
 
 const COMPARED_FIELDS = [
+  "requested_settings",
   "domain",
   "flow",
   "stages",
