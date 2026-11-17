@@ -219,6 +219,11 @@ List runs newest-first with `aas runs`, inspect bounded case summaries with
 component revisions — never raw evidence), and compare two cases with
 `aas compare <run-id> <run-id>`, which classifies the pair as identical,
 different, or not comparable and lists the fields that differ. Comparison
+also checks the declared response, domain, fault, prove, and dispute settings,
+so matching outcomes do not hide different requested runs. Missing legacy
+settings remain unknown (null); response content and arbitrary option fields
+are not copied into summaries. These declarations are not proof of execution.
+Comparison
 states that differences do not establish causation and that matching
 metadata does not prove matching evidence; it never mutates a case.
 
