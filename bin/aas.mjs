@@ -1188,14 +1188,18 @@ export function createRunId(now = new Date(), nonce = randomUUID()) {
   return `${now.toISOString().replace(/[:.]/g, "")}-${nonce.slice(0, 12)}`;
 }
 
-function safeBundleFile(bundleDir, value, label) {
+function requireBundleFilename(value, label) {
   if (typeof value !== "string" || value.length === 0 || value.length > 100) {
     throw new Error(`Invalid ${label}.`);
   }
   if (isAbsolute(value) || !/^(?:[A-Za-z0-9_-]+\/)?[A-Za-z0-9_-][A-Za-z0-9._-]*\.json$/.test(value)) {
     throw new Error(`Invalid ${label}.`);
   }
-  return join(bundleDir, value);
+  return value;
+}
+
+function safeBundleFile(bundleDir, value, label) {
+  return join(bundleDir, requireBundleFilename(value, label));
 }
 
 /**
@@ -1223,7 +1227,7 @@ function readBoundedCaseJson(path) {
   } finally { closeSync(fd); }
 }
 
-function validateSavedManifest(manifest, bundleDir) {
+function validateSavedManifest(manifest) {
   if (manifest?.schema_version !== COMPARABLE_SCHEMA) throw new Error("Case uses unsupported manifest schema.");
   const stages = manifest.stages;
   if (!stages || typeof stages !== "object" || Array.isArray(stages)
@@ -1232,7 +1236,7 @@ function validateSavedManifest(manifest, bundleDir) {
   for (const name of STAGE_NAMES) {
     const stage = stages[name];
     if (!stage || typeof stage !== "object" || Array.isArray(stage)) throw new Error("Invalid case stage entry.");
-    if (stage.artifact !== null) safeBundleFile(bundleDir, stage.artifact, "stage artifact path");
+    if (stage.artifact !== null) requireBundleFilename(stage.artifact, "stage artifact path");
   }
 }
 
@@ -1278,7 +1282,7 @@ function readRunBundleBody(outputRoot, runId) {
     }
   };
   const manifest = readCaseFile(join(bundleDir, "manifest.json"), "manifest.json");
-  validateSavedManifest(manifest, bundleDir);
+  validateSavedManifest(manifest);
   const report = readCaseFile(safeBundleFile(bundleDir, manifest.report, "report path"), manifest.report);
   if (manifest.run_id !== runId || report?.run_id !== runId) throw new Error("Case identity does not match its directory.");
   const stages = {};
@@ -1322,12 +1326,7 @@ export function assertRunsDirectory(outputRoot) {
   }
 }
 
-/**
- * List persisted runs newest-first. Entries without a readable manifest
- * (interrupted writes, stray files) are omitted; export and replay still
- * fail closed on them when addressed directly.
- */
-export function listRuns({ outputRoot = DEFAULT_PATHS.outputRoot, limit = Number.MAX_SAFE_INTEGER } = {}) {
+function listRunIds(outputRoot, limit = Number.MAX_SAFE_INTEGER) {
   assertRunsDirectory(outputRoot);
   const dir = runsDirectory(outputRoot);
   let entries;
@@ -1339,12 +1338,22 @@ export function listRuns({ outputRoot = DEFAULT_PATHS.outputRoot, limit = Number
   }
   // Names sort newest-first, so order the candidates before reading any
   // manifest: that keeps the result correct and the scan bounded.
-  const candidates = entries
+  return entries
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith(".") && isValidRunId(entry.name))
     .map((entry) => entry.name)
     .sort()
     .reverse()
     .slice(0, limit);
+}
+
+/**
+ * List persisted runs newest-first. Entries without a readable manifest
+ * (interrupted writes, stray files) are omitted; export and replay still
+ * fail closed on them when addressed directly.
+ */
+export function listRuns({ outputRoot = DEFAULT_PATHS.outputRoot, limit = Number.MAX_SAFE_INTEGER } = {}) {
+  const dir = runsDirectory(outputRoot);
+  const candidates = listRunIds(outputRoot, limit);
   const runs = [];
   for (const name of candidates) {
     let manifest;
@@ -1378,26 +1387,65 @@ function readLatestRunId(outputRoot) {
   }
 }
 
-/**
- * Remove oldest runs beyond `keep`, newest-first retention. The run the
- * latest pointer identifies is always kept so exports and downloads never
- * dangle; dry runs report without deleting. Returns kept/removed run ids.
- */
-export function pruneRuns({ outputRoot = DEFAULT_PATHS.outputRoot, keep, dryRun = false } = {}) {
+function requireRetentionCount(keep) {
   if (!Number.isInteger(keep) || keep < 1) {
     throw new UsageError("prune requires --keep <positive integer>");
   }
-  const runs = [...listRuns({ outputRoot })].reverse();
+}
+
+/**
+ * Select eligible saved runs without writing. Only matching stack records
+ * count toward the retention window; an unavailable case is left alone.
+ * This checks the saved-case format, not cryptographic ownership.
+ */
+export function planRunPrune(newestFirstIds, { keep, latest, readCase }) {
+  requireRetentionCount(keep);
+  const oldestFirstIds = newestFirstIds.filter((runId) => {
+    if (!isValidRunId(runId)) return false;
+    try {
+      const { manifest, report } = readCase(runId);
+      validateSavedManifest(manifest);
+      return manifest.run_id === runId
+        && manifest.report === "report.json"
+        && STAGE_NAMES.every((name) => {
+          const artifact = manifest.stages[name].artifact;
+          return artifact === null || artifact === `stages/${name}.json`;
+        })
+        && report?.stack === "agent-action-stack"
+        && report.run_id === runId;
+    } catch {
+      return false;
+    }
+  }).reverse();
+  const keepSet = new Set(oldestFirstIds.slice(-keep));
+  if (oldestFirstIds.includes(latest)) keepSet.add(latest);
+  return { kept: [...keepSet], removed: oldestFirstIds.filter((runId) => !keepSet.has(runId)) };
+}
+
+/**
+ * Remove only eligible saved runs outside the newest-first retention window.
+ * The run identified by the latest pointer is always protected.
+ */
+export function pruneRuns({ outputRoot = DEFAULT_PATHS.outputRoot, keep, dryRun = false } = {}) {
+  requireRetentionCount(keep);
+  const ids = listRunIds(outputRoot);
+  const dir = runsDirectory(outputRoot);
   const latest = readLatestRunId(outputRoot);
-  const keepSet = new Set(runs.slice(-keep).map((run) => run.run_id));
-  if (latest !== null && runs.some((run) => run.run_id === latest)) keepSet.add(latest);
-  const removed = [];
-  for (const run of runs) {
-    if (keepSet.has(run.run_id)) continue;
-    removed.push(run.run_id);
-    if (!dryRun) rmSync(join(runsDirectory(outputRoot), run.run_id), { recursive: true, force: true });
+  const plan = planRunPrune(ids, {
+    keep,
+    latest,
+    readCase: (runId) => {
+      const bundleDir = join(dir, runId);
+      return {
+        manifest: readBoundedCaseJson(join(bundleDir, "manifest.json")),
+        report: readBoundedCaseJson(join(bundleDir, "report.json")),
+      };
+    },
+  });
+  if (!dryRun) {
+    for (const runId of plan.removed) rmSync(join(dir, runId), { recursive: true, force: true });
   }
-  return { kept: [...keepSet], removed, latest, dryRun };
+  return { ...plan, latest, dryRun };
 }
 
 const HISTORY_LIMIT = 50;
@@ -1443,7 +1491,7 @@ export function summarizeRun(runId, { outputRoot = DEFAULT_PATHS.outputRoot } = 
   // directory is followed and comparison reads the link target.
   assertRunsDirectory(outputRoot);
   const { bundleDir, manifest } = readRunManifest(runsDirectory(outputRoot), runId);
-  validateSavedManifest(manifest, bundleDir);
+  validateSavedManifest(manifest);
   const report = readRunReport(bundleDir, manifest);
   if (manifest.run_id !== runId || report?.run_id !== runId) throw new Error("Case identity does not match its directory.");
   const prove = readStageArtifact(bundleDir, manifest, "prove");

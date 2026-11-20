@@ -49,6 +49,7 @@ import {
   compareRuns,
   listRunSummaries,
   listRuns,
+  planRunPrune,
   pruneRuns,
   summarizeRun,
   validateRailReview,
@@ -1754,6 +1755,64 @@ test("runs lists persisted runs newest-first", async () => {
   assert.deepEqual(listed.map((run) => run.run_id), [...ids].reverse());
   assert.equal(listed[0].stages.decide, "passed");
   assert.equal(listed[0].exit_code, 0);
+});
+
+test("prune planning counts only conforming records toward retention", () => {
+  function record(runId) {
+    return {
+      manifest: {
+        schema_version: "agent-action-stack.run/v1",
+        run_id: runId,
+        report: "report.json",
+        stages: {
+          decide: { status: "passed", artifact: "stages/decide.json" },
+          act: { status: "passed", artifact: "stages/act.json" },
+          prove: { status: "skipped", artifact: null },
+        },
+      },
+      report: { stack: "agent-action-stack", run_id: runId },
+    };
+  }
+  const records = new Map();
+  const ids = ["run-z", "run-y", "run-x", "run-w", "run-v", "run-u", "run-t", "run-s", "run-r", "run-q", "run-p"];
+  for (const runId of ids) records.set(runId, record(runId));
+  // Unavailable and other-format cases may appear in a copied store. They
+  // must be left alone and must not consume one of the requested slots.
+  const cases = [
+    ["run-z", ({ manifest }) => { delete manifest.schema_version; }],
+    ["run-x", ({ manifest }) => { manifest.schema_version = "example.run/v2"; }],
+    ["run-w", ({ manifest }) => { delete manifest.stages.prove; }],
+    ["run-v", ({ manifest }) => { manifest.run_id = "another-run"; }],
+    ["run-u", ({ report }) => { report.stack = "other-tool"; }],
+    ["run-t", ({ report }) => { report.run_id = "another-run"; }],
+    ["run-s", ({ manifest }) => { manifest.report = "summary.json"; }],
+    ["run-r", ({ manifest }) => { manifest.stages.act.artifact = "stages/result.json"; }],
+  ];
+  for (const [runId, edit] of cases) edit(records.get(runId));
+  records.delete("run-p");
+  const readCase = (runId) => {
+    if (!records.has(runId)) throw new Error("case unavailable");
+    return records.get(runId);
+  };
+
+  assert.deepEqual(planRunPrune(ids, { keep: 1, latest: null, readCase }), {
+    kept: ["run-y"],
+    removed: ["run-q"],
+  });
+  assert.deepEqual(planRunPrune(ids, { keep: 1, latest: "run-q", readCase }), {
+    kept: ["run-y", "run-q"],
+    removed: [],
+  });
+  assert.deepEqual(planRunPrune(ids, { keep: 2, latest: null, readCase }), {
+    kept: ["run-q", "run-y"],
+    removed: [],
+  });
+  assert.deepEqual(planRunPrune(ids, { keep: 1, latest: "run-z", readCase }), {
+    kept: ["run-y"],
+    removed: ["run-q"],
+  });
+  assert.deepEqual(planRunPrune([], { keep: 1, latest: null, readCase }), { kept: [], removed: [] });
+  assert.throws(() => planRunPrune(ids, { keep: 0, latest: null, readCase }), /positive integer/);
 });
 
 test("prune keeps the newest runs and never the latest pointer target", async () => {

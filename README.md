@@ -228,8 +228,11 @@ states that differences do not establish causation and that matching
 metadata does not prove matching evidence; it never mutates a case.
 
 Remove oldest runs beyond a window with `aas prune --keep <n>` (`--dry-run`
-previews). Pruning never deletes the run the latest pointer identifies, and
-nothing is deleted without an explicit `--keep`. The GUI exposes the same
+previews the same selection). Only saved runs with a supported manifest and a
+matching stack report count toward retention. Unrecognized, unreadable, and
+incomplete metadata entries are left untouched. Pruning never deletes the run
+the latest pointer identifies, and nothing is deleted without an explicit
+`--keep`. Use a dedicated case store; format checks do not authenticate files. The GUI exposes the same
 history and comparison through `Load history` and `Compare selected cases`.
 
 ## Guided local GUI
