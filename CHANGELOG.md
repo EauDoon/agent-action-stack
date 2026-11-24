@@ -6,11 +6,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Operator review
+### Security
 
 - The next release will keep unrecognized saved options and nested response-file payloads out of JSON case handoffs, not only Markdown. File handoffs report a basename, SHA-256 digest and byte count, not input contents or paths.
-
-### Security
 
 - Pruning now verifies saved-run metadata before selecting cases for retention and leaves unrecognized entries untouched.
 - Saved-case Markdown reviews now render terminal control and bidirectional override characters as visible Unicode code points, preventing imported labels from hiding or rewriting review output.

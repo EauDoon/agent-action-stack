@@ -9,6 +9,12 @@ evidence for their stated commits, not current runtime or test-count claims.
 Local checks may install dependencies and write caches or temporary files; see
 [local write targets](architecture.md#local-write-targets).
 
+## Next release candidate: 0.4.0
+
+Limit exported case summaries to the supported settings and response-file metadata. Run both JSON and Markdown inspection against a file-backed fixture, confirm raw input stays out, and run the existing integration and Chromium suites with the locked dependencies.
+
+Before tagging, review the complete diff since the last release, including earlier unreleased work, and verify the normal release checks against the exact candidate. This plan does not mark a published version.
+
 ## Source and dependency gates
 
 - [ ] Review the final raw tree and changed-file list.
