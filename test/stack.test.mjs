@@ -3668,6 +3668,23 @@ test("a policy refusal names its failed rules after flow:, capped at 50", async 
   assert.equal(captureHuman(errored.report).some((line) => line.startsWith("decide_failed_rules:")), false);
 });
 
+test("inspect exports only declared metadata from saved options", async () => {
+  const outputRoot = tempRoot(), runId = "private-options";
+  const report = { run_id: runId, stages: {}, requested_options: {
+    response: "file", dispute: false, domain: "OMIT_RAW", fault: { private: "OMIT_RAW" }, notes: "OMIT_RAW",
+    response_file: { name: "folder/OMIT_RAW", bytes: 7, digest: "OMIT_RAW", payload: "OMIT_RAW" },
+  }};
+  persistRunBundle({ outputRoot, runId, report, stages: {}, componentProvenance: [], exitCode: 0 });
+  for (const format of ["--json", "--markdown"]) {
+    const result = await captureMain(["inspect", runId, "--root", outputRoot, format]);
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.doesNotMatch(result.stdout, /OMIT_RAW/);
+    if (format === "--json") assert.deepEqual(JSON.parse(result.stdout).requested_options, {
+      response: "file", dispute: false, response_file: { name: null, digest: null, bytes: 7 },
+    });
+  }
+});
+
 test("inspect lists the response file under requested settings in Markdown and JSON", async () => {
   const { inspectCase, renderCaseMarkdown } = await import("../bin/case-review.mjs");
   const outputRoot = tempRoot();
