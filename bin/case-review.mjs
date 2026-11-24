@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { loadComponentLock, readCheckoutCommit } from "../scripts/bootstrap.mjs";
-import { assertRunsDirectory, clipChildStderr, DEFAULT_PATHS, UsageError, exportRunBundle, isValidRunId, replayBundle, summarizeRun, VERIFIER_ENTRYPOINTS } from "./aas.mjs";
+import { assertRunsDirectory, clipChildStderr, DEFAULT_PATHS, DEMO_FAULTS_BY_DOMAIN, RESPONSE_FILE_LIMIT, UsageError, exportRunBundle, isValidRunId, replayBundle, summarizeRun, VERIFIER_ENTRYPOINTS } from "./aas.mjs";
 
 function assertPageOptions(before, limit) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error("History limit must be an integer from 1 to 50.");
@@ -156,6 +156,38 @@ export function parseCasePageArgs(args) {
   return result;
 }
 
+// Read the shared catalog at call time: aas.mjs also imports this module.
+function isReviewOption(key, value) {
+  switch (key) {
+    case "response": return ["pass", "fail", "file"].includes(value);
+    case "domain": return ["refund", "inventory"].includes(value);
+    case "prove": return ["simulate", "rail"].includes(value);
+    case "fault": return Object.values(DEMO_FAULTS_BY_DOMAIN).some(faults => faults.includes(value));
+    default: return false;
+  }
+}
+
+// Exports are operator-facing summaries, not a copy of a saved options object.
+function reviewOptions(options) {
+  if (!options || typeof options !== "object" || Array.isArray(options)) return null;
+  const result = {};
+  for (const key of ["response", "domain", "fault", "prove"]) {
+    if (isReviewOption(key, options[key])) result[key] = options[key];
+  }
+  if (typeof options.dispute === "boolean") result.dispute = options.dispute;
+  const file = options.response_file;
+  if (result.response === "file" && file && typeof file === "object" && !Array.isArray(file)) {
+    // The producer records a basename, digest and byte count only. Reject
+    // paths from other platforms as well as inconsistent metadata types.
+    result.response_file = {
+      name: typeof file.name === "string" && file.name.length <= 200 && !/[\\/]/u.test(file.name) ? file.name : null,
+      digest: typeof file.digest === "string" && /^sha256:[a-f0-9]{64}$/u.test(file.digest) ? file.digest : null,
+      bytes: Number.isSafeInteger(file.bytes) && file.bytes >= 0 && file.bytes <= RESPONSE_FILE_LIMIT ? file.bytes : null,
+    };
+  }
+  return result;
+}
+
 export function inspectCase(runId, options = {}) {
   const bundle = exportRunBundle(runId, options);
   const report = bundle.report;
@@ -175,7 +207,7 @@ export function inspectCase(runId, options = {}) {
     created_at: bundle.manifest.created_at ?? null,
     stack_version: typeof bundle.manifest.stack_version === 'string' ? bundle.manifest.stack_version : null,
     domain: report.domain ?? null,
-    requested_options: report.requested_options ?? null,
+    requested_options: reviewOptions(report.requested_options),
     policy_failures: policyFailures,
     stages: ['decide','act','prove'].map(name => ({ name, status: bundle.manifest.stages[name]?.status ?? 'unknown', reason: bundle.manifest.stages[name]?.reason ?? null, code: bundle.manifest.stages[name]?.code ?? null, stderr: clipChildStderr(bundle.manifest.stages[name]?.stderr) || null, artifact_available: Object.hasOwn(bundle.stages,name) })),
     policy_id: report.stages?.decide?.policy_id ?? null,
