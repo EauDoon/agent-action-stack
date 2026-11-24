@@ -1481,6 +1481,37 @@ function readStageArtifact(bundleDir, manifest, name) {
   }
 }
 
+function isReviewOption(key, value) {
+  switch (key) {
+    case "response": return ["pass", "fail", "file"].includes(value);
+    case "domain": return ["refund", "inventory"].includes(value);
+    case "prove": return ["simulate", "rail"].includes(value);
+    case "fault": return Object.values(DEMO_FAULTS_BY_DOMAIN).some(faults => faults.includes(value));
+    default: return false;
+  }
+}
+
+// Exports are operator-facing summaries, not a copy of a saved options object.
+export function reviewOptions(options) {
+  if (!options || typeof options !== "object" || Array.isArray(options)) return null;
+  const result = {};
+  for (const key of ["response", "domain", "fault", "prove"]) {
+    if (isReviewOption(key, options[key])) result[key] = options[key];
+  }
+  if (typeof options.dispute === "boolean") result.dispute = options.dispute;
+  const file = options.response_file;
+  if (result.response === "file" && file && typeof file === "object" && !Array.isArray(file)) {
+    // The producer records a basename, digest and byte count only. Reject
+    // paths from other platforms as well as inconsistent metadata types.
+    result.response_file = {
+      name: typeof file.name === "string" && file.name.length <= 200 && !/[\\/]/u.test(file.name) ? file.name : null,
+      digest: typeof file.digest === "string" && /^sha256:[a-f0-9]{64}$/u.test(file.digest) ? file.digest : null,
+      bytes: Number.isSafeInteger(file.bytes) && file.bytes >= 0 && file.bytes <= RESPONSE_FILE_LIMIT ? file.bytes : null,
+    };
+  }
+  return result;
+}
+
 /**
  * Bounded, summary-only view of one persisted run. Raw evidence is never
  * included: callers get identities, statuses, outcomes, digests, and
@@ -1498,6 +1529,7 @@ export function summarizeRun(runId, { outputRoot = DEFAULT_PATHS.outputRoot } = 
   const artifacts_unreadable = prove.unreadable ? ["prove"] : [];
   const stages = {};
   for (const name of STAGE_NAMES) stages[name] = manifest.stages?.[name]?.status ?? "unknown";
+  const settings = reviewOptions(report.requested_options);
   return {
     run_id: runId,
     created_at: typeof manifest.created_at === "string" ? manifest.created_at : null,
@@ -1507,10 +1539,9 @@ export function summarizeRun(runId, { outputRoot = DEFAULT_PATHS.outputRoot } = 
     domain: typeof report.domain === "string" ? report.domain : null,
     exit_code: manifest.exit_code ?? null,
     flow: typeof report.flow === "string" ? report.flow : null,
-    requested_settings: Object.fromEntries(["response", "domain", "fault", "prove", "dispute"].map((key) => {
-      const value = report.requested_options?.[key];
-      return [key, typeof value === "string" || typeof value === "boolean" ? value : null];
-    })),
+    requested_settings: Object.fromEntries(["response", "domain", "fault", "prove", "dispute"].map(
+      key => [key, settings?.[key] ?? null])),
+    response_file_digest: settings?.response_file?.digest ?? null,
     stages,
     policy_id: report.stages?.decide?.policy_id ?? null,
     action_id: report.stages?.act?.action_id ?? null,
@@ -1554,6 +1585,7 @@ const COMPARISON_NOTES = [
 
 const COMPARED_FIELDS = [
   "requested_settings",
+  "response_file_digest",
   "domain",
   "flow",
   "stages",

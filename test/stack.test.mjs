@@ -2072,6 +2072,34 @@ test("comparison includes declared settings without exposing arbitrary requested
   assert.doesNotMatch(JSON.stringify(result), /not-for-summary|private_notes/);
 });
 
+test("CLI case views reject undeclared settings and compare recorded response bytes", async () => {
+  const outputRoot = tempRoot(), metadata = { domain: "OMIT_UNKNOWN", note: "OMIT_UNKNOWN", response: "file" };
+  for (const [id, hash, name] of [
+    ["left", "a".repeat(64), "left.json"],
+    ["right", "b".repeat(64), "right.json"],
+    ["renamed", "a".repeat(64), "other.json"],
+    ["legacy", null, "not-recorded.json"],
+  ]) {
+    const report = { run_id: id, stages: {}, requested_options: {
+      ...metadata, ...(hash === null ? {} : { response_file: { name, digest: "sha256:" + hash, bytes: 15 } }),
+    }};
+    persistRunBundle({ outputRoot, runId: id, report, stages: {}, componentProvenance: [], exitCode: 0 });
+  }
+  const cases = await captureMain(["cases", "--root", outputRoot, "--json"]);
+  assert.equal(cases.exitCode, 0, cases.stderr);
+  assert.doesNotMatch(cases.stdout, /OMIT_UNKNOWN|left\.json/);
+  const compare = async (right) => {
+    const run = await captureMain(["compare", "left", right, "--root", outputRoot, "--json"]);
+    assert.equal(run.exitCode, 0, run.stderr);
+    assert.doesNotMatch(run.stdout, /OMIT_UNKNOWN|left\.json/);
+    return JSON.parse(run.stdout);
+  };
+  assert.equal((await compare("right")).classification, "different");
+  assert.deepEqual((await compare("right")).differences.map(change => change.field), ["response_file_digest"]);
+  assert.equal((await compare("renamed")).classification, "identical");
+  assert.equal((await compare("legacy")).right.response_file_digest, null);
+});
+
 test("legacy cases keep unknown settings and ignore property ordering", () => {
   const outputRoot = tempRoot();
   for (const [id, options] of [["legacy-a", undefined], ["legacy-b", {}], ["order-a", {response: "pass", prove: "rail"}], ["order-b", {prove: "rail", response: "pass"}]]) {

@@ -337,7 +337,10 @@ were checked are evaluated from a private temporary copy, so the recorded
 digest always matches what decide saw. The case records `response: file` and
 `requested_options.response_file` (the basename, its `sha256:` digest, and its
 size), never the content; the basename and digest travel with exports and
-appear in `aas inspect` and the Markdown review. The human output adds
+appear in `aas inspect` and the Markdown review. History and comparison show only
+the recorded digest; this lets two runs using different input bytes compare as
+different even if their stages agree. A missing or invalid digest remains unknown,
+and the recorded digest alone does not verify the original file. The human output adds
 `response_file: <name> <digest>` after `flow:`.
 
 The file gates orchestration only. A pass lets the act stage run, but act
