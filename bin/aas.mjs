@@ -361,6 +361,7 @@ Commands:
   replay  Re-verify an exported bundle offline without rerunning the action
   verify  Re-verify one saved case, or a page of them with --all, without
           exporting or rerunning actions
+  inspect Read a saved case as Markdown or JSON without verifying receipts
   latest  Print the latest complete saved run identity
   runs    List persisted runs newest-first
   cases   List bounded case summaries (outcome, policy, review, digest)

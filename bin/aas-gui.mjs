@@ -3,6 +3,7 @@
 import { inspectCase, renderCaseMarkdown, renderComparisonMarkdown } from "./case-review.mjs";
 import { createHash } from "node:crypto";
 import { createServer, request } from "node:http";
+import { readFile } from "node:fs/promises";
 import { runGuiTask } from "./aas-gui-worker.mjs";
 import {
   CHILD_JSON_LIMIT,
@@ -606,12 +607,19 @@ function cspHash(text) {
  */
 export const PAGE_CSP = `default-src 'self'; script-src ${cspHash(PAGE_SCRIPT)}; style-src ${cspHash(PAGE_STYLE)}; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
 
+const ATLAS_ASSETS = new Map([
+  ["/architecture/", ["index.html", "text/html"]],
+  ["/architecture/atlas.css", ["atlas.css", "text/css"]],
+  ["/architecture/atlas.js", ["atlas.js", "text/javascript"]],
+]);
+const ATLAS_CSP = "default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
 export function renderPage() {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Agent Action Stack</title>
 <style>${PAGE_STYLE}</style></head>
-<body><main><h1>Agent Action Stack</h1><p>Run the local decide, act, and prove flow using the reviewed component lock.</p>
+<body><main><h1>Agent Action Stack</h1><p>Run the local decide, act, and prove flow using the reviewed component lock. <a href="/architecture/">Explore the evidence atlas</a>.</p>
 <p class="boundary">Synthetic local demo only. No real account operations. The testbench response check gates the run; it is not a signed authorization over the rail proposal. Rail receipt verification and MandateBound recording remain separate authorities. Source truth is unknown; legal effect is not determined.</p>
 <div class="state"><label>Scenario <select id="scenario"><option value="settled">Clean settlement</option><option value="refusal">Policy refusal</option><option value="compensated">Duplicate compensation and review</option><option value="review">Settled action review</option><option value="disputed">Disputed outcome review</option></select></label> <button id="apply-scenario">Apply scenario</button>
 <p id="scenario-note">Choose a scenario or configure the options below. Applying a scenario only changes controls.</p>
@@ -753,6 +761,19 @@ export function createGuiServer({
           "x-frame-options": "DENY",
         });
         response.end(renderPage());
+        return;
+      }
+      if (request.method === "GET" && ATLAS_ASSETS.has(url.pathname)) {
+        const [filename, mime] = ATLAS_ASSETS.get(url.pathname);
+        const content = await readFile(new URL("../docs/atlas/" + filename, import.meta.url));
+        response.writeHead(200, {
+          "cache-control": "no-store",
+          "content-security-policy": ATLAS_CSP,
+          "content-type": mime + "; charset=utf-8",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY",
+        });
+        response.end(content);
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/health") {

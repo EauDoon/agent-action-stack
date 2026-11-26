@@ -1025,7 +1025,7 @@ test("CLI help documents every command and every option the usage block names", 
   const usage = text.split("Usage:")[1].split("Commands:")[0];
   const commands = text.split("Commands:")[1].split("Options:")[0];
   const options = text.split("Options:")[1].split("Flow:")[0];
-  for (const command of ["demo", "export", "replay", "verify", "latest", "runs", "cases", "compare", "prune", "help"]) {
+  for (const command of ["demo", "export", "replay", "verify", "inspect", "latest", "runs", "cases", "compare", "prune", "doctor", "help"]) {
     assert.match(usage, new RegExp(`^ {2}aas ${command}(?: |$)`, "m"), `usage block is missing ${command}`);
     assert.match(commands, new RegExp(`^ {2}${command} +\\S`, "m"), `command list is missing ${command}`);
   }

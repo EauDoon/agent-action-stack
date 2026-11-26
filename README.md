@@ -19,6 +19,18 @@ On policy failure the stack stops. On a clean `settled` outcome, MandateBound is
 
 > Experimental reference demo. Not legal advice, not a hosted service, not a safety certification.
 
+### Explore the evidence atlas
+
+Run `npm run gui` and choose **Explore the evidence atlas**, or open
+[docs/atlas/index.html](docs/atlas/index.html) from a downloaded checkout.
+Choose a refusal, clean settlement, same-case review or offline replay to
+trace its handoffs. Select a stage to inspect its evidence and source. The
+three sibling links point to the exact revisions in `stack-lock.json`.
+The address fragment bookmarks the selected trace and stage. The JSON download
+contains that route's documentation graph. Browsing works before bootstrap,
+without a case store. With scripting disabled, the page lists the same paths
+and stage reference.
+
 ## Libraries used
 
 | Stage | Public repo | Role in this demo |
