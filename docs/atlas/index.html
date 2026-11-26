@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Evidence atlas · Agent Action Stack</title>
+  <link rel="stylesheet" href="atlas.css">
+  <script src="atlas.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <a class="project" href="https://github.com/EauDoon/agent-action-stack">EauDoon <span>/</span> Agent Action Stack</a>
+      <h1>Evidence atlas</h1>
+      <p>Follow a synthetic response from its policy gate to the evidence a reviewer can inspect.</p>
+    </header>
+
+    <section class="interactive" hidden aria-label="Interactive architecture graph">
+      <div class="controls">
+        <label>Trace <select id="trace"></select></label>
+        <label>Inspect <select id="inspect"></select></label>
+      </div>
+      <div class="workbench">
+        <div class="plot">
+          <canvas tabindex="0" aria-label="Rotatable architecture diagram. Use arrow keys to rotate and Home to reset. Inspect stages with the adjacent selector." aria-describedby="plot-help"></canvas>
+          <div class="plot-tools"><span id="plot-help">Drag or use arrow keys to orbit</span><button type="button" id="reset">Reset view</button></div>
+        </div>
+        <aside aria-labelledby="stage-name">
+          <p class="label">Selected stage</p>
+          <h2 id="stage-name"></h2>
+          <p id="stage-role"></p>
+          <h3>Evidence</h3>
+          <p id="stage-evidence"></p>
+          <a id="stage-source">View implementation ↗</a>
+        </aside>
+      </div>
+      <p id="path-description" aria-live="polite"></p>
+      <ol id="path" aria-label="Selected route in order"></ol>
+      <details class="result">
+        <summary>Inspect the route as JSON</summary>
+        <p>The selected trace projects this fixed query over the published architecture. The result contains documentation only.</p>
+        <pre><code>query EvidenceRoute($id: ID!) {
+  route(id: $id) {
+    id
+    nodes { id name evidence source }
+    edges { from to }
+  }
+}</code></pre>
+        <a id="download" download="agent-action-route.json">Download result</a>
+        <pre><code id="query-result"></code></pre>
+      </details>
+    </section>
+
+    <section aria-labelledby="routes-title">
+      <h2 id="routes-title">Evidence paths</h2>
+      <dl class="routes" id="routes">
+        <div data-route="review" data-steps="input decide act prove bundle replay"><dt>Compensation and review</dt><dd>A duplicate synthetic refund is compensated. The rail verifies its receipt and MandateBound records the same-case review. A reviewer can export and replay the saved evidence.</dd></div>
+        <div data-route="refusal" data-steps="input decide bundle"><dt>Policy refusal</dt><dd>The response fails the policy gate. The completed bundle preserves the decision while act and prove are skipped.</dd></div>
+        <div data-route="settlement" data-steps="input decide act bundle"><dt>Clean settlement</dt><dd>The synthetic action settles. The bundle preserves the rail outcome and prove is skipped unless a dispute is requested.</dd></div>
+        <div data-route="offline" data-steps="bundle replay"><dt>Offline replay</dt><dd>An exported same-case review can be rechecked with the prepared verifier runtime. Replay reads the evidence and runs no synthetic action.</dd></div>
+      </dl>
+    </section>
+
+    <section aria-labelledby="reference">
+      <h2 id="reference">Stage reference</h2>
+      <div class="stages" id="stages">
+        <article data-node="input" data-position="-2.8,-0.15,-0.5">
+          <h3>Response</h3>
+          <p>A fixture or a caller-supplied JSON response enters the testbench.</p>
+          <p class="evidence">The run records recognized input settings. File-backed input carries its byte count and digest.</p>
+          <a href="https://github.com/EauDoon/agent-action-stack/blob/main/fixtures/response.pass.json">Passing fixture ↗</a>
+        </article>
+        <article data-node="decide" data-position="-1.35,1.1,0.45">
+          <h3>Policy gate</h3>
+          <p>Constitutional Agent Testbench evaluates the response. Passing lets orchestration continue to a separately constructed proposal.</p>
+          <p class="evidence">The decide artifact records the policy result. A refusal stops the action.</p>
+          <a data-component="constitutional-agent-testbench" href="https://github.com/EauDoon/constitutional-agent-testbench/blob/ed46f0cb9af400560aa9a9e73bbb9864ed5678a0/src/constitutional_agent_testbench/cli.py">Pinned testbench ↗</a>
+        </article>
+        <article data-node="act" data-position="0.65,1.15,-0.9">
+          <h3>Synthetic action</h3>
+          <p>Consequence Rail runs a refund or inventory action with a recovery path.</p>
+          <p class="evidence">The act artifact records the outcome. A receipt-bearing action can supply a rail bundle for same-case review.</p>
+          <a data-component="consequence-rail" href="https://github.com/EauDoon/consequence-rail/blob/78d6f8a23dbce69bb443b453c8d471645f67daac/cmd/crctl.js">Pinned rail ↗</a>
+        </article>
+        <article data-node="prove" data-position="2.4,0.05,-0.15">
+          <h3>Same-case review</h3>
+          <p>In rail mode, the stack invokes the rail verifier and passes its result to MandateBound for recording.</p>
+          <p class="evidence">The review binds the action ID and evidence digest. Source truth remains unknown and legal effect remains undetermined.</p>
+          <a data-component="mandatebound" href="https://github.com/EauDoon/mandatebound/blob/32d525618e23678f86c754e4a536e4d094988a1b/src/cli.ts">Pinned reviewer ↗</a>
+        </article>
+        <article data-node="bundle" data-position="0.9,-1.1,0.85">
+          <h3>Saved bundle</h3>
+          <p>The orchestrator publishes one complete case and updates its latest pointer.</p>
+          <p class="evidence">The manifest, report and available stage artifacts live under .out/runs/&lt;run-id&gt;/. Inspect reads the saved case.</p>
+          <a href="https://github.com/EauDoon/agent-action-stack/blob/main/bin/case-review.mjs">Case reader ↗</a>
+        </article>
+        <article data-node="replay" data-position="-1.4,-1.2,-0.6">
+          <h3>Offline replay</h3>
+          <p>A prepared verifier runtime rechecks a portable export of the same-case evidence.</p>
+          <p class="evidence">Replay reports whether the recorded bindings, receipt verification and reproduced review agree.</p>
+          <a href="https://github.com/EauDoon/agent-action-stack/blob/main/fixtures/v0.3.0-pins-disputed-review.json">Replay fixture ↗</a>
+        </article>
+      </div>
+    </section>
+    <footer><a href="https://github.com/EauDoon/agent-action-stack/blob/main/docs/architecture.md">Orchestrator architecture</a> · <a href="https://github.com/EauDoon/agent-action-stack/blob/main/stack-lock.json">Component lock</a></footer>
+  </main>
+</body>
+</html>

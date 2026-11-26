@@ -14,6 +14,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Saved-case Markdown reviews now render terminal control and bidirectional override characters as visible Unicode code points, preventing imported labels from hiding or rewriting review output.
 
 ### Added
+- A read-only evidence atlas in the existing workbench and offline checkout
+  traces four paths through the orchestrator, links the pinned component
+  entrypoints, and exports a route as documentation JSON. The CLI command
+  index now includes saved-case inspection.
 - Saved-case summaries and comparisons include the five declared run settings;
   legacy omissions remain unknown and arbitrary option data stays out.
 - Saved case history and comparison use the same allowed settings as inspection.
