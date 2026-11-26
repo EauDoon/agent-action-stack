@@ -14,6 +14,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Saved-case Markdown reviews now render terminal control and bidirectional override characters as visible Unicode code points, preventing imported labels from hiding or rewriting review output.
 
 ### Added
+- A diagram key, higher-contrast dashed handoffs outside the selected trace, and compact phone controls improve evidence atlas readability. The camera keeps markers in frame and places overlapping labels on separate rows during orbit.
 - A read-only evidence atlas in the existing workbench and offline checkout
   traces four paths through the orchestrator, links the pinned component
   entrypoints, and exports a route as documentation JSON. The CLI command

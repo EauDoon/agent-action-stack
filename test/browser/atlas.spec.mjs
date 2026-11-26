@@ -58,3 +58,38 @@ test("without JavaScript the atlas still documents every route and component", a
     await page.close();
   }
 });
+
+test("orbiting the narrow atlas keeps all six stage labels separate and inside the plot", async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 780 });
+  await page.addInitScript(() => {
+    window.atlasLabels = [];
+    const fillText = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText = function (text, x, y, ...rest) {
+      const m = this.measureText(text);
+      window.atlasLabels.push({
+        text, left: x - m.actualBoundingBoxLeft, right: x + m.actualBoundingBoxRight,
+        top: y - m.actualBoundingBoxAscent, bottom: y + m.actualBoundingBoxDescent,
+      });
+      return fillText.call(this, text, x, y, ...rest);
+    };
+  });
+  await page.goto("/architecture/");
+  const plot = page.locator("canvas");
+  await plot.focus();
+  const box = await plot.boundingBox();
+  for (const key of [...Array(8).fill("ArrowUp"), ...Array(14).fill("ArrowRight")]) {
+    await page.evaluate(() => { window.atlasLabels = []; });
+    await page.keyboard.press(key);
+    const labels = await page.evaluate(() => window.atlasLabels);
+    expect(new Set(labels.map((label) => label.text)).size).toBe(6);
+    for (const [i, label] of labels.entries()) {
+      expect(label.left).toBeGreaterThanOrEqual(0);
+      expect(label.top).toBeGreaterThanOrEqual(0);
+      expect(label.right).toBeLessThanOrEqual(box.width);
+      expect(label.bottom).toBeLessThanOrEqual(box.height);
+      const overlaps = labels.slice(0, i).filter((other) => other.left < label.right &&
+        other.right > label.left && other.top < label.bottom && other.bottom > label.top);
+      expect(overlaps, label.text).toEqual([]);
+    }
+  }
+});

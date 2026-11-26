@@ -22,8 +22,9 @@
       </div>
       <div class="workbench">
         <div class="plot">
-          <canvas tabindex="0" aria-label="Rotatable architecture diagram. Use arrow keys to rotate and Home to reset. Inspect stages with the adjacent selector." aria-describedby="plot-help"></canvas>
-          <div class="plot-tools"><span id="plot-help">Drag or use arrow keys to orbit</span><button type="button" id="reset">Reset view</button></div>
+          <p class="plot-key" id="plot-key"><span>Selected trace</span><span class="other">Other handoffs</span></p>
+          <canvas tabindex="0" aria-label="Rotatable architecture diagram. Use arrow keys to rotate and Home to reset. Inspect stages with the adjacent selector." aria-describedby="plot-key plot-help"></canvas>
+          <div class="plot-tools"><span id="plot-help">Drag or use arrows to orbit</span><button type="button" id="reset">Reset view</button></div>
         </div>
         <aside aria-labelledby="stage-name">
           <p class="label">Selected stage</p>
