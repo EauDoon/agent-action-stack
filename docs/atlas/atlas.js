@@ -37,13 +37,13 @@ let route;
 let selected;
 let downloadUrl;
 
-function project([x, y, z], width, height) {
+function project([x, y, z]) {
   const u = x * Math.cos(camera.yaw) + z * Math.sin(camera.yaw);
   const depth = z * Math.cos(camera.yaw) - x * Math.sin(camera.yaw);
   const v = y * Math.cos(camera.pitch) - depth * Math.sin(camera.pitch);
   const w = depth * Math.cos(camera.pitch) + y * Math.sin(camera.pitch);
-  const scale = Math.min(width / 7.5, height / 4.8) * 8 / (8 - w);
-  return { x: width / 2 + u * scale, y: height / 2 - v * scale, depth: w };
+  const perspective = 8 / (8 - w);
+  return { x: u * perspective, y: -v * perspective, depth: w };
 }
 
 function line(a, b, color, weight) {
@@ -63,19 +63,27 @@ function draw() {
   canvas.width = Math.round(width * ratio);
   canvas.height = Math.round(height * ratio);
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-  const at = (position) => project(position, width, height);
+  const projected = nodes.map((node) => ({ ...project(node.position), node }));
+  const extentX = Math.max(...projected.map((p) => Math.abs(p.x)));
+  const extentY = Math.max(...projected.map((p) => Math.abs(p.y)));
+  const scale = Math.min(width / 6.5, height / 3.95,
+    (width / 2 - 16) / extentX, (height / 2 - 28) / extentY);
+  const onCanvas = (p) => ({ ...p, x: width / 2 + p.x * scale, y: height / 2 + p.y * scale });
+  const at = (position) => onCanvas(project(position));
   for (let i = -4; i <= 4; i++) {
     line(at([i, -1.6, -3]), at([i, -1.6, 3]), "#284047", 0.65);
     line(at([-4, -1.6, i]), at([4, -1.6, i]), "#284047", 0.65);
   }
-  points = nodes.map((node) => ({ ...at(node.position), node })).sort((a, b) => a.depth - b.depth);
+  points = projected.map(onCanvas).sort((a, b) => a.depth - b.depth);
   const pointById = new Map(points.map((point) => [point.node.id, point]));
   for (const { from, to } of edges.values()) {
     const a = pointById.get(from), b = pointById.get(to);
     const i = route.steps.indexOf(from);
     const active = i >= 0 && route.steps[i + 1] === to;
-    const color = active ? "#9ee5c8" : "#48616a";
-    line(a, b, color, active ? 2 : 1);
+    const color = active ? "#a4f3ce" : "#819ca3";
+    ctx.setLineDash(active ? [] : [4, 5]);
+    line(a, b, color, active ? 2.6 : 1.4);
+    ctx.setLineDash([]);
     const theta = Math.atan2(b.y - a.y, b.x - a.x);
     const tip = { x: a.x + (b.x - a.x) * .65, y: a.y + (b.y - a.y) * .65 };
     for (const offset of [-.55, .55]) {
@@ -87,8 +95,14 @@ function draw() {
     const radius = 6 + (depth + 3) / 2.5;
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, 2 * Math.PI);
-    ctx.fillStyle = node === selected ? "#f3cb83" : route.steps.includes(node.id) ? "#a4f3ce" : "#94a8af";
+    const onTrace = route.steps.includes(node.id);
+    ctx.fillStyle = node === selected ? "#f3cb83" : onTrace ? "#a4f3ce" : "#102127";
     ctx.fill();
+    if (!onTrace && node !== selected) {
+      ctx.strokeStyle = "#a5bcc2";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
     if (node === selected) {
       ctx.beginPath();
       ctx.arc(x, y, radius + 5, 0, 2 * Math.PI);
@@ -96,16 +110,56 @@ function draw() {
       ctx.lineWidth = 1;
       ctx.stroke();
     }
-    ctx.font = "600 " + (width < 450 ? 11 : 13) + "px system-ui";
-    ctx.textAlign = "center";
-    const half = ctx.measureText(node.name).width / 2 + 5;
-    const labelX = Math.max(half, Math.min(width - half, x));
-    const labelY = y < 30 ? y + 25 : y - radius - 9;
-    ctx.strokeStyle = "#102127";
-    ctx.lineWidth = 5;
-    ctx.strokeText(node.name, labelX, labelY);
-    ctx.fillStyle = "#f0f6f0";
-    ctx.fillText(node.name, labelX, labelY);
+  }
+  drawLabels(width, height);
+}
+
+function drawLabels(width, height) {
+  const fontSize = width < 450 ? 12 : 14;
+  const row = fontSize + 6;
+  ctx.font = "600 " + fontSize + "px system-ui";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  // Reserve every marker first so a label cannot hide a nearby stage.
+  const occupied = points.map(({ x, y }) => ({ x, y, halfWidth: 13, halfHeight: 13 }));
+  const labels = [];
+  for (const { x, y, node } of points) {
+    const halfWidth = ctx.measureText(node.name).width / 2 + 4;
+    const clampX = (value) => Math.max(halfWidth + 2, Math.min(width - halfWidth - 2, value));
+    const columns = [x, x - halfWidth, x + halfWidth, 0, width].map(clampX);
+    // Try adjacent rows first. Edge-on views also need room to either side.
+    let centerX, centerY, best = Infinity;
+    for (let offset = 15 + row / 2; offset < height && offset ** 2 <= best; offset += row) {
+      for (const candidate of [y - offset, y + offset]) {
+        if (candidate < row / 2 || candidate > height - row / 2) continue;
+        for (const column of columns) {
+          const distance = (column - x) ** 2 + offset ** 2;
+          if (distance >= best) continue;
+          if (occupied.some((box) => Math.abs(column - box.x) < halfWidth + box.halfWidth
+            && Math.abs(candidate - box.y) < row / 2 + box.halfHeight)) continue;
+          best = distance;
+          centerX = column;
+          centerY = candidate;
+        }
+      }
+    }
+    if (centerY === undefined) {
+      centerX = clampX(x);
+      centerY = Math.max(row / 2, Math.min(height - row / 2, y - row));
+    }
+    occupied.push({ x: centerX, y: centerY, halfWidth, halfHeight: row / 2 });
+    labels.push({ x: centerX, y: centerY, name: node.name });
+    if (Math.abs(y - centerY) > 20 + row / 2 || Math.abs(x - centerX) > halfWidth / 2) {
+      const direction = Math.sign(centerY - y);
+      line({ x, y: y + direction * 12 }, { x: centerX, y: centerY - direction * row / 2 }, "#819ca3", 1);
+    }
+  }
+  ctx.strokeStyle = "#102127";
+  ctx.lineWidth = 5;
+  ctx.fillStyle = "#f0f6f0";
+  for (const { x, y, name } of labels) {
+    ctx.strokeText(name, x, y);
+    ctx.fillText(name, x, y);
   }
 }
 
