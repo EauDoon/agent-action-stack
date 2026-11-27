@@ -3944,3 +3944,9 @@ test("Markdown case reviews render terminal and bidi controls visibly", () => {
   assert.match(report, /U\+001B/);
   assert.match(report, /U\+202E/);
 });
+
+test("cases usage error names --root like the help text", async () => {
+  const repeated = await captureMain(["cases", "--limit", "5", "--limit", "6"]);
+  assert.equal(repeated.exitCode, 2);
+  assert.match(repeated.stderr, /Usage: aas cases \[--root output-dir\] \[--before run-id\]/);
+});

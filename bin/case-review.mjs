@@ -144,7 +144,7 @@ export function parseCasePageArgs(args) {
   for (let i = 0; i < args.length; i++) {
     const key = args[i];
     if (key === "--json") continue;
-    if (!["--before", "--limit", "--domain", "--outcome", "--search"].includes(key) || i + 1 >= args.length || Object.hasOwn(result, key.slice(2))) throw new Error("Usage: aas cases [--before run-id] [--limit 1..50] [--domain refund|inventory|unknown] [--outcome settled|compensated|disputed|none] [--search text] [--json]");
+    if (!["--before", "--limit", "--domain", "--outcome", "--search"].includes(key) || i + 1 >= args.length || Object.hasOwn(result, key.slice(2))) throw new Error("Usage: aas cases [--root output-dir] [--before run-id] [--limit 1..50] [--domain refund|inventory|unknown] [--outcome settled|compensated|disputed|none] [--search text] [--json]");
     const value = args[++i];
     if (key === "--search" && value.startsWith("-")) throw new Error("Missing value for cases option: --search");
     if (key === '--domain' && !['refund','inventory','unknown'].includes(value)) throw new Error('Invalid domain filter.');
