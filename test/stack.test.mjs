@@ -1616,8 +1616,9 @@ test("replay refuses a saved act outcome or action id that contradicts the verif
     assert.equal(result.checks.at(-1).passed, false, label);
   }
 
-  // A saved or exported case carries a manifest and is listed by `aas cases`,
-  // so removing the whole report.stages object does not let it verify.
+  // A saved case carries a manifest and is listed by `aas cases`; an export is
+  // the same document, so removing the whole report.stages object does not
+  // let either verify.
   const savedCase = (report) => replayBundle({
     manifest: { run_id: "run-replay-1" },
     report: { run_id: "run-replay-1", ...report },

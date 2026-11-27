@@ -1159,9 +1159,10 @@ export function replayBundle(bundleDoc, { depsDir = DEFAULT_PATHS.deps, runner =
     // fields must name the same verified receipt. A document that omits one
     // states nothing to contradict, except a report that carries stages: the
     // case list reads its outcome from there and prints a missing one as
-    // "none", so a full report must state the verified outcome. A saved or
-    // exported case carries a manifest and is listed too, so its report must
-    // state the outcome even when the whole stages object was removed.
+    // "none", so a full report must state the verified outcome. A saved
+    // case carries a manifest and is listed too, and an export is that same
+    // document, so a document with a manifest must state the outcome even
+    // when the whole stages object was removed.
     const reportStages = bundleDoc.report?.stages;
     const reportAct = reportStages?.act;
     const agrees = (saved, verified) => saved === undefined || saved === verified;
