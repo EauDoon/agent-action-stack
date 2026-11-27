@@ -96,6 +96,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
   a refusal printed no reason, although the report carried the rules.
 
 ### Fixed
+- `aas replay`, `aas verify`, and GUI replay now fail a case as conflicting when
+  the outcome or action id saved in its act artifact or report differs from the
+  verified rail receipt. Before, a case listed as `settled` verified against a
+  `compensated` receipt. The replay report gains an `outcome-binding` check
+  after `rail-verification`.
+- The `aas cases` usage error now names `--root`, as the help text does.
+- The README states the `aas demo` exit codes: a policy refusal is a recorded
+  run that exits 0, a stage error or failure exits 1, and a usage error exits 2.
 - `node scripts/bootstrap.mjs` ignored its arguments, so `--help` ran a full
   bootstrap including MandateBound's `npm ci` and build. It now prints its
   usage for `--help` or `-h` without running anything, and rejects any

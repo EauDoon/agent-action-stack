@@ -494,6 +494,7 @@ async function main() {
             "identity-binding",
             "digest-binding",
             "rail-verification",
+            "outcome-binding",
             "review-request",
             "review-replay",
           ]),

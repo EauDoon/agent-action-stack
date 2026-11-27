@@ -1570,10 +1570,48 @@ test("replay agrees on an intact export and names every check", () => {
     "identity-binding",
     "digest-binding",
     "rail-verification",
+    "outcome-binding",
     "review-request",
     "review-replay",
   ]);
   assert.ok(result.checks.every((check) => check.passed));
+});
+
+test("replay refuses a saved act outcome or action id that contradicts the verified receipt", () => {
+  const { railBundle, digest } = replayBundleFixture();
+  const review = {
+    verdict: "recorded",
+    reviewId: "review-replay-1",
+    actionId: "act_replay_1",
+    evidenceDigest: digest,
+    legalEffect: "not-determined",
+    receipt: { outcome: "compensated" },
+    upstream: { valid: true, verifier: "consequence-rail:bundle-verify", outcome: "compensated", trustedKeyIds: ["k"] },
+    reviewDigest: "sha256:replayed",
+  };
+  const verification = { valid: true, action_id: "act_replay_1", outcome: "compensated", trusted_key_id: "k", trusted_connector_key_id: "c" };
+  const replay = (act, reportAct) => replayBundle({
+    report: { run_id: "run-replay-1", ...(reportAct ? { stages: { act: reportAct } } : {}) },
+    stages: { act: { action_id: "act_replay_1", rail_bundle: railBundle, ...act }, prove: { result: review } },
+  }, { depsDir: "deps", runner: replayRunnerFixture(verification, { ...review }) });
+
+  const agreed = replay({ outcome: "compensated" }, { outcome: "compensated", action_id: "act_replay_1" });
+  assert.equal(agreed.ok, true);
+  assert.equal(agreed.checks.find((check) => check.name === "outcome-binding").passed, true);
+
+  // The summary a reader sees (cases, inspect, compare) comes from these
+  // fields, so a case cannot verify while they claim another outcome.
+  const cases = {
+    "act artifact outcome": replay({ outcome: "settled" }, { outcome: "compensated", action_id: "act_replay_1" }),
+    "report outcome": replay({ outcome: "compensated" }, { outcome: "settled", action_id: "act_replay_1" }),
+    "report action id": replay({ outcome: "compensated" }, { outcome: "compensated", action_id: "act_other" }),
+  };
+  for (const [label, result] of Object.entries(cases)) {
+    assert.equal(result.ok, false, label);
+    assert.match(result.reason, /^conflicting: saved act outcome or action id/, label);
+    assert.equal(result.checks.at(-1).name, "outcome-binding", label);
+    assert.equal(result.checks.at(-1).passed, false, label);
+  }
 });
 
 test("replay reports unavailable evidence and conflicts explicitly", () => {
@@ -3905,4 +3943,10 @@ test("Markdown case reviews render terminal and bidi controls visibly", () => {
   assert.doesNotMatch(report, /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u);
   assert.match(report, /U\+001B/);
   assert.match(report, /U\+202E/);
+});
+
+test("cases usage error names --root like the help text", async () => {
+  const repeated = await captureMain(["cases", "--limit", "5", "--limit", "6"]);
+  assert.equal(repeated.exitCode, 2);
+  assert.match(repeated.stderr, /Usage: aas cases \[--root output-dir\] \[--before run-id\]/);
 });
