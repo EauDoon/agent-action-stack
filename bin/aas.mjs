@@ -1154,6 +1154,20 @@ export function replayBundle(bundleDoc, { depsDir = DEFAULT_PATHS.deps, runner =
       : "rail verifier rejected the exported bytes")) {
       return { ok: false, runId, checks, reason: "unsupported: rail verification failed for the exported bytes" };
     }
+    // The review and the receipt are bound above, but cases, inspect, and
+    // compare print the outcome and action id saved beside them. Those saved
+    // fields must name the same verified receipt. A document that omits one
+    // states nothing to contradict.
+    const reportAct = bundleDoc.report?.stages?.act;
+    const agrees = (saved, verified) => saved === undefined || saved === verified;
+    const summaryBound = agrees(stages.act.outcome, verification.outcome)
+      && agrees(reportAct?.outcome, verification.outcome)
+      && agrees(reportAct?.action_id, actionId);
+    if (!record("outcome-binding", summaryBound, summaryBound
+      ? `saved act outcome ${verification.outcome} matches the verified receipt`
+      : "saved act outcome or action id does not match the verified receipt")) {
+      return { ok: false, runId, checks, reason: "conflicting: saved act outcome or action id differs from the verified receipt" };
+    }
     let request;
     try {
       ({ request } = buildRailReviewRequest({ bundle: JSON.parse(bundleBytes.toString("utf8")), verification }));

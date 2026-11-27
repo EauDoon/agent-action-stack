@@ -111,6 +111,12 @@ Fail closed at decide:
 npm run demo:fail
 ```
 
+Expect `decide: failed`, `flow: decide -> stop (policy failed)`, and no act
+or prove stage. A policy refusal is a completed, recorded run, so `aas demo`
+still exits 0. Read `decide_passed` (or `stages.decide.passed` with `--json`)
+to gate a script on the decision. Exit 1 means a stage errored or failed, and
+exit 2 means a usage error that ran nothing.
+
 Review a compensated rail outcome using the same case:
 
 ```bash
@@ -160,7 +166,9 @@ verification over the exported bytes, and re-executes the MandateBound
 review, requiring both the same review digest and the complete recorded review
 to match the reproduced result. Changing receipt claims, trust keys, legal effect,
 or adding/removing review fields fails replay even if the original digest was
-copied unchanged. JSON whitespace and object key order do not affect review
+copied unchanged. The outcome and action id saved in the act artifact and the
+report must also match the verified receipt (`outcome-binding`), so a case
+cannot verify while its summary names another outcome. JSON whitespace and object key order do not affect review
 comparison; array order remains significant. It reports unavailable
 evidence, conflicts, and unsupported verification explicitly, and exits
 nonzero unless every check passes. Trust basis: the rail's synthetic demo
