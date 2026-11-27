@@ -1157,11 +1157,14 @@ export function replayBundle(bundleDoc, { depsDir = DEFAULT_PATHS.deps, runner =
     // The review and the receipt are bound above, but cases, inspect, and
     // compare print the outcome and action id saved beside them. Those saved
     // fields must name the same verified receipt. A document that omits one
-    // states nothing to contradict.
-    const reportAct = bundleDoc.report?.stages?.act;
+    // states nothing to contradict, except a report that carries stages: the
+    // case list reads its outcome from there and prints a missing one as
+    // "none", so a full report must state the verified outcome.
+    const reportStages = bundleDoc.report?.stages;
+    const reportAct = reportStages?.act;
     const agrees = (saved, verified) => saved === undefined || saved === verified;
     const summaryBound = agrees(stages.act.outcome, verification.outcome)
-      && agrees(reportAct?.outcome, verification.outcome)
+      && (reportStages === undefined ? true : reportAct?.outcome === verification.outcome)
       && agrees(reportAct?.action_id, actionId);
     if (!record("outcome-binding", summaryBound, summaryBound
       ? `saved act outcome ${verification.outcome} matches the verified receipt`
