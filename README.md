@@ -1,3 +1,5 @@
+<p align="center"><img src=".github/assets/banner.svg" alt="Agent Action Stack. One reference path across three public libraries: decide with Constitutional Agent Testbench, act with Consequence Rail, prove a dispute with MandateBound. On policy failure the stack stops. Shown as one action dropping through three stacked frames that light blue, amber and green as it passes." width="100%"></p>
+
 # Agent Action Stack
 
 [![build](https://img.shields.io/github/actions/workflow/status/EauDoon/agent-action-stack/ci.yml?branch=main)](https://github.com/EauDoon/agent-action-stack/actions)
