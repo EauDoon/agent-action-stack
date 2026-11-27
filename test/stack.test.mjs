@@ -1615,6 +1615,19 @@ test("replay refuses a saved act outcome or action id that contradicts the verif
     assert.equal(result.checks.at(-1).name, "outcome-binding", label);
     assert.equal(result.checks.at(-1).passed, false, label);
   }
+
+  // A saved or exported case carries a manifest and is listed by `aas cases`,
+  // so removing the whole report.stages object does not let it verify.
+  const savedCase = (report) => replayBundle({
+    manifest: { run_id: "run-replay-1" },
+    report: { run_id: "run-replay-1", ...report },
+    stages: { act: { action_id: "act_replay_1", rail_bundle: railBundle, outcome: "compensated" }, prove: { result: review } },
+  }, { depsDir: "deps", runner: replayRunnerFixture(verification, { ...review }) });
+  const stripped = savedCase({});
+  assert.equal(stripped.ok, false);
+  assert.match(stripped.reason, /^conflicting: saved act outcome or action id/);
+  assert.equal(stripped.checks.at(-1).name, "outcome-binding");
+  assert.equal(savedCase({ stages: { act: { outcome: "compensated", action_id: "act_replay_1" } } }).ok, true);
 });
 
 test("replay reports unavailable evidence and conflicts explicitly", () => {
