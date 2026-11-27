@@ -100,7 +100,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
   the outcome or action id saved in its act artifact or report differs from the
   verified rail receipt. Before, a case listed as `settled` verified against a
   `compensated` receipt. The replay report gains an `outcome-binding` check
-  after `rail-verification`.
+  after `rail-verification`. A report that carries stages must state the
+  verified act outcome; a removed outcome, which `aas cases` lists as `none`,
+  fails the check too.
 - The `aas cases` usage error now names `--root`, as the help text does.
 - The README states the `aas demo` exit codes: a policy refusal is a recorded
   run that exits 0, a stage error or failure exits 1, and a usage error exits 2.

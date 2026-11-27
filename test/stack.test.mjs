@@ -1605,6 +1605,9 @@ test("replay refuses a saved act outcome or action id that contradicts the verif
     "act artifact outcome": replay({ outcome: "settled" }, { outcome: "compensated", action_id: "act_replay_1" }),
     "report outcome": replay({ outcome: "compensated" }, { outcome: "settled", action_id: "act_replay_1" }),
     "report action id": replay({ outcome: "compensated" }, { outcome: "compensated", action_id: "act_other" }),
+    // A removed outcome is listed by `aas cases` as outcome=none.
+    "report outcome removed": replay({ outcome: "compensated" }, { action_id: "act_replay_1" }),
+    "report outcome null": replay({ outcome: "compensated" }, { outcome: null, action_id: "act_replay_1" }),
   };
   for (const [label, result] of Object.entries(cases)) {
     assert.equal(result.ok, false, label);
